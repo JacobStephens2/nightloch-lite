@@ -24,12 +24,12 @@ Supersede conflicting interview rows below when implementing. Full rationale in 
 | Q22′ | Quiet peer | Deprioritize 1h curfew-only alarm. **Alert on actions; measure coverage whenever a device is enrolled.** |
 | Q28′ / baseline | Baseline off | **No wholesale per-user baseline disable.** Partner/user allowlist = per-domain only. |
 | Q31′ | Baseline edits | User may **add** blocks; partner (or unpartnered self) may **allowlist** domains — not “remove OISD list.” |
-| Q34′ | Edge end | **Partner → immediate.** **Subject → 72h cooling-off** (cancelable; policy stays on). |
+| Q34′ | Edge end | **Partner → immediate.** **Protectee → 72h cooling-off** (cancelable; policy stays on). |
 | Q18′ / enroll | Device enroll | **Gated** by operator allowlist (v1). Open signup remains. |
 | Q39′ | From address | **`@nightloch.app`** via Resend (SPF/DKIM/DMARC). stephens.page retired as product From. |
 | Q11′ | Zero partners | **Self-loosen allowed** when unpartnered. |
 | F18 | Tighten/loosen | **At-least-as-restrictive predicate**, H=14 days UTC breakpoints; global lists in P (lazy); allows ≠ curfew lift (`$important`) |
-| F5 | Partner add | Notify all existing partners; **roster visible** to partners. |
+| F5 | Partner add | Notify all existing Partners on the Protectee’s **Roster**; Roster is **visible** to those Partners. |
 | F8 | Account delete | Allowed with **72h cooling-off** + transactional teardown. |
 | F9 | Open VPN | Enroll gate closes free exit; not open full-tunnel for every signup. |
 | F10/F14 | AGH model | **Global OISD** + **`$client` rules**; never `filtering_enabled: false` for “baseline off.” |
@@ -58,7 +58,7 @@ Supersede conflicting interview rows below when implementing. Full rationale in 
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | First protected subject | **You (Jacob)** as guinea pig; devices **Android + MacBook** (Flynn later) |
+| 1 | First protectee | **You (Jacob)** as guinea pig; devices **Android + MacBook** (Flynn later) |
 | 2 | Partner control for test | Two separate accounts for dogfood (restricted + partner) |
 | 25–27 | Multi-user model | **Full Covenant Eyes–style graph in v1**: accounts are people; partner edges via invite; open signup |
 | 26 | Signup vs partner role | No global “restricted vs partner” at register; partner = accepted invite edge |
@@ -100,7 +100,7 @@ Supersede conflicting interview rows below when implementing. Full rationale in 
 | 9–10 | First curfew | `instagram.com` + **subdomains**, **20:00–08:00** `America/New_York`, no guard skew |
 | 11 | Asymmetry | **Superseded by Q11′ + F18** — predicate when partnered; self-loosen when unpartnered |
 | 12 | Passes | **None** in v1 |
-| 28 | Partner powers | + roster visibility; allowlist approve; still no edit others’ edges / no account delete |
+| 28 | Partner powers | + **Roster** visibility; allowlist approve; still no edit others’ Partnerships / no account delete |
 | 29 | Visibility depth | **B + E** unchanged: DNS domains + lists; no MITM |
 | 30 | List timing | Always-on **global** OISD + timed curfews + per-client allowlists |
 | 31 / 49 | Baseline list | OISD `https://nsfw.oisd.nl/` **global**; extras via `$client` blocks; partner path = **allowlist** not list removal |
@@ -175,7 +175,7 @@ GitHub Actions: build & deploy binary
 Resend: magic links + integrity mail (From: nightloch@stephens.page)
 ```
 
-**Asymmetry:** partnered subject may only tighten (predicate); partners may loosen; unpartnered may self-loosen; allowlist not wholesale baseline off.
+**Asymmetry:** partnered protectee may only tighten (predicate); partners may loosen; unpartnered may self-loosen; allowlist not wholesale baseline off.
 
 **Honest limits:** DNS domains only; VPN off = open; server down = blackhole; DoH/DoT mitigated not eliminated; partner action alerts + coverage.
 

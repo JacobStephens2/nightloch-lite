@@ -70,20 +70,20 @@ OpenTofu · GHA · Resend · external dead-man · stephens backup pull
 - **Device enrollment gated** (operator allowlist in v1). Signup/partner-accept remain open.
 - Dogfood: Jacob on Android + MacBook; two emails; Flynn later as **peer** unless reclassified.
 
-### Partner powers (active edge on subject S)
+### Partner powers (active edge on protectee S)
 
 - View status / coverage / enforcement health  
 - Tighten or loosen S’s policy; approve allowlist requests  
 - Revoke S’s devices  
 - View DNS domain log if log-sharing enabled on that edge  
-- **See roster** of all partners protecting S (not edit others’ edges)  
+- **See the Protectee’s Roster** (who else protects them; not edit others’ Partnerships)  
 
 Partners may **not:** delete S’s account; use AGH admin UI; manage other partners’ edges.
 
 ### Log sharing
 
 - Checkbox on invite; toggle later; **email partner when disabled**.  
-- Subject may view own domain log.
+- Protectee may view own domain log.
 
 ### Partner lifecycle
 
@@ -91,17 +91,17 @@ Authoritative detail: [SECURITY-POLICY-DESIGN §3](./docs/SECURITY-POLICY-DESIGN
 
 | Action | Rule |
 |---|---|
-| Invite / accept | Notify **all existing** partners; partners see **roster** |
+| Invite / accept | Notify **all existing** Partners on the Protectee’s Roster; they can see the updated Roster |
 | Partner ends edge | **Immediate** |
-| Subject ends edge | **72h cooling-off** (see design doc) |
+| Protectee ends edge | **72h cooling-off** (see design doc) |
 | Device revoke | **Immediate** (including last device) |
 | Log-share disable | **Immediate** (consent exemption; email partner) |
 | Pending invite | Accept, **decline**, or expire in **7 days** |
-| Zero active partners | Subject may **self-loosen**; nudge “add a partner” |
+| Zero active partners | Protectee may **self-loosen**; nudge “add a partner” |
 
 ### Account deletion
 
-Subject may delete account via **72h cooling-off** + notify related parties; transactional teardown of peers, AGH clients, IPs (quarantine), and edges.
+Protectee may delete account via **72h cooling-off** + notify related parties; transactional teardown of peers, AGH clients, IPs (quarantine), and edges.
 
 ---
 
@@ -113,8 +113,8 @@ Subject may delete account via **72h cooling-off** + notify related parties; tra
 | **Baseline extras** | User may **add** block domains (per-client rules) |
 | **Allowlist** | User **requests**; **partner approves** (or self if unpartnered); per-client `@@` rules |
 | **Curfews** | Timed blocks; e.g. Instagram + subdomains **20:00–08:00** `America/New_York` |
-| **Asymmetry (partnered)** | Subject edits allowed only if **at-least-as-restrictive** (predicate, H=14d); partners may loosen |
-| **Asymmetry (unpartnered)** | Subject may loosen freely |
+| **Asymmetry (partnered)** | Protectee edits allowed only if **at-least-as-restrictive** (predicate, H=14d); partners may loosen |
+| **Asymmetry (unpartnered)** | Protectee may loosen freely |
 | **Passes** | None in v1 |
 | **New account** | Global baseline on; no auto Instagram curfew; no devices until allowlisted enroll |
 
@@ -178,7 +178,7 @@ Secrets: env/CI only; hash sessions/magic-links/invites; encrypt backups before 
 - Enforcement on stephens.page  
 - Guardian edge UX (column only)  
 - Postgres / multi-region HA  
-- Partner-must-approve-new-partner (optional later; roster+alert is v1)
+- Partner-must-approve-new-partner (optional later; Roster visibility + alert is v1)
 
 ---
 
