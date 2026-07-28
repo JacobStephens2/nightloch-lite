@@ -1,0 +1,30 @@
+# Slice 0–1: binary is a no-op skeleton (exits 0). Do not enable as a long-running
+# service until Slice 2 binds HTTP — systemd will treat exit 0 as clean stop
+# (Restart=on-failure will not loop). (S9)
+#
+# Paths: binary + data under /opt/nightloch, not under a web root (S5).
+# Static assets only under /var/www/nightloch.app/public if needed.
+
+[Unit]
+Description=Nightloch Lite control plane
+After=network.target
+
+[Service]
+Type=simple
+User=nightloch
+WorkingDirectory=/opt/nightloch
+EnvironmentFile=-/etc/nightloch/nightloch.env
+ExecStart=/opt/nightloch/bin/nightloch
+Restart=on-failure
+RestartSec=3
+
+# Hardening. NoNewPrivileges conflicts with sudo to nightloch-wg — Slice 4/5
+# should use a privileged helper socket or ambient capabilities instead of sudo.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/nightloch
+
+[Install]
+WantedBy=multi-user.target

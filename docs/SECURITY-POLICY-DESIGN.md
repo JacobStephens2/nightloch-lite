@@ -6,6 +6,8 @@
 
 **Precedence:** For perimeter, policy classification, AGH mapping, fail modes, and integrity, **this document wins**. Then [shared-understanding.md](../shared-understanding.md) (product freeze) → [DECISIONS.md](../DECISIONS.md) (history + amendments) → [plan.md](../plan.md) (sequencing). On conflict, leftmost wins; others are bugs. Prefer linking over restating.
 
+**Convention:** invalid or unknown state **denies** a subject-initiated edit (and should be alert-worthy for operators) — never silently permit. `SubjectMayApplyEdit` returns `EditDeniedInvalid` when `Validate` fails.
+
 ---
 
 ## 1. Answers to review §8 (before Slice 0)

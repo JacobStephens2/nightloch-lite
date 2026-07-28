@@ -15,11 +15,16 @@ Partner-locked, scheduled DNS blocking — self-hosted WireGuard + AdGuard Home,
 
 ## Status
 
-Shared understanding confirmed. **Slice −1 complete.** Next: **Slice 0** (see plan).
+Shared understanding confirmed. **Slices −1 and 0 complete.** Next: **Slice 1** (OpenTofu origin; needs cloud apply approval).
+
+```bash
+go test ./...
+go build -o bin/nightloch ./cmd/nightloch
+```
 
 ## Stack (target)
 
-- **App:** Go + SQLite  
+- **App:** Go + SQLite (`internal/policy` predicate shipped)  
 - **Enforcement:** WireGuard full tunnel + AdGuard Home  
 - **Host:** Dedicated DigitalOcean droplet (`nyc3`, 2 GB)  
 - **IaC:** OpenTofu (DO + Cloudflare DNS)  
