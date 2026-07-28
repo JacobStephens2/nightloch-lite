@@ -1,0 +1,40 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+nightloch
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# OpenTofu / Terraform
+infra/opentofu/.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+
+# SQLite / data
+*.db
+*.db-*
+.data/
+
+# Go
+vendor/
+coverage.out
+*.test
