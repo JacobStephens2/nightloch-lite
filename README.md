@@ -13,7 +13,7 @@ Partner-locked, scheduled DNS blocking — self-hosted WireGuard + AdGuard Home,
 | [docs/ops/SLICE-1-RUNBOOK.md](./docs/ops/SLICE-1-RUNBOOK.md) | Create staging droplet + DNS |
 | [docs/SECRETS.md](./docs/SECRETS.md) | Tokens and credentials |
 | [adversarial-review.md](./adversarial-review.md) | Plan review (F1–F33) |
-| [current-decision.md](./current-decision.md) | Latest status pointer |
+| [status.md](./status.md) | Project status and what’s next |
 
 ## Status
 

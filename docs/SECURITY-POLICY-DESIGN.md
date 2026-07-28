@@ -395,5 +395,5 @@ Lite holds AGH **admin** Basic auth (no scoped API tokens). App compromise ⇒ e
 - [x] Flynn = peer v1; `guardian` reserved  
 - [x] Path A staging TLS  
 - [x] Fold into [shared-understanding.md](../shared-understanding.md) + [DECISIONS.md](../DECISIONS.md)  
-- [x] [current-decision.md](../current-decision.md) points at next slice (0)  
+- [x] [status.md](../status.md) points at next slice (0)  
 - [x] [R1](../reviews/slice-neg-1-review.md#r1)–[R11](../reviews/slice-neg-1-review.md#r11) addressed (predicate, precedence, H soundness, revoke, log-share exemption, DECISIONS hygiene, doc precedence, dogfood caveat, enroll v2 note, lifecycle states, From local-part)  

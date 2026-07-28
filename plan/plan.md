@@ -181,7 +181,7 @@ Sizes are **over-scope detectors**, not schedules. If Slice 4 is estimated at �
 - [x] Amend [shared-understanding.md](./shared-understanding.md) and [DECISIONS.md](./DECISIONS.md)
 - [x] Full design: [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) — §8 answers, predicate + examples, perimeter, AGH model, fail/integrity, staging/mail
 - [x] Flynn = peer v1; `guardian` reserved
-- [x] [current-decision.md](./current-decision.md) → next Slice 0
+- [x] [status.md](../status.md) → next Slice 0
 
 ### Demo / done
 

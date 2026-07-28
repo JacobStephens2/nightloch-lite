@@ -11,7 +11,7 @@
 | `shared-understanding.md` | +195/−… substantial rewrite of the freeze |
 | `DECISIONS.md` | new Slice −1 amendment table; 5 rows marked superseded |
 | `plan.md` | Slice −1 marked complete; amendment pointer updated |
-| `current-decision.md` | pointer moved to Slice 0 |
+| `status.md (was current-decision.md)` | pointer moved to Slice 0 |
 | `README.md` | doc index updated |
 | `reviews/slice-neg-1-review.md` | this file (was empty) |
 

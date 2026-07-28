@@ -14,7 +14,7 @@
 | `internal/policy/policy_test.go` | 195 | worked examples from design §2 |
 | `internal/policy/predicate_prop_test.go` | 121 | property test vs brute force |
 | `cmd/`, `deploy/`, `infra/`, `.github/`, `Makefile`, `go.mod` | ~80 | scaffolding |
-| `plan.md`, `README.md`, `current-decision.md`, `.gitignore` | — | Slice 0 marked complete |
+| `plan.md`, `README.md`, `status.md (was current-decision.md)`, `.gitignore` | — | Slice 0 marked complete |
 
 **Verification performed:** `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l .` — all clean. Findings [S1](#s1), [S3](#s3), and [S4](#s4) were confirmed by running throwaway probe tests against the package, which were then deleted; the tree is unmodified by this review.
 
