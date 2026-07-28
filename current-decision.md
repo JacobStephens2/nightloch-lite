@@ -1,25 +1,27 @@
 # Current decision
 
 **As of:** 2026-07-28  
-**Plan:** [plan.md](./plan.md)  
-**Slice 0 review:** [reviews/slice-0-review.md](./reviews/slice-0-review.md)
+**Plan:** [plan/plan.md](./plan/plan.md)
 
 ---
 
-## Slice 0 complete (+ S1–S9 review fixes)
+## Slice 1 — code complete
 
-- DST-safe schedule breakpoints (`AddDate`)
-- Multi-TZ property tests + TZ-change-across-DST regression
-- `SubjectMayApplyEdit` → `EditResult` (deny-closed on invalid)
-- Empty window rejected; GlobalList parent-walk; `/opt/nightloch` deploy paths; CI hardened
+OpenTofu module, cloud-init, secrets/runbook/NAT checklist are in-repo.  
+**Live droplet is not created until you run `tofu apply`.**
 
 ```bash
-go test ./...
-go build -o bin/nightloch ./cmd/nightloch
+# See docs/ops/SLICE-1-RUNBOOK.md
+cd infra/opentofu
+cp terraform.tfvars.example terraform.tfvars   # fill in
+export DIGITALOCEAN_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...
+tofu init && tofu plan && tofu apply
 ```
 
 ---
 
 ## Next
 
-**Slice 1** — OpenTofu + `lite.nightloch.app` (explicit cloud apply approval).
+1. **You:** apply Slice 1 (cloud spend + DNS) when ready  
+2. **Code:** Slice 2 (magic-link auth) can start in parallel on the skeleton  

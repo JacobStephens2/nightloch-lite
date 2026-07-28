@@ -221,36 +221,35 @@ Property tests check breakpoint ≡ brute force; unit tests check **disguised lo
 
 ## Slice 1 — Live origin (staging hostname)
 
+**Status: code complete (2026-07-28)** — live demo pending human `tofu apply`
+
 **Goal:** Droplet + grey-cloud DNS + Caddy with **stock** HTTP-01 (no custom Cloudflare DNS plugin).
 
-### Deliverables
+### Deliverables (in repo)
 
-- OpenTofu:
-  - Droplet `nyc3` `s-1vcpu-2gb`
-  - **`backups = true`** with explicit `backup_policy { plan = "daily" }` ([F24](#))
+- [x] OpenTofu under `infra/opentofu/`:
+  - Droplet `nyc3` `s-1vcpu-2gb`, explicit **daily** `backup_policy`
   - Firewall: 22, 80, 443, UDP 51820
-  - SSH key; console password set and stored **before** network experiments ([F32](#))
-  - Cloudflare A **unproxied**: `lite.nightloch.app`, `agh.nightloch.app`, `vpn.nightloch.app` (apex left on old stack until Slice 11)
-  - Resend DNS for **`nightloch.app`**: SPF/DKIM/DMARC records ([F29](#))
-- cloud-init:
-  - Deploy user; **swap**; **disable unattended-upgrade auto-reboot** ([F4](#))
-  - Stock Caddy; static OK page on `lite.nightloch.app`
-- Secrets doc: DO token, CF token (zone DNS edit), SSH key
-- Draft NAT ops checklist (not executed)
+  - SSH key + cloud-init console password (`tofu output -raw console_password`)
+  - Cloudflare A **unproxied**: `lite`, `agh`, `vpn` (apex not managed)
+  - Optional Resend SPF/DKIM/DMARC when `manage_resend_dns = true`
+- [x] cloud-init: deploy user, **2G swap**, no auto-reboot, stock Caddy, staging OK page
+- [x] [docs/SECRETS.md](../docs/SECRETS.md), [docs/ops/SLICE-1-RUNBOOK.md](../docs/ops/SLICE-1-RUNBOOK.md), [docs/ops/NAT-CHECKLIST.md](../docs/ops/NAT-CHECKLIST.md)
+- [x] `tofu validate` clean
 
-### Demo / done
+### Demo / done (after apply)
 
 Browser: valid cert on `https://lite.nightloch.app`.  
 `dig +short vpn.nightloch.app` → droplet IP, unproxied.
 
 ### Gates
 
-- Human-approved `tofu apply`.
-- **Path A only** — no “or cut apex” in this slice.
+- **Human-approved `tofu apply`** — see runbook (not run by agents without explicit approval).
+- **Path A only** — no apex cutover.
 
 ### Out of scope
 
-App binary, WG, AGH.
+App binary service, WG, AGH, NAT.
 
 ---
 

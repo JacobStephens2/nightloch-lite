@@ -21,6 +21,7 @@ cmd/nightloch/nightloch
 # OpenTofu / Terraform
 infra/opentofu/.terraform/
 **/.terraform/
+# Keep .terraform.lock.hcl under version control
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -29,6 +30,7 @@ crash.log
 override.tf
 override.tf.json
 *_override.tf
+*.auto.tfvars
 
 # SQLite / data
 *.db
@@ -39,3 +41,4 @@ override.tf.json
 vendor/
 coverage.out
 *.test
+docs/BITWARDEN_BROWSER_AGENT.md
