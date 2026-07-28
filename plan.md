@@ -4,8 +4,12 @@
 **Canonical product freeze:** [shared-understanding.md](./shared-understanding.md)  
 **Decision log:** [DECISIONS.md](./DECISIONS.md)  
 **Adversarial review:** [adversarial-review.md](./adversarial-review.md) (Opus 5 [xhigh] via Claude Code)  
+**Slice −1 review:** [reviews/slice-neg-1-review.md](./reviews/slice-neg-1-review.md)  
 **As of:** 2026-07-28  
-**Revision:** Incorporates findings F1–F33 and the re-cut in review §7. Where the review’s proposed defaults conflict with earlier DECISIONS language, **this plan adopts the review defaults** and lists them under [Plan amendments](#plan-amendments-from-adversarial-review). Update DECISIONS / shared-understanding when implementing Slice −1.
+**Revision:** Incorporates findings F1–F33 and the re-cut in review §7.  
+**Slice −1:** **Done** (2026-07-28); **R1–R11** applied in SECURITY-POLICY-DESIGN + freeze docs.
+
+**Precedence:** SECURITY-POLICY-DESIGN → shared-understanding → DECISIONS → **this plan** (sequencing only on conflict).
 
 ---
 
@@ -26,7 +30,7 @@ Suggested dogfood pair: two emails you control (protected + partner).
 
 ## Plan amendments (from adversarial review)
 
-These supersede conflicting lines in earlier docs for **implementation purposes**. Slice −1 should fold them into DECISIONS / shared-understanding formally.
+These were folded into DECISIONS / shared-understanding / SECURITY-POLICY-DESIGN in **Slice −1**.
 
 | Topic | Original lean | Amended plan default | Review |
 |---|---|---|---|
@@ -36,10 +40,13 @@ These supersede conflicting lines in earlier docs for **implementation purposes*
 | Baseline disable | Partner may disable wholesale | **No whole-baseline off.** Per-domain **allowlist** only (`@@\|\|domain^$client=IP`) | F10, F27 |
 | Partner end (user-initiated) | Immediate | **72h cooling-off**; partner keeps powers; user may cancel | F6 |
 | Partner end (partner-initiated) | Immediate | **Immediate** (unchanged) | F6 |
-| Zero partners | Undefined | **User may self-loosen when unpartnered**; teeth = cooling-off when removing last partner | F7 |
+| Zero partners | Undefined | **User may self-loosen when unpartnered**; teeth = cooling-off when removing partners | F7 |
+| Last device revoke | 72h cooling-off | **Immediate** all device revokes; coverage + alert | R4 |
+| Allow vs curfew | Unspecified | **Curfew wins** (`$important`); allows carve global lists only | R2 |
+| Predicate / OISD | List outside P | **Global list membership in P** (lazy on comparison set) | R1 |
 | Partner add | No alert | **Notify all existing partners**; partners **see roster** (not edit) | F5 |
 | Device enroll | Any signed-in user | **Gated** (operator allowlist for v1) | F9 |
-| From address | `nightloch@stephens.page` | Prefer **`@nightloch.app`** (SPF/DKIM/DMARC via OpenTofu/CF) | F29 |
+| From address | `nightloch@stephens.page` | **`alerts@nightloch.app`** (monitored; SPF/DKIM/DMARC) | F29, R11 |
 | TLS Slice 1 | apex “or” staging | **Path A: staging hostname** (`lite.nightloch.app`); apex cutover Slice 11 | F20 |
 | Token storage | Unspecified | **Hash at rest** (magic link, session, invite) | F21 |
 | AGH rules model | “Per-user baseline lists” | **Global OISD subscription** + **per-client `$client` rules** for extras/allows/curfews; never `filtering_enabled: false` | F10, F14 |
@@ -122,24 +129,22 @@ Sizes are **over-scope detectors**, not schedules. If Slice 4 is estimated at �
 
 ## Slice −1 — Security & policy design (no application code)
 
-**Goal:** Close holes F1–F10 / F18 before code bakes wrong authZ or AGH assumptions.
+**Status: complete (2026-07-28)**
 
-### Deliverables
+### Deliverables (done)
 
-- Amend [shared-understanding.md](./shared-understanding.md) and [DECISIONS.md](./DECISIONS.md) for fail mode, baseline allowlisting, cooling-off, zero-partner, enroll gate, coverage reports, From-domain intent
-- **Tighten/loosen predicate** spec ([F18](#f18-reference)): at-least-as-restrictive over horizon H≈14 days, UTC instants, domain union; worked examples including timezone change, subdomain narrowing, split windows, DST
-- **Partner perimeter** rules: add/notify/roster; cooling-off; zero-partner self-loosen; account deletion cooling-off + teardown sketch; last-device revoke policy
-- **AGH rule-generation model** written (table above)
-- Second Protectee: record `edge_type` = peer vs guardian **intent**; implement only `peer` in v1 but add column in Slice 3 ([F33](#))
-- Answers to review §8 questions, written down (defaults = [Plan amendments](#plan-amendments-from-adversarial-review))
+- [x] Amend [shared-understanding.md](./shared-understanding.md) and [DECISIONS.md](./DECISIONS.md)
+- [x] Full design: [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) — §8 answers, predicate + examples, perimeter, AGH model, fail/integrity, staging/mail
+- [x] Second Protectee = peer v1; `guardian` reserved
+- [x] [current-decision.md](./current-decision.md) → next Slice 0
 
 ### Demo / done
 
-Docs PR merged; a reader can answer “who can loosen when?” and “what does AGH store?” without guessing.
+A reader can answer “who can loosen when?” and “what does AGH store?” from SECURITY-POLICY-DESIGN without guessing.
 
 ### Out of scope
 
-Go modules beyond optional draft markdown of predicate examples.
+Application code (starts Slice 0).
 
 ---
 
@@ -334,7 +339,7 @@ In-app peer mint (Slice 5); timed curfew automation (Slice 6).
 - Apply **$client** rules for user baseline additions (not a per-user list copy of OISD)
 - Revoke: remove wg peer + AGH client; quarantine IP
 - **Account/device teardown** transaction sketch implemented for revoke/delete paths ([F8](#)): no orphan peers
-- Cooling-off when revoking **last** device if policy says perimeter shrink ([F18](#) / Slice −1)
+- Device revoke: **immediate** (including last device); action alert + coverage
 
 ### Demo / done
 
@@ -472,6 +477,7 @@ RTO number written in ops notes; restore proven once.
 - [ ] External heartbeat fires when app killed  
 - [ ] Partner-add notifies existing partners  
 - [ ] Coverage report received at least once  
+- [ ] **Asymmetry + cooling-off unvalidated until a second human holds the partner account** (solo dogfood = plumbing only) ([R8](./reviews/slice-neg-1-review.md#r8))
 
 ---
 
@@ -527,7 +533,7 @@ For all domains in the union of old/new targets, and all times in `[now, now+H]`
 
 Timezone changes, subdomain narrowing, target deletes, disables, and splits are handled by evaluating absolute time and domain union — not wall-clock string compares.
 
-Device revocation and partner-edge changes are **perimeter** operations (cooling-off), not this predicate.
+Partner-edge end and account deletion are **perimeter** operations (cooling-off). Device revocation is immediate (not the predicate).
 
 ---
 
@@ -535,6 +541,6 @@ Device revocation and partner-edge changes are **perimeter** operations (cooling
 
 This file is the implementation plan, not authorization to spend cloud money or enable NAT.
 
-**Start:** Slice **−1** (docs), then **0**, then **1** with explicit `tofu apply` approval.
+**Start next:** Slice **0**, then **1** with explicit `tofu apply` approval.
 
-When product decisions in [Plan amendments](#plan-amendments-from-adversarial-review) are accepted permanently, fold them into DECISIONS / shared-understanding in the same PR as Slice −1.
+Slice **−1** is complete; plan amendments are recorded in DECISIONS / shared-understanding / SECURITY-POLICY-DESIGN.
