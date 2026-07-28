@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+#   cp terraform.tfvars.example terraform.tfvars
+
+# Required: path to your SSH public key
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Required: Cloudflare zone ID for nightloch.app (Dashboard → domain → Overview)
+cloudflare_zone_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Optional: lock SSH to your IP
+# ssh_source_cidrs = ["203.0.113.10/32"]
+
+region = "nyc3"
+size   = "s-1vcpu-2gb"
+image  = "ubuntu-24-04-x64"
+
+admin_user   = "nightloch"
+staging_host = "lite.nightloch.app"
+
+enable_dns_records = true
+
+# After adding nightloch.app in Resend, set manage_resend_dns = true and paste records:
+# manage_resend_dns       = true
+# resend_dkim_name        = "resend._domainkey"
+# resend_dkim_value       = "p=..."
+# resend_domain_verify_txt = "..."   # if Resend shows an apex TXT verify
+# dmarc_rua               = "mailto:you@example.com"
