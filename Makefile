@@ -1,4 +1,4 @@
-.PHONY: test build tidy clean fmt vet
+.PHONY: test build tidy clean fmt vet tofu-init tofu-validate tofu-plan
 
 test:
 	go test ./...
@@ -19,3 +19,13 @@ tidy:
 
 clean:
 	rm -rf bin/
+
+tofu-init:
+	cd infra/opentofu && tofu init
+
+tofu-validate:
+	cd infra/opentofu && tofu validate
+
+# Requires terraform.tfvars + DIGITALOCEAN_TOKEN + CLOUDFLARE_API_TOKEN
+tofu-plan:
+	cd infra/opentofu && tofu plan
