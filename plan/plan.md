@@ -31,7 +31,7 @@ Suggested dogfood pair: two emails you control (protected + partner).
 
 ## Decision grills
 
-The original 60-question interview (`grill-me` skill → DECISIONS Q1–Q59) held up well: Slice −1 amended only 9 of 59, and **two-thirds of those were forced by external facts** (WireGuard blackholes, AGH cannot scope filter lists per client, AGH query-log `search` is substring) rather than by any change of intent. Those were the adversarial review's job, not an interview's.
+The original 60-question interview (`grill-me` skill (skills/grill-me/SKILL.md) → DECISIONS Q1–Q59) held up well: Slice −1 amended only 9 of 59, and **two-thirds of those were forced by external facts** (WireGuard blackholes, AGH cannot scope filter lists per client, AGH query-log `search` is substring) rather than by any change of intent. Those were the adversarial review's job, not an interview's.
 
 The three amendments a better grill *would* have caught — Q34′ (edge end), Q18′ (enroll gate), Q11′ (zero partners) — share a shape. They are not "what should X do?" but questions that live *between* branches of a decision tree. So the second pass asks different questions, and only where decisions remain.
 
@@ -150,23 +150,25 @@ stephens.page: forced-command pull of encrypted SQLite snapshot
 
 ## Slice map (overview)
 
-| Slice | Name | Rough size | Demo when done |
-|---|---|---|---|
-| **−1** | Security & policy design | 0.5–1 day | Amended docs + predicate spec + perimeter rules written (no product code required) |
-| **0** | Repo skeleton + policy package | 0.5 day | `go test` including property tests for tighten/loosen |
-| **1** | Live origin (staging) | 1–2 days | `https://lite.nightloch.app` OK page; CF grey-cloud; daily DO backups in tofu |
-| **2** | Sign in | 1–2 days | Magic link → hashed session; CSRF; `/health` |
-| **9** | Continuous deploy | 0.5–1 day | Push to `main` → health-gated binary deploy *(ordered here intentionally)* |
-| **3** | Partner graph + audit | 2–3 days | Invite/accept; cooling-off end; partner-add alerts; roster |
-| **4** | Tunnel + baseline spine | **3–5 days** | Operator peer; OISD; DNS intercept; reboot drill documented |
-| **5** | Device enroll (gated) | 2–3 days | Allowlisted user mints peer; others cannot |
-| **6** | Curfews + reconcile + allow path | 3–4 days | Controlled domain boundary demo; then Instagram; partner allowlist |
-| **7** | Domain logs | 1–2 days | Tenant-isolated logs; IP quarantine honored |
-| **8** | Alerts + coverage + dead-man | 2–3 days | Action emails + coverage report + external heartbeat |
-| **10** | Backups + real restore | 1–2 days | Encrypted pull; **restore on throwaway droplet**; record RTO |
-| **11** | Cutover & dogfood | 1 week dogfood | Apex live; verify security; kill-app drill |
+| Slice | Name | Rough size | Grill | Demo when done |
+|---|---|---|---|---|
+| **−1** | Security & policy design | 0.5–1 day | — | Amended docs + predicate spec + perimeter rules written (no product code required) |
+| **0** | Repo skeleton + policy package | 0.5 day | gate | `go test` including property tests for tighten/loosen |
+| **1** | Live origin (staging) | 1–2 days | gate | `https://lite.nightloch.app` OK page; CF grey-cloud; daily DO backups in tofu |
+| **2** | Sign in | 1–2 days | gate | Magic link → hashed session; CSRF; `/health` |
+| **9** | Continuous deploy | 0.5–1 day | gate | Push to `main` → health-gated binary deploy *(ordered here intentionally)* |
+| **3** | Partner graph + audit | 2–3 days | **full** | Invite/accept; cooling-off end; partner-add alerts; roster |
+| **4** | Tunnel + baseline spine | **3–5 days** | gate | Operator peer; OISD; DNS intercept; reboot drill documented |
+| **5** | Device enroll (gated) | 2–3 days | gate | Allowlisted user mints peer; others cannot |
+| **6** | Curfews + reconcile + allow path | 3–4 days | **full** | Controlled domain boundary demo; then Instagram; partner allowlist |
+| **7** | Domain logs | 1–2 days | **full** | Tenant-isolated logs; IP quarantine honored |
+| **8** | Alerts + coverage + dead-man | 2–3 days | **full** | Action emails + coverage report + external heartbeat |
+| **10** | Backups + real restore | 1–2 days | gate | Encrypted pull; **restore on throwaway droplet**; record RTO |
+| **11** | Cutover & dogfood | 1 week dogfood | gate | Apex live; verify security; kill-app drill |
 
 Sizes are **over-scope detectors**, not schedules. If Slice 4 is estimated at “half a day,” the estimate is wrong (review §9).
+
+**Grill** column: `gate` = the 5-minute "what decisions does this force?" check; `full` = a [decision grill](#decision-grills) session before writing code. Budget ~0.5 day per full grill on top of the size estimate, and fold answers into DECISIONS / SECURITY-POLICY-DESIGN before implementing.
 
 ---
 
@@ -302,6 +304,18 @@ Version string change → push → production footer/`/health` shows new version
 
 **Goal:** CE-style partners with perimeter security, not metadata-only edges.
 
+### Grill first (full)
+
+Perimeter mechanics are decided; the *experience* of the perimeter is not. Seed questions:
+
+- **Negative space:** what does the partners screen say at zero partners — and does it nag, or state the weaker guarantee plainly? Is there a maximum? What happens at one?
+- **Mutual edges:** A and B partner each other. Does that change either one's powers? Note this makes the asymmetry cosmetic by mutual consent (R8) — is that acceptable, and is it said out loud in the UI?
+- **Who-gets-told:** for each of invite sent / accepted / cooling-off started / cancelled / ended — exact recipient list and exact wording. Does the *new* partner learn who else already protects the subject?
+- **Cooling-off UX:** where is the countdown shown, to whom? Can the partner waive it and end immediately? What if the partner's email bounces mid-cooling-off — does the clock still run?
+- **Composition:** subject has two partners and requests removal of one. Does the other get told? Can a partner see another partner's actions in the audit stream, or only the roster?
+- **Adversary-as-user:** "I want out tonight." Walk every authorized action in order and confirm each produces the intended friction and signal.
+- **Copy:** the invite email body, and what B lands on when they click — B may have no idea what Nightloch is.
+
 ### Deliverables
 
 - Tables: `partner_edges` (**`edge_type`**: `peer` \| `guardian`, only `peer` used), `partner_invites` (hashed token, log_sharing, expires 7d)
@@ -376,6 +390,13 @@ In-app peer mint (Slice 5); timed curfew automation (Slice 6).
 
 **Goal:** In-app peers without open VPN exit.
 
+### Gate only (no full grill)
+
+Enrollment decisions are settled ([F9](#), R9). Two copy questions to answer inline, not in a session:
+
+- What exactly does a non-allowlisted account see? ("Invite-only during beta" — does it offer a way to ask?)
+- The enroll screen must state the server-down blackhole behavior ([F1](#)) — draft that wording here, since it is the one place a user is told the product can take their phone offline.
+
 ### Deliverables
 
 - **Enrollment allowlist** (env list of emails or flag) — unauthorized: “invite-only during beta” ([F9](#))
@@ -399,6 +420,18 @@ Revoke + reallocate after quarantine: new owner sees no old logs (prep for Slice
 ## Slice 6 — Curfews + asymmetry + reconcile + allow path
 
 **Goal:** Timed policy with AGH-correct model and real asymmetry.
+
+### Grill first (full — highest value of the four)
+
+The mechanism is fully specified; the experience is not specified at all. Seed questions:
+
+- **The blocked moment:** DNS blocking has no block page — the user sees a browser error. How do they learn it was Nightloch and not a broken site? (This is the single most common interaction in the product and it currently has no design.)
+- **Allowlist request flow:** how does the user request one — from the blocked page they cannot see, from a list of recent blocks, or by typing a domain? How does the partner approve: a link in the email, or must they log in? Does approval expire?
+- **Denied edits:** the predicate rejects an edit. What is the message? Does it say *why* (which instant becomes allowed)? Does it offer a one-click "ask my partner"?
+- **Timezone ownership:** is the timezone per-curfew (as `LocalWindow` implements today) or per-user profile? What happens when the subject travels — does a 20:00 curfew follow them or stay in `America/New_York`? A traveling user changing their own timezone is a loosening in disguise; confirm the predicate governs it.
+- **Negative space:** zero curfews and zero devices — what does the screen say? Does a curfew with no enrolled device warn that it enforces nothing?
+- **Composition:** an approved allowlist entry overlaps a later curfew target. `$important` means the curfew wins (R2) — is the user told their allowlist stopped applying at 20:00, or does it silently stop working?
+- **Exit:** can a subject delete a curfew they created five minutes ago, before it ever took effect? (Predicate says no. Is that the intent, or is there a grace window?)
 
 ### Deliverables
 
@@ -430,6 +463,18 @@ Passes, MITM.
 
 **Goal:** Multi-tenant-safe visibility.
 
+### Grill first (full)
+
+Isolation is specified; *what a partner actually sees* is one line ("UI: self logs; partner if log_sharing"). This is the most privacy-sensitive surface in the product and the hardest to walk back once someone has seen data. Seed questions:
+
+- **Granularity:** every query with timestamps, or unique domains per day with counts? Raw feed vs. digest is the difference between surveillance and accountability, and it is currently undecided.
+- **Range and search:** how far back (AGH holds 7 days)? Can a partner search or filter? Export?
+- **Blocked vs allowed:** are blocked queries shown differently, or at all? A list of *blocked* attempts is a very different artifact from a list of everything visited.
+- **Observability of the observer:** does the subject see *that* their partner viewed the log, and when? (Symmetry here is cheap to build and changes the relationship's character.)
+- **Negative space:** sharing on but no devices enrolled; a brand-new edge with no history yet — what renders?
+- **Exit / composition:** subject disables sharing, then re-enables a week later. Does the partner see the gap period retroactively, or is it permanently withheld? Does disabling purge, or just hide?
+- **Guardian preview:** none of this is built for `guardian` edges in v1 ([F33](#)) — confirm nothing designed here assumes consent can be withdrawn, so the guardian case stays addable later.
+
 ### Deliverables
 
 - Proxy AGH querylog; **re-filter every row** by exact client IP equality ([F12](#))
@@ -447,6 +492,19 @@ Browse on WG → own domains listed. Isolation test green. Partner with sharing 
 ## Slice 8 — Integrity alerts + coverage + dead-man
 
 **Goal:** Actionable alerts; usable coverage; something watches the watcher.
+
+### Grill first (full)
+
+Slice −1 restructured integrity from "quiet-peer alarm" to "actions + coverage + dead-man," but the *content* of every message is undecided — and in an accountability product the wording is the product. Seed questions:
+
+- **Tone, per alert:** a loosen notification can read as an accusation or as a heads-up. Draft the actual body for the three that matter most: loosen, cooling-off started, coverage dropped.
+- **Coverage report shape:** what does a partner actually see — a percentage, a per-device breakdown, a trend against last week? What number makes them act? A report nobody can interpret is the same failure as an alarm nobody believes ([F2](#)).
+- **Cadence:** daily or weekly — decide, and say why. Daily risks the same fatigue that killed the quiet-peer alarm; weekly may be too slow to matter.
+- **Batching / composition:** subject makes five policy edits in one minute. Five emails, or one? If batched, what is the window, and does batching ever delay something urgent?
+- **Unsubscribe:** deliverability practice wants a list-unsubscribe header; an accountability product cannot let a partner silently mute alerts. If a partner can mute, does the subject find out? *(This is a genuine conflict between two things the product needs — decide it deliberately.)*
+- **Negative space:** the coverage report for a user with zero devices, or an account three hours old. Does it send at all?
+- **Who-gets-told, redux:** for a subject with two partners, does every action email go to both? Do partners see each other's approvals?
+- **Dead-man recipients:** operator only, or partners too? A partner receiving "Nightloch itself is down" needs to know what to do with that.
 
 ### Deliverables
 
