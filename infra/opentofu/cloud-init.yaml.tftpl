@@ -1,0 +1,136 @@
+#cloud-config
+# Nightloch Lite — Slice 1 bootstrap (first boot only; tofu ignores user_data changes later).
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - debian-keyring
+  - debian-archive-keyring
+  - apt-transport-https
+  - ufw
+  - fail2ban
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: false
+    # Password set via chpasswd below so DO web console login works (F32).
+    # Change immediately after first login; store in password manager.
+
+chpasswd:
+  list: |
+    ${admin_user}:${console_password}
+  expire: false
+
+ssh_pwauth: false
+
+write_files:
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+  - path: /etc/apt/apt.conf.d/50unattended-upgrades-nightloch
+    permissions: "0644"
+    content: |
+      // Slice 1 / F4: do not auto-reboot (full tunnel makes reboots connectivity events).
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+  - path: /var/www/nightloch.app/public/index.html
+    permissions: "0644"
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Nightloch</title>
+        <style>
+          :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+          body { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.5; }
+          h1 { font-size: 1.5rem; font-weight: 600; }
+          code { font-size: 0.9em; }
+          .ok { color: #0a7; }
+        </style>
+      </head>
+      <body>
+        <h1>Nightloch</h1>
+        <p class="ok">Origin OK — Slice 1 staging.</p>
+        <p>Control plane and enforcement land in later slices. Staging host only; apex cutover is Slice 11.</p>
+        <p><code>${staging_host}</code></p>
+      </body>
+      </html>
+
+  - path: /etc/caddy/Caddyfile
+    permissions: "0644"
+    content: |
+      ${staging_host} {
+      	root * /var/www/nightloch.app/public
+      	encode gzip
+      	file_server
+      	header {
+      		X-Content-Type-Options nosniff
+      		Referrer-Policy no-referrer
+      		X-Frame-Options DENY
+      	}
+      }
+
+  - path: /usr/local/sbin/nightloch-firstboot.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec > >(tee -a /var/log/nightloch-firstboot.log) 2>&1
+      echo "nightloch firstboot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # Swap (F4) — 2G on a 2GB droplet
+      if ! swapon --show | grep -q .; then
+        fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        sysctl vm.swappiness=10
+        echo 'vm.swappiness=10' > /etc/sysctl.d/99-nightloch-swap.conf
+      fi
+
+      # Caddy from official repo (stock modules — Path A HTTP-01)
+      if ! command -v caddy >/dev/null 2>&1; then
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+          | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+          | tee /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update
+        apt-get install -y caddy
+      fi
+
+      install -d -o root -g root -m 0755 /opt/nightloch /opt/nightloch/bin /opt/nightloch/data
+      chown -R ${admin_user}:${admin_user} /opt/nightloch
+
+      install -d -o root -g root -m 0755 /var/www/nightloch.app/public
+
+      systemctl enable caddy
+      systemctl restart caddy
+
+      # Host firewall baseline (DO cloud firewall is primary; ufw is defense in depth)
+      ufw --force reset || true
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp
+      ufw allow 80/tcp
+      ufw allow 443/tcp
+      ufw allow 51820/udp comment 'wireguard-later'
+      ufw --force enable
+
+      echo "nightloch firstboot complete"
+
+runcmd:
+  - [/usr/local/sbin/nightloch-firstboot.sh]
