@@ -6,14 +6,16 @@ Partner-locked, scheduled DNS blocking — self-hosted WireGuard + AdGuard Home,
 
 | Doc | Purpose |
 |---|---|
-| [shared-understanding.md](./shared-understanding.md) | Confirmed product freeze |
-| [DECISIONS.md](./DECISIONS.md) | Interview decision log |
+| [shared-understanding.md](./shared-understanding.md) | Product freeze (Slice −1 amended) |
+| [DECISIONS.md](./DECISIONS.md) | Interview + Slice −1 decision log |
+| [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) | Perimeter, predicate, AGH model |
 | [plan.md](./plan.md) | Vertical-slice implementation plan |
+| [adversarial-review.md](./adversarial-review.md) | Plan review (F1–F33) |
 | [current-decision.md](./current-decision.md) | Latest status pointer |
 
 ## Status
 
-Shared understanding confirmed. Implementation not started (see plan slices 0+).
+Shared understanding confirmed. **Slice −1 complete.** Next: **Slice 0** (see plan).
 
 ## Stack (target)
 

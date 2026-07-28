@@ -1,11 +1,46 @@
 # Nightloch Lite — Product & Architecture Decisions
 
 Interview decisions for greenfield nightloch-lite.  
-**Status:** Decisions locked through Q59. **Shared understanding confirmed** 2026-07-28.  
-**Implementation:** Not started (await separate go-ahead).  
+**Status:** Locked through Q59; **shared understanding confirmed** 2026-07-28; **Slice −1 amendments applied** 2026-07-28.  
+**Implementation:** Slice −1 done; next = Slice 0.  
 **Last updated:** 2026-07-28
 
-Canonical freeze narrative: [shared-understanding.md](./shared-understanding.md).
+Canonical freeze: [shared-understanding.md](./shared-understanding.md)  
+Security/policy design: [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md)  
+Plan: [plan.md](./plan.md) · Review: [adversarial-review.md](./adversarial-review.md)
+
+**Precedence:** SECURITY-POLICY-DESIGN (perimeter/policy/AGH/fail/integrity) → shared-understanding → **this file** (history) → plan. On conflict, left wins.
+
+---
+
+## Slice −1 amendments (reopened / refined)
+
+Supersede conflicting interview rows below when implementing. Full rationale in adversarial review + SECURITY-POLICY-DESIGN.
+
+| ID | Topic | New decision |
+|---|---|---|
+| Q6′ | Fail mode | **VPN off → open (unprotected).** **Server/path down with tunnel up → blackhole until user disables VPN.** Not “path down → open.” |
+| Q13′ | Digests | **Reopened.** Ship **coverage reports** (daily/weekly) + dead-man “alive” path. Not “no digests.” |
+| Q22′ | Quiet peer | Deprioritize 1h curfew-only alarm. **Alert on actions; measure coverage whenever a device is enrolled.** |
+| Q28′ / baseline | Baseline off | **No wholesale per-user baseline disable.** Partner/user allowlist = per-domain only. |
+| Q31′ | Baseline edits | User may **add** blocks; partner (or unpartnered self) may **allowlist** domains — not “remove OISD list.” |
+| Q34′ | Edge end | **Partner → immediate.** **Subject → 72h cooling-off** (cancelable; policy stays on). |
+| Q18′ / enroll | Device enroll | **Gated** by operator allowlist (v1). Open signup remains. |
+| Q39′ | From address | **`@nightloch.app`** via Resend (SPF/DKIM/DMARC). stephens.page retired as product From. |
+| Q11′ | Zero partners | **Self-loosen allowed** when unpartnered. |
+| F18 | Tighten/loosen | **At-least-as-restrictive predicate**, H=14 days UTC breakpoints; global lists in P (lazy); allows ≠ curfew lift (`$important`) |
+| F5 | Partner add | Notify all existing partners; **roster visible** to partners. |
+| F8 | Account delete | Allowed with **72h cooling-off** + transactional teardown. |
+| F9 | Open VPN | Enroll gate closes free exit; not open full-tunnel for every signup. |
+| F10/F14 | AGH model | **Global OISD** + **`$client` rules**; never `filtering_enabled: false` for “baseline off.” |
+| F15/F16 | DNS force | REDIRECT :53; REJECT :853; HaGeZi + Firefox canary. |
+| F20 | TLS | **Path A:** `lite.nightloch.app` staging until Slice 11. |
+| F21 | Tokens | **Hash** magic links, sessions, invite tokens at rest. |
+| F23 | Dead-man | **External** heartbeat required. |
+| F33 | Flynn | **`edge_type=peer`** in v1; `guardian` reserved only. |
+| R4 | Device revoke | **All** subject device revokes **immediate** (no last-device cooling-off). |
+| R5 | Log-share off | **Immediate** by design (consent); not cooling-off. |
+| R11 | From local-part | **`alerts@nightloch.app`** (monitored). |
 
 ---
 
@@ -35,7 +70,7 @@ Canonical freeze narrative: [shared-understanding.md](./shared-understanding.md)
 | # | Topic | Decision |
 |---|---|---|
 | 3 | Auth | **Email magic link** via **Resend** |
-| 39 | From address | `Nightloch <nightloch@stephens.page>` |
+| 39 | From address | **Superseded by Q39′** — `@nightloch.app` |
 | 40 | Magic-link token | **15 minutes, single-use** |
 | 20 | Session length | **30 days** |
 | 35–36 | DNS log consent | Invite **checkbox** for log sharing; per-edge **toggle** later; **email partner when logs turned off** |
@@ -47,15 +82,15 @@ Canonical freeze narrative: [shared-understanding.md](./shared-understanding.md)
 |---|---|---|
 | 4 | Device path | **WireGuard** on all protected devices |
 | 5 | Tunnel scope | **Full tunnel** (`AllowedIPs = 0.0.0.0/0`) |
-| 6 | Fail mode | **No kill-switch** productization; VPN-off = unprotected; integrity alerts |
+| 6 | Fail mode | **Superseded by Q6′** — see Slice −1 amendments |
 | 7 | DNS enforcer | **AdGuard Home** |
 | 8 / 42 / 45 | AGH admin | Ops-only UI at **`https://agh.nightloch.app`**; **Apache Basic Auth was stephens-era** — on dedicated box use **Caddy + Basic Auth** (or equivalent) in front of AGH; AGH own password also set. **Not** a product user surface |
-| 18–19 | Peers | Restricted user **self-enrolls** devices; **email partner on every enroll** |
+| 18–19 | Peers | **Allowlisted** self-enroll; **email partners** on enroll (**F9 / Q18′**) |
 | 32 | Multi-user isolation | **Per-user WG IP + AGH per-client rules** |
-| 33 | Query log retention | **No copy into SQLite**; partner/user UI via **AGH API**; AGH retention **~7 days** |
+| 33 | Query log retention | **Superseded:** no SQLite copy; AGH retention **must be set explicitly to 7 days** (default is 90) |
 | 44 | WG privileges | App as non-root; **small root helper + sudoers** for `wg` add/remove/show on `wg0` only |
-| 38 | WG network | `wg0`, `10.66.0.1/24`, clients `10.66.0.2+`, listen **51820/udp**, DNS `10.66.0.1`, **IPv6 off** |
-| 50 | Host NAT | Full-tunnel **ip_forward + MASQUERADE** required; apply only after **written ops checklist** approval |
+| 38 | WG network | `wg0`, `10.66.0.1/24`, clients `10.66.0.2+`, **51820/udp**, DNS `10.66.0.1`; **IPv6 open — pending Slice 4 dual-stack test** (not “off” as settled) |
+| 50 | Host NAT | **ip_forward + MASQUERADE + REDIRECT :53 + REJECT :853**; checklist approval before live change |
 | 57 | WG endpoint DNS | **`vpn.nightloch.app:51820`** (not the product apex) |
 
 ### Policy (curfews & lists)
@@ -63,22 +98,22 @@ Canonical freeze narrative: [shared-understanding.md](./shared-understanding.md)
 | # | Topic | Decision |
 |---|---|---|
 | 9–10 | First curfew | `instagram.com` + **subdomains**, **20:00–08:00** `America/New_York`, no guard skew |
-| 11 | Asymmetry | Restricted may **tighten**; only **partner** may **loosen** |
+| 11 | Asymmetry | **Superseded by Q11′ + F18** — predicate when partnered; self-loosen when unpartnered |
 | 12 | Passes | **None** in v1 |
-| 28 | Partner powers | View status, tighten/loosen curfews, revoke devices; **view DNS domain logs** when sharing on; not manage other partners / not delete account |
-| 29 | Visibility depth | **B + E**: DNS domain logs + porn domain lists; **no** search-term / MITM in v1 |
-| 30 | List timing | **C**: always-on **baseline** (porn list) + **timed curfews** (e.g. Instagram nights) |
-| 31 / 49 | Baseline list | Strategy C (feed + user add / partner remove); concrete feed **`https://nsfw.oisd.nl/`** (OISD NSFW) |
+| 28 | Partner powers | + roster visibility; allowlist approve; still no edit others’ edges / no account delete |
+| 29 | Visibility depth | **B + E** unchanged: DNS domains + lists; no MITM |
+| 30 | List timing | Always-on **global** OISD + timed curfews + per-client allowlists |
+| 31 / 49 | Baseline list | OISD `https://nsfw.oisd.nl/` **global**; extras via `$client` blocks; partner path = **allowlist** not list removal |
 | 37 | New account defaults | Baseline list **on**; no auto Instagram curfew; devices/partners empty |
 
 ### Alerts & reconcile
 
 | # | Topic | Decision |
 |---|---|---|
-| 13 | Email alerts | Integrity only: loosen, AGH unreachable, drift, WG peer quiet, enroll, log-sharing off, etc. No digests in v1 |
-| 21 | Reconcile cadence | Every **5 minutes** + **immediate** on curfew/device write |
-| 22 | Quiet peer | **1 hour** no handshake during active curfew; dedupe; honest “may have been interrupted” copy |
-| 34 | Partner lifecycle | Email invite → explicit accept; either party ends edge; 7-day pending expiry; email both on end |
+| 13 | Email alerts | **Superseded by Q13′/Q22′** — action alerts + coverage reports + dead-man; not “no digests” |
+| 21 | Reconcile cadence | **Superseded:** boundary scheduler (blocks ~60s early) + **5‑min backstop** + kick on write |
+| 22 | Quiet peer | **Superseded by Q22′** — coverage reports; high-bar optional only |
+| 34 | Partner lifecycle | **Superseded by Q34′/F5** — cooling-off, roster, partner-add alerts |
 
 ### Hosting & deploy
 
@@ -140,9 +175,9 @@ GitHub Actions: build & deploy binary
 Resend: magic links + integrity mail (From: nightloch@stephens.page)
 ```
 
-**Asymmetry:** tighten free; loosen / disable baseline / remove domains = partner of that user only.
+**Asymmetry:** partnered subject may only tighten (predicate); partners may loosen; unpartnered may self-loosen; allowlist not wholesale baseline off.
 
-**Honest limits:** DNS domains only (not URL params / search terms); VPN off fails open; partner alerts.
+**Honest limits:** DNS domains only; VPN off = open; server down = blackhole; DoH/DoT mitigated not eliminated; partner action alerts + coverage.
 
 ---
 
@@ -153,14 +188,16 @@ Resend: magic links + integrity mail (From: nightloch@stephens.page)
 - Temporary network passes  
 - Native iOS/macOS Nightloch apps  
 - Running enforcement on stephens.page  
+- Guardian edge UX (schema reserve only)  
 - Multi-instance HA / Postgres  
 
 ---
 
-## Pending after shared understanding
+## Pending after Slice −1
 
-1. Owner go-ahead to **implement** (scaffold, OpenTofu, app, deploy)  
-2. Live droplet NAT/firewall only after ops checklist approval
+1. **Slice 0** — repo skeleton + `internal/policy` property tests  
+2. Live droplet NAT/firewall only after ops checklist approval  
+3. Slice 1 `tofu apply` with human approval  
 
 ---
 
@@ -171,12 +208,19 @@ Resend: magic links + integrity mail (From: nightloch@stephens.page)
 | stephens.page hosts everything | Dedicated DO droplet |
 | Hetzner for price | DigitalOcean (US company) |
 | Signup invite code + role pick | Open signup + partner graph |
-| Partner-only or manual WG | Restricted self-enroll + partner email |
+| Open enroll for every account | Allowlisted enroll (v1) |
+| Path down = fail open | Blackhole until VPN disabled |
+| No digests | Coverage reports |
+| Immediate subject edge end | 72h cooling-off |
+| Wholesale baseline disable | Per-domain allowlist only |
 | Cloudflare Gateway | Self-hosted AGH + WG |
+| From stephens.page | From nightloch.app |
 
 ---
 
 ## File history
 
 - Created from design interview (2026-07-28).  
+- Slice −1 amendments from adversarial review (2026-07-28).  
+- Slice −1 review R1–R11 fixes (2026-07-28).  
 - Update this file when decisions change; do not silently diverge in code.

@@ -1,21 +1,25 @@
 # Nightloch Lite — Shared Understanding
 
-**Status:** **Shared understanding confirmed** (2026-07-28)  
-**Implementation:** Not authorized until owner says to proceed  
+**Status:** **Shared understanding confirmed** (2026-07-28); **amended by Slice −1** (2026-07-28); **R1–R11 review fixes**  
+**Implementation:** Slice −1 complete; further slices on go-ahead  
 **Decision log:** [DECISIONS.md](./DECISIONS.md)  
-**Current pointer:** [current-decision.md](./current-decision.md)
+**Security/policy design:** [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md)  
+**Plan:** [plan.md](./plan.md)  
+**Adversarial review:** [adversarial-review.md](./adversarial-review.md)
+
+**Precedence:** [SECURITY-POLICY-DESIGN](./docs/SECURITY-POLICY-DESIGN.md) (perimeter/policy/AGH/fail/integrity) → **this file** (product freeze) → [DECISIONS](./DECISIONS.md) (history) → [plan](./plan.md) (sequencing). On conflict, left wins.
 
 ---
 
 ## One-paragraph product
 
-Nightloch-lite is a **Go** control plane on a **dedicated DigitalOcean** droplet (`nyc3`, 2 GB) that drives **AdGuard Home** over **WireGuard full tunnel**. Users sign up with **magic links** (Resend + Turnstile), invite **accountability partners** (Covenant Eyes–style relationship graph), self-enroll devices, and run an **always-on OISD NSFW baseline** plus **timed curfews** (e.g. Instagram 8 pm–8 am Eastern). Only partners may loosen restrictions. DNS **domain** logs are visible with consent. No TLS MITM / search-term capture, no temporary passes, no custom mobile apps in v1. **OpenTofu** owns cloud + DNS + OS bootstrap; **GitHub Actions** deploys the binary; backups are **DO droplet backups + pull to stephens.page**.
+Nightloch-lite is a **Go** control plane on a **dedicated DigitalOcean** droplet (`nyc3`, 2 GB) that drives **AdGuard Home** over **WireGuard full tunnel**. Users sign up with **magic links** (Resend + Turnstile), invite **accountability partners** (Covenant Eyes–style graph, peer edges), enroll devices only if **allowlisted**, and run a **global always-on OISD NSFW baseline** plus **timed curfews** and **per-client allowlists**. Partners (or the user when unpartnered) may loosen; DNS **domain** logs are visible with consent. Integrity = **action alerts** + **coverage reports** + **external dead-man** — not noisy “phone asleep” alarms. **OpenTofu** owns cloud + DNS + bootstrap; **GitHub Actions** deploys the binary; backups = **DO daily backups + encrypted pull to stephens.page**.
 
 ---
 
 ## Problem this solves
 
-DNS-level domain blocking on a schedule (and always-on adult baseline), with asymmetric control: the protected person cannot loosen their own locks; accountability partner(s) can. Self-hosted, simpler than the original multi-tenant Nightloch + Cloudflare Gateway control plane.
+DNS-level domain blocking on a schedule (and always-on adult baseline), with asymmetric control while partnered: the protected person cannot silently loosen locks; partners can. Self-hosted, simpler than original Nightloch + Cloudflare Gateway.
 
 ---
 
@@ -24,73 +28,80 @@ DNS-level domain blocking on a schedule (and always-on adult baseline), with asy
 | Layer | Choice |
 |---|---|
 | Control plane | **Go** + **SQLite** |
-| DNS enforcer | **AdGuard Home** |
-| Device path | **WireGuard full tunnel** (stock client apps only) |
+| DNS enforcer | **AdGuard Home** (global lists + `$client` custom rules) |
+| Device path | **WireGuard full tunnel** (stock apps; `PersistentKeepalive = 25`) |
 | Host | **Dedicated DigitalOcean droplet** (not stephens.page) |
-| Size / region | **`s-1vcpu-2gb`**, **`nyc3`** (~$12/mo list) |
-| TLS / reverse proxy | **Caddy** (automatic HTTPS) |
-| Public DNS | **Cloudflare DNS**, managed by OpenTofu; records **unproxied** (grey cloud) |
-| Product UI | `https://nightloch.app` |
-| AGH ops UI | `https://agh.nightloch.app` (operator only; auth in front of AGH) |
-| WireGuard endpoint | `vpn.nightloch.app:51820` |
-| Email | **Resend**; From: `Nightloch <nightloch@stephens.page>` |
-| Captcha | **Cloudflare Turnstile** on magic-link request |
-| IaC | **OpenTofu** (`digitalocean` + `cloudflare` providers) from day one |
-| CI/CD | **GitHub Actions** → build `linux/amd64` → SSH/rsync → systemd restart |
+| Size / region | **`s-1vcpu-2gb`**, **`nyc3`** |
+| TLS | **Caddy** (stock HTTP-01) |
+| Staging UI | **`https://lite.nightloch.app`** until apex cutover |
+| Production UI | **`https://nightloch.app`** (Slice 11 cutover) |
+| AGH ops UI | **`https://agh.nightloch.app`** (operator + basic auth) |
+| WireGuard endpoint | **`vpn.nightloch.app:51820`** |
+| Email | **Resend** from **`Nightloch <alerts@nightloch.app>`** (monitored; SPF/DKIM/DMARC) |
+| Captcha | **Cloudflare Turnstile** |
+| IaC | **OpenTofu** (DO + Cloudflare) |
+| CI/CD | **GitHub Actions** → health-gated binary deploy |
 | Repo | Private `JacobStephens2/nightloch-lite` |
-| Backups | **DigitalOcean droplet backups** + **pull** SQLite (and optional encrypted secrets/WG server key) to **stephens.page** |
+| Backups | **DO daily backups** + **forced-command pull** of encrypted SQLite to stephens.page |
 
 ### Architecture sketch
 
 ```text
-Devices (WireGuard full tunnel)
-    │ UDP 51820 → vpn.nightloch.app  (Cloudflare DNS, unproxied)
-    ▼
-DigitalOcean droplet (nyc3, s-1vcpu-2gb)
-    ├── wg0 10.66.0.1/24  + NAT to internet
-    ├── AdGuard Home (DNS on wg0 only; per-client rules)
-    ├── nightloch-lite (Go, SQLite, localhost)
-    └── Caddy → nightloch.app, agh.nightloch.app
+Android/Mac ──WG full tunnel──► vpn.nightloch.app:51820
+                                    │
+                         DO nyc3 droplet
+                         ├── wg0 + NAT
+                         ├── REDIRECT :53 → AGH; REJECT :853
+                         ├── AdGuard Home (DNS on 10.66.0.1 only)
+                         ├── nightloch-lite (single-writer reconciler)
+                         └── Caddy → lite / agh
 
-OpenTofu: droplet, firewall, SSH key, CF A records, cloud-init
-GitHub Actions: deploy binary
-Resend: magic links + integrity alerts
-stephens.page: backup pull target
+OpenTofu · GHA · Resend · external dead-man · stephens backup pull
 ```
 
 ---
 
 ## Accounts and partners
 
-- **Open signup** via email magic link (token: **15 minutes, single-use**).
-- Session duration: **30 days**.
-- Rate limits + **Turnstile** on request-link.
-- **No global role at signup.** An account is a person.
-- **Partner relationship:** user A emails invite → B accepts → edge “B is partner for A.”
-- Same person may **have** partners and **be** a partner for others (CE / Victory Shield style).
-- **Dogfood first:** owner (Jacob) on **Android + MacBook**; two emails for restricted + partner testing; Flynn later.
+- **Open signup** via magic link (15 min single-use; sessions 30 days; tokens **hashed at rest**).
+- Turnstile + rate limits (per email + IP).
+- Account = person; **no global role at signup**.
+- **Peer** partner edges via email invite → accept (`edge_type=peer`; `guardian` reserved, not implemented).
+- **Device enrollment gated** (operator allowlist in v1). Signup/partner-accept remain open.
+- Dogfood: Jacob on Android + MacBook; two emails; Flynn later as **peer** unless reclassified.
 
-### Partner powers (for a user they protect)
+### Partner powers (active edge on subject S)
 
-- View status / enforcement health  
-- Tighten or loosen curfews  
-- Revoke enrolled devices  
-- View **DNS domain query log** when log-sharing is enabled for that edge  
+- View status / coverage / enforcement health  
+- Tighten or loosen S’s policy; approve allowlist requests  
+- Revoke S’s devices  
+- View DNS domain log if log-sharing enabled on that edge  
+- **See roster** of all partners protecting S (not edit others’ edges)  
 
-Partners may **not:** manage the user’s other partners, delete the user’s account, or use AGH as a product surface.
+Partners may **not:** delete S’s account; use AGH admin UI; manage other partners’ edges.
 
 ### Log sharing
 
-- Explicit **checkbox** when sending a partner invite.  
-- Per-edge **toggle** afterward (partner may still loosen without logs).  
-- **Email partner** when the protected user **disables** log sharing.  
-- Protected user **can** view their own domain log.
+- Checkbox on invite; toggle later; **email partner when disabled**.  
+- Subject may view own domain log.
 
 ### Partner lifecycle
 
-- Email invite → explicit accept.  
-- Either party may end the relationship; notify the other.  
-- Pending invites expire in **7 days**.
+Authoritative detail: [SECURITY-POLICY-DESIGN §3](./docs/SECURITY-POLICY-DESIGN.md#3-partner-perimeter-rules).
+
+| Action | Rule |
+|---|---|
+| Invite / accept | Notify **all existing** partners; partners see **roster** |
+| Partner ends edge | **Immediate** |
+| Subject ends edge | **72h cooling-off** (see design doc) |
+| Device revoke | **Immediate** (including last device) |
+| Log-share disable | **Immediate** (consent exemption; email partner) |
+| Pending invite | Accept, **decline**, or expire in **7 days** |
+| Zero active partners | Subject may **self-loosen**; nudge “add a partner” |
+
+### Account deletion
+
+Subject may delete account via **72h cooling-off** + notify related parties; transactional teardown of peers, AGH clients, IPs (quarantine), and edges.
 
 ---
 
@@ -98,17 +109,26 @@ Partners may **not:** manage the user’s other partners, delete the user’s ac
 
 | Kind | Behavior |
 |---|---|
-| **Baseline** | Always-on **OISD NSFW** list: `https://nsfw.oisd.nl/` |
-| **Baseline edits** | User may **add** domains; only **partner** may remove/disable baseline |
-| **Curfews** | Timed blocks; first intended example: `instagram.com` + subdomains, **20:00–08:00** `America/New_York` |
-| **Asymmetry** | Restricted user may **tighten**; only partner may **loosen** |
-| **Passes** | **None** in v1 |
-| **New account defaults** | Baseline **on**; no automatic Instagram curfew; no devices/partners until enrolled/invited |
+| **Baseline (OISD NSFW)** | Global subscription for all clients; **cannot** disable wholesale per user |
+| **Baseline extras** | User may **add** block domains (per-client rules) |
+| **Allowlist** | User **requests**; **partner approves** (or self if unpartnered); per-client `@@` rules |
+| **Curfews** | Timed blocks; e.g. Instagram + subdomains **20:00–08:00** `America/New_York` |
+| **Asymmetry (partnered)** | Subject edits allowed only if **at-least-as-restrictive** (predicate, H=14d); partners may loosen |
+| **Asymmetry (unpartnered)** | Subject may loosen freely |
+| **Passes** | None in v1 |
+| **New account** | Global baseline on; no auto Instagram curfew; no devices until allowlisted enroll |
 
-### Honest product limit
+Full predicate and examples: [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) §2.
 
-Enforcement and partner visibility are **DNS domain names only**.  
-Search engine query strings and URL paths are **out of scope** (no TLS MITM in v1).
+### Honest product limits
+
+- **DNS domain names only** — not URL paths or search terms (no TLS MITM).  
+- **Encrypted DNS / determined bypass** on owned hardware is **mitigated, not eliminated** (REDIRECT 53, REJECT 853, bypass lists).  
+- **VPN off** removes all filtering.  
+- **Server unreachable** with full tunnel typically **blackholes** the device until the user disables the VPN (not “fail open”).  
+- **DNS-level app blocks** (e.g. Instagram) can be partial due to CDNs and client caches.  
+- **Mutual peer edges** make asymmetry cosmetic by mutual consent: if A and B partner each other, either can loosen the other on request (inherent to peer accountability, same class as Covenant Eyes).  
+- **Solo dogfood** (one human, two inboxes) validates plumbing, not that a real second person will honor cooling-off or notice partner-add alerts.
 
 ---
 
@@ -116,16 +136,14 @@ Search engine query strings and URL paths are **out of scope** (no TLS MITM in v
 
 | Topic | Decision |
 |---|---|
-| Reconcile | Every **5 minutes** + immediately on curfew/device writes |
-| Quiet peer alert | **1 hour** without WG handshake during an active curfew; dedupe; copy: “may have been interrupted” |
-| Fail mode | **No kill-switch**; VPN off or path down → fail **open**; integrity emails |
-| Multi-user isolation | Unique WG client IP per peer; **AGH per-client** rules |
-| Query logs | Served via **AGH API** (authorized by lite); AGH retention ~**7 days**; not primary-copied into SQLite |
-| WG addressing | `wg0`, server `10.66.0.1/24`, clients `10.66.0.2+`, port **51820/udp**, DNS `10.66.0.1`, **IPv6 off** |
-| WG privileges | App runs unprivileged; **small root helper + sudoers** for allowlisted `wg` ops on `wg0` |
-| NAT | `ip_forward` + MASQUERADE required for full tunnel; apply only after **ops checklist** approval |
-| Device enroll | Restricted user **self-enrolls**; **email partner** on every enroll |
-| Integrity email | Loosen, drift, AGH down, quiet peer, enroll, log-sharing off, etc. **No digests** in v1 |
+| Reconcile | Boundary scheduler (blocks ~60s early) + 5‑minute backstop + kick on write; single-writer AGH `set_rules`; read-back drift check |
+| Integrity | **Alert on actions**; **coverage reports** while any device enrolled; **external dead-man** |
+| Fail mode | VPN off → open; path/server down → client blackhole until VPN disabled |
+| Multi-tenant DNS | Unique WG IP per peer; `$client` rules; query-log exact-IP re-filter; IP quarantine ≥ retention+1d |
+| Query logs | AGH API; retention **7 days** (set explicitly); not primary-copied to SQLite |
+| WG | `10.66.0.1/24`, 51820/udp, keepalive 25; helper+sudoers; IPv6 finalized after Slice 4 test |
+| NAT / DNS force | Checklist: forward, MASQUERADE, REDIRECT :53, REJECT :853 |
+| Enroll | Allowlisted self-serve; email partners; UI explains blackhole-on-outage |
 
 ---
 
@@ -133,44 +151,39 @@ Search engine query strings and URL paths are **out of scope** (no TLS MITM in v
 
 | Owner | Responsibility |
 |---|---|
-| **OpenTofu** | Droplet, firewall (22, 80, 443, UDP 51820), SSH key, Cloudflare A records (`nightloch.app`, `agh.nightloch.app`, `vpn.nightloch.app` unproxied), cloud-init bootstrap (user, Caddy, AGH, WireGuard packages) |
-| **GitHub Actions** | Build and deploy Go binary; restart service |
-| **nightloch-lite** | Users, sessions, partner graph, curfews, peer lifecycle, AGH reconcile, alerts |
-| **stephens.page** | Backup pull target; not on the VPN data path |
-| **Operator** | AGH admin UI, secrets, checklist before NAT/firewall production changes |
+| **OpenTofu** | Droplet (daily backups policy), firewall, SSH, CF records (`lite`/`nightloch`/`agh`/`vpn` unproxied), cloud-init, Resend DNS for nightloch.app |
+| **GitHub Actions** | Build/deploy binary; migrate step; health-gated rollback |
+| **nightloch-lite** | Users, partners, policy, peers, AGH projection, action alerts, coverage, health pings |
+| **stephens.page** | Forced-command backup pull only |
+| **Operator** | Enroll allowlist, AGH UI (read-only for rules), NAT checklist, dead-man config |
 
-Secrets live in CI/env (and sops-style patterns where reused); **not in git**.
-
-### Backups (detail)
-
-- Enable **DigitalOcean droplet backups** (whole-VM restore).  
-- **stephens.page** periodically **pulls** a consistent SQLite snapshot (optional encrypted WG server key / env); limited retention (stephens disk is tight).  
-- Prefer pull-from-stephens over broad push rights onto stephens.  
-- Backup paths must not be web-reachable.
+Secrets: env/CI only; hash sessions/magic-links/invites; encrypt backups before they leave the droplet.
 
 ---
 
 ## Cutover notes
 
-- **`nightloch.app`:** leave existing/old stack until lite is ready; then point Cloudflare A (unproxied) at the new droplet.  
-- Cloudflare **orange-cloud proxy must stay off** for names used as WireGuard endpoints (and generally for this design’s direct Caddy origin).  
-- stephens.page remains for mail secrets habits and backups only.
+- Build on **`lite.nightloch.app`**; cut **`nightloch.app`** in Slice 11 (TTL 60s day prior).  
+- Cloudflare records for WG/product origin stay **unproxied**.  
+- Re-verify `BASE_URL`, cookies, Turnstile at cutover.
 
 ---
 
 ## Explicit non-goals (v1)
 
-- Cloudflare Zero Trust / Gateway as the enforcer  
-- TLS MITM, full-URL, or search-term accountability  
-- Temporary network “passes”  
-- Custom iOS / macOS Nightloch apps  
-- Running enforcement (WG/AGH/NAT) on stephens.page  
-- PostgreSQL / LISTEN-NOTIFY as a requirement  
-- Multi-region HA  
+- Cloudflare Gateway as enforcer  
+- TLS MITM / search-term accountability  
+- Temporary passes  
+- Custom mobile apps  
+- Enforcement on stephens.page  
+- Guardian edge UX (column only)  
+- Postgres / multi-region HA  
+- Partner-must-approve-new-partner (optional later; roster+alert is v1)
 
 ---
 
 ## Confirmation
 
-- **2026-07-28:** Owner confirmed **shared understanding** (this document + [DECISIONS.md](./DECISIONS.md)).
-- **Implementation** remains a separate go-ahead (“you may implement” / equivalent).
+- **2026-07-28:** Owner confirmed shared understanding.  
+- **2026-07-28:** Slice **−1** applied adversarial-review amendments into this freeze + [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md).  
+- Further implementation: follow [plan.md](./plan.md) from Slice **0**.
