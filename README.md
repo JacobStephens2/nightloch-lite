@@ -9,17 +9,24 @@ Partner-locked, scheduled DNS blocking — self-hosted WireGuard + AdGuard Home,
 | [shared-understanding.md](./shared-understanding.md) | Product freeze (Slice −1 amended) |
 | [DECISIONS.md](./DECISIONS.md) | Interview + Slice −1 decision log |
 | [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) | Perimeter, predicate, AGH model |
-| [plan.md](./plan.md) | Vertical-slice implementation plan |
+| [plan/plan.md](./plan/plan.md) | Vertical-slice implementation plan |
+| [docs/ops/SLICE-1-RUNBOOK.md](./docs/ops/SLICE-1-RUNBOOK.md) | Create staging droplet + DNS |
+| [docs/SECRETS.md](./docs/SECRETS.md) | Tokens and credentials |
 | [adversarial-review.md](./adversarial-review.md) | Plan review (F1–F33) |
 | [current-decision.md](./current-decision.md) | Latest status pointer |
 
 ## Status
 
-Shared understanding confirmed. **Slices −1 and 0 complete.** Next: **Slice 1** (OpenTofu origin; needs cloud apply approval).
+**Slices −1, 0, and 1 (code) complete.** Slice 1 **live demo** needs your `tofu apply` ([runbook](./docs/ops/SLICE-1-RUNBOOK.md)).
 
 ```bash
 go test ./...
 go build -o bin/nightloch ./cmd/nightloch
+
+# Infra (secrets required — see docs/SECRETS.md)
+cd infra/opentofu && cp terraform.tfvars.example terraform.tfvars
+# edit tfvars; export DIGITALOCEAN_TOKEN CLOUDFLARE_API_TOKEN
+tofu init && tofu plan   # apply only when you intend to create the droplet
 ```
 
 ## Stack (target)
