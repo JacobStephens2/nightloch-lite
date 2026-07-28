@@ -6,7 +6,7 @@
 
 **Precedence:** For perimeter, policy classification, AGH mapping, fail modes, and integrity, **this document wins**. Then [shared-understanding.md](../shared-understanding.md) (product freeze) → [DECISIONS.md](../DECISIONS.md) (history + amendments) → [plan.md](../plan.md) (sequencing). On conflict, leftmost wins; others are bugs. Prefer linking over restating.
 
-**Convention:** invalid or unknown state **denies** a subject-initiated edit (and should be alert-worthy for operators) — never silently permit. `SubjectMayApplyEdit` returns `EditDeniedInvalid` when `Validate` fails.
+**Convention:** invalid or unknown state **denies** a protectee-initiated edit (and should be alert-worthy for operators) — never silently permit. `SubjectMayApplyEdit` returns `EditDeniedInvalid` when `Validate` fails.
 
 ---
 
@@ -17,10 +17,10 @@
 | # | Question | Decision |
 |---|---|---|
 | 1 | User-initiated partner edge end? | **Yes, with 72-hour cooling-off.** Partner-initiated end is **immediate**. |
-| 2 | Notify existing partners on new partner? Roster? | **Yes** — email all existing partners on invite **sent** and **accepted**. Partners **see roster** (who protects subject, since when); they **cannot** edit others’ edges. |
-| 3 | Zero partners — can user loosen? | **Yes.** Self-loosen allowed when the subject has **no active partner edges**. Restraint teeth come from cooling-off when leaving a partnered state, not permanent self-lock. |
+| 2 | Notify existing partners on new partner? See who else protects the Protectee? | **Yes** — email all Partners on the Protectee’s **Roster** on invite **sent** and **accepted**. They **see the Roster** (who protects the Protectee, since when); they **cannot** edit others’ Partnerships. |
+| 3 | Zero partners — can user loosen? | **Yes.** Self-loosen allowed when the protectee has **no active partner edges**. Restraint teeth come from cooling-off when leaving a partnered state, not permanent self-lock. |
 | 4 | User account deletion? | **Yes, via 72h cooling-off.** Notify all partners (both directions: people they protect and partners who protect them). Teardown is transactional: revoke all peers from `wg0` + AGH, quarantine IPs, end all edges with notice, then delete account. |
-| 5 | User revoke own device? | **All subject-initiated device revokes are immediate** (including the last device). Stolen/lost phone must not wait 72h. Perimeter signal: **action alert + coverage → 0%** on next report ([R4](../reviews/slice-neg-1-review.md#r4)). |
+| 5 | User revoke own device? | **All protectee-initiated device revokes are immediate** (including the last device). Stolen/lost phone must not wait 72h. Perimeter signal: **action alert + coverage → 0%** on next report ([R4](../reviews/slice-neg-1-review.md#r4)). |
 | 6 | Device enrollment gated? | **Yes for v1.** Operator allowlist (e.g. env `ENROLL_ALLOWLIST` emails). Signup and partner-accept stay open. Unauthorized: “Device enrollment is invite-only during beta.” **v2 follow-up:** `enrollment_allowed` on user row (UI toggle) so adding a user is not a deploy/restart ([R9](../reviews/slice-neg-1-review.md#r9)). |
 
 ### Policy semantics
@@ -76,9 +76,9 @@ where `t` is a UTC instant, and `domain` is a canonical registrable/host form (s
 blocked ⊒ allowed
 ```
 
-### Subject-initiated edit rule
+### Protectee-initiated edit rule
 
-A subject may apply an edit producing `P_new` from `P_old` **iff** the new policy is **at least as restrictive everywhere** over horizon **H = 14 days**:
+A protectee may apply an edit producing `P_new` from `P_old` **iff** the new policy is **at least as restrictive everywhere** over horizon **H = 14 days**:
 
 ```text
 ∀ domain ∈ (Domains(P_old) ∪ Domains(P_new)),
@@ -114,8 +114,8 @@ If the predicate fails, the edit requires an **active partner** of the subject (
 
 - The subject cannot edit OISD/HaGeZi subscriptions.
 - Adding an **allowlist** entry for a name that is (or would be) blocked by a global list is a **loosen**:  
-  `P_old` may be `blocked` (list hit, no allow); `P_new` is `allowed` (allow wins over list) → predicate **fails** for a partnered subject.
-- The subject may still *request* an allowlist; application remains partner-gated when partnered (§1 Q9). The predicate is the single authority on tighten vs loosen for policy edits.
+  `P_old` may be `blocked` (list hit, no allow); `P_new` is `allowed` (allow wins over list) → predicate **fails** for a partnered protectee.
+- The protectee may still *request* an allowlist; application remains partner-gated when partnered (§1 Q9). The predicate is the single authority on tighten vs loosen for policy edits.
 
 ### Composition order (logical) — **curfews win over allows** ([R2](../reviews/slice-neg-1-review.md#r2))
 
@@ -134,13 +134,13 @@ blocked  ⇔  curfew_or_extra_block_active(name, t)
 
 In other words: **allows punch holes in global lists, not in active curfews.**
 
-**Approval UX:** when a partner (or unpartnered subject) approves an allowlist domain that **overlaps an existing curfew target** (same host or parent under domain+subdomains mode), the UI **must flag** that the allow will **not** lift the curfew — only list/false-positive coverage outside curfew hours (and non-overlapping names).
+**Approval UX:** when a partner (or unpartnered protectee) approves an allowlist domain that **overlaps an existing curfew target** (same host or parent under domain+subdomains mode), the UI **must flag** that the allow will **not** lift the curfew — only list/false-positive coverage outside curfew hours (and non-overlapping names).
 
 ### Worked examples
 
 Assume `now` = 2026-07-28 15:00 UTC, subject in `America/New_York`, one curfew Instagram domain+subdomains 20:00–08:00 local. OISD contains `cdn.example.com`.
 
-| Edit | Subject allowed? | Why |
+| Edit | Protectee allowed? | Why |
 |---|---|---|
 | Add curfew on `example.com` 24/7 | **Yes** | Strictly more blocks |
 | Lengthen Instagram window 19:00–08:00 | **Yes** | More blocked hours |
@@ -197,14 +197,14 @@ Flynn later: default assumption **peer** unless a separate guardian product deci
 invite_sent ──accept──► active
      │                    │
      │                    ├── partner_ends ──────────────► inactive (immediate)
-     │                    ├── subject_requests_end ──────► cooling_off (72h) ──► inactive
-     │                    │         └── subject_cancels ─► active
+     │                    ├── protectee_requests_end ────► cooling_off (72h) ──► inactive
+     │                    │         └── protectee_cancels ► active
      ├── decline ───────► declined (terminal)
      └── 7d timeout ────► expired (terminal)
 ```
 
 - **Decline:** invitee may decline explicitly. **Notify the inviting subject** (not other partners). No edge created.
-- **Expired:** no further action required; subject may re-invite.
+- **Expired:** no further action required; protectee may re-invite.
 
 ### Notifications (integrity — partners of subject)
 
@@ -212,14 +212,14 @@ invite_sent ──accept──► active
 |---|---|
 | Invite sent | All **current** partners of subject (not the invitee) |
 | Invite accepted | All **prior** partners of subject (**required**); new partner optional |
-| Invite declined | **Subject only** |
-| Cooling-off started | Partner being removed + other partners of subject |
-| Edge ended (any path) | Both parties + other partners of subject |
-| Partner-initiated end | Subject immediately |
+| Invite declined | **Protectee only** |
+| Cooling-off started | Partner being removed + other Partners on the Roster |
+| Edge ended (any path) | Both parties + other Partners on the Roster |
+| Partner-initiated end | Protectee immediately |
 
-### Roster
+### Roster (visibility)
 
-Any partner of S may list: `{partner_user_id, since, edge_type, log_sharing}` for all active edges protecting S. **No** edit of others’ edges.
+Any Partner of Protectee S may view S’s **Roster**: `{partner_user_id, since, edge_type, log_sharing}` for all active Partnerships protecting S. **No** edit of others’ Partnerships.
 
 ### Powers while `active`
 
@@ -229,13 +229,13 @@ Partner of S may:
 - Approve allowlist requests
 - Revoke S’s devices (immediate; still audit)
 - View DNS logs if `log_sharing` on that edge
-- See roster
+- See the Protectee’s **Roster**
 
-Partner may **not:** delete S’s account; change other partners’ edges; access AGH admin.
+Partner may **not:** delete S’s account; change other partners’ Partnerships; access AGH admin.
 
 ### Zero-partner state
 
-- Subject may tighten and **loosen** freely (including allowlist self-approve).
+- Protectee may tighten and **loosen** freely (including allowlist self-approve).
 - Product should **nudge** “add a partner” after signup / before enroll.
 - Enrolling devices while unpartnered is allowed **if** enroll allowlisted — coverage reports still useful to self; partner emails N/A.
 
@@ -243,8 +243,8 @@ Partner may **not:** delete S’s account; change other partners’ edges; acces
 
 Applies to:
 
-- Subject-initiated **partner edge** termination  
-- Subject-initiated **account deletion**  
+- Protectee-initiated **partner edge** termination  
+- Protectee-initiated **account deletion**  
 
 Does **not** apply to:
 
@@ -253,7 +253,7 @@ Does **not** apply to:
 - **Log-sharing disable** — **deliberate exception** ([R5](../reviews/slice-neg-1-review.md#r5)): consent to partner surveillance is **instantly revocable** on principle; partner gets an **immediate email** (receipt). Accountability for “went dark on logs” is that alert + coverage, not a 72h hold.  
 - Partner revoking devices  
 
-During cooling-off: **all policy remains enforced**; partner retains full powers; UI shows countdown; subject may cancel.
+During cooling-off: **all policy remains enforced**; partner retains full powers; UI shows countdown; protectee may cancel.
 
 ### Account deletion teardown (order)
 
@@ -266,7 +266,7 @@ During cooling-off: **all policy remains enforced**; partner retains full powers
 
 ### Sock-puppet mitigation (v1)
 
-- Partner-add **alerts** + **roster** (F5)  
+- Partner-add **alerts** + **Roster** visibility (F5)  
 - Optional later: existing partner must approve new partner — **not** required for v1  
 
 ---
