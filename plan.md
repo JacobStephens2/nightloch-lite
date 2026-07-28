@@ -1,24 +1,48 @@
 # Nightloch Lite — Vertical-Slice Implementation Plan
 
-**Status:** Plan only (shared understanding confirmed; implement on go-ahead)  
+**Status:** Plan revised after adversarial review (implement on go-ahead)  
 **Canonical product freeze:** [shared-understanding.md](./shared-understanding.md)  
 **Decision log:** [DECISIONS.md](./DECISIONS.md)  
-**As of:** 2026-07-28
+**Adversarial review:** [adversarial-review.md](./adversarial-review.md) (Opus 5 [xhigh] via Claude Code)  
+**As of:** 2026-07-28  
+**Revision:** Incorporates findings F1–F33 and the re-cut in review §7. Where the review’s proposed defaults conflict with earlier DECISIONS language, **this plan adopts the review defaults** and lists them under [Plan amendments](#plan-amendments-from-adversarial-review). Update DECISIONS / shared-understanding when implementing Slice −1.
 
 ---
 
 ## How to read this plan
 
-Work proceeds as **vertical slices**: each slice ships a thin path through the stack that is **demoable end-to-end**, not a horizontal layer (“all DB tables,” then “all UI”).
+Work proceeds as **vertical slices**: each ships a thin path through the stack that is **demoable end-to-end**.
 
 | Rule | Meaning |
 |---|---|
-| **Done means demoable** | Someone can click/SSH/use a device and see the outcome |
-| **Thin then thicken** | Prefer the smallest real path; polish and edge cases in later slices |
-| **No slice depends on unfinished “frameworks”** | Shared packages appear only when a slice needs them |
-| **Ops gates stay explicit** | Live NAT / DNS cutover / droplet create need human approval even mid-plan |
+| **Done means demoable** | Someone can click/SSH/use a device and see the outcome — not “documented dry-run” |
+| **Thin then thicken** | Smallest real path first; **security properties ship with the exposure**, not in a final “hardening” dump |
+| **Ops gates stay explicit** | Live NAT / DNS cutover / droplet create need human approval |
+| **Design before enforcement productization** | Slice **−1** answers perimeter/policy/integrity questions before Slice 0 ships code that bakes wrong assumptions |
 
-Suggested demo account pair for dogfood: two emails you control (protected + partner).
+Suggested dogfood pair: two emails you control (protected + partner).
+
+---
+
+## Plan amendments (from adversarial review)
+
+These supersede conflicting lines in earlier docs for **implementation purposes**. Slice −1 should fold them into DECISIONS / shared-understanding formally.
+
+| Topic | Original lean | Amended plan default | Review |
+|---|---|---|---|
+| Fail mode | “path down → fail open” | **VPN off → unprotected (open).** **Server unreachable → device blackholes until user disables VPN (closed).** | F1 |
+| Quiet peer | 1h alert in curfew only | **Alert on actions; report coverage continuously** while any device enrolled. Real-time quiet alert de-emphasized / high bar only | F2, F3 |
+| Digests (Q13) | None in v1 | **Coverage report** (daily or weekly) + optional “alive” mail — integrity signal *and* deliverability probe | F2, F3, F23 |
+| Baseline disable | Partner may disable wholesale | **No whole-baseline off.** Per-domain **allowlist** only (`@@\|\|domain^$client=IP`) | F10, F27 |
+| Partner end (user-initiated) | Immediate | **72h cooling-off**; partner keeps powers; user may cancel | F6 |
+| Partner end (partner-initiated) | Immediate | **Immediate** (unchanged) | F6 |
+| Zero partners | Undefined | **User may self-loosen when unpartnered**; teeth = cooling-off when removing last partner | F7 |
+| Partner add | No alert | **Notify all existing partners**; partners **see roster** (not edit) | F5 |
+| Device enroll | Any signed-in user | **Gated** (operator allowlist for v1) | F9 |
+| From address | `nightloch@stephens.page` | Prefer **`@nightloch.app`** (SPF/DKIM/DMARC via OpenTofu/CF) | F29 |
+| TLS Slice 1 | apex “or” staging | **Path A: staging hostname** (`lite.nightloch.app`); apex cutover Slice 11 | F20 |
+| Token storage | Unspecified | **Hash at rest** (magic link, session, invite) | F21 |
+| AGH rules model | “Per-user baseline lists” | **Global OISD subscription** + **per-client `$client` rules** for extras/allows/curfews; never `filtering_enabled: false` | F10, F14 |
 
 ---
 
@@ -29,56 +53,106 @@ Android/Mac ──WG full tunnel──► vpn.nightloch.app:51820
                                     │
                          DO nyc3 droplet (s-1vcpu-2gb)
                          ├── wg0 + NAT
-                         ├── AdGuard Home (per-client DNS)
-                         ├── nightloch-lite :127.0.0.1
-                         └── Caddy → nightloch.app, agh.nightloch.app
+                         ├── REDIRECT :53 → AGH; REJECT :853 (tunnel)
+                         ├── AdGuard Home (DNS on wg0 only; global lists + $client rules)
+                         ├── nightloch-lite :127.0.0.1  (single-writer reconciler)
+                         └── Caddy → lite / agh (basic auth)
 
 OpenTofu: droplet, firewall, SSH key, CF DNS (unproxied), cloud-init
-GitHub Actions: build/deploy binary
-Resend + Turnstile: auth & alerts
-stephens.page: backup pull
+GitHub Actions: build/deploy binary (health-gated rollback)
+Resend (@nightloch.app) + Turnstile + external dead-man heartbeat
+stephens.page: forced-command pull of encrypted SQLite snapshot
 ```
+
+### AGH policy mapping (authoritative for Slices 5–6)
+
+| Layer | Mechanism | Scope |
+|---|---|---|
+| OISD NSFW | Subscribed filter list | **Global** — always on for all clients |
+| DoH/DoT bypass mitigation | HaGeZi Encrypted DNS/VPN/TOR/Proxy list + NXDOMAIN `use-application-dns.net` | Global |
+| User baseline additions | `\|\|domain^$client=<ip>` | Per client IP |
+| Partner/user allowlist | `@@\|\|domain^$client=<ip>` | Per client IP |
+| Timed curfews | `$client` rules written/removed at boundaries (or AGH blocked-services schedule if Instagram is in catalogue — verify in Slice 4) | Per client IP |
+
+- SQLite is **source of truth**; AGH custom rules are a **generated projection** (banner rule #1: do not edit).
+- All `set_rules` through **one serialized writer**; after write, **read-back** and diff for drift (F11).
+- AGH auth: HTTP Basic only (no API tokens) — lite holds full admin credentials (threat model note).
+
+### Integrity model (authoritative for Slice 8)
+
+| Kind | Mechanism |
+|---|---|
+| **Actions** (real-time email) | Partner invite/accept/add; user-initiated cooling-off start; edge end; loosen / allowlist approve; enroll/revoke; log-share off; account-delete request; reconcile/AGH failure; desired≠enforced drift; DoT:853 attempts if detected |
+| **Coverage** (report, not nightly false-alarm) | Per enrolled peer: fraction of time with recent handshake, **always** (not only curfew). Daily/weekly partner email |
+| **Watcher** | External dead-man’s-switch (healthchecks.io or stephens cron): ping only if reconcile OK + AGH up + DB writable |
+
+`PersistentKeepalive = 25` on all client configs (NAT + better signal; still imperfect under Doze — hence coverage reports).
+
+### Fail mode (honest)
+
+| Scenario | Client behavior | Product stance |
+|---|---|---|
+| User turns VPN off | Unprotected (open) | Expected bypass; coverage drops; action alerts if they also mutate policy |
+| Droplet / path down | **Blackhole** until user disables VPN (Android/macOS full-tunnel) | **Not** “fail open”; document in enroll UI; uptime is P0 |
+| Always-on Android “block without VPN” | Extra steps to restore internet | Document platform traps |
 
 ---
 
 ## Slice map (overview)
 
-| Slice | Name | Demo when done |
-|---|---|---|
-| **0** | Repo skeleton | `go test` / empty module builds locally |
-| **1** | Live origin | `https://nightloch.app` (or temporary IP + CF grey-cloud) serves a page via Caddy on the droplet |
-| **2** | Sign in | Request magic link → email → session cookie → “you’re signed in” |
-| **3** | Partner edge | A invites B → B accepts → A sees partner; B sees “protecting A” |
-| **4** | Tunnel + baseline block | Phone on WG resolves through AGH; OISD NSFW domain fails; Instagram still works outside curfew |
-| **5** | Device enroll in-app | User creates peer in UI → installs config → lite maps IP ↔ user; partner emailed |
-| **6** | Curfew + asymmetry | Instagram blocked 20:00–08:00 ET; user can tighten; partner can loosen; reconcile applies to AGH |
-| **7** | Domain logs | User (and partner if sharing on) sees AGH query log for their clients |
-| **8** | Integrity alerts | Quiet peer / drift / loosen / enroll / log-share-off emails fire correctly |
-| **9** | Continuous deploy | Push to `main` → binary on droplet restarted |
-| **10** | Backups | DO backups on; stephens.page holds a recent SQLite snapshot |
-| **11** | Hardening & cutover | Old nightloch.app stack retired; ops checklist complete; dogfood week |
+| Slice | Name | Rough size | Demo when done |
+|---|---|---|---|
+| **−1** | Security & policy design | 0.5–1 day | Amended docs + predicate spec + perimeter rules written (no product code required) |
+| **0** | Repo skeleton + policy package | 0.5 day | `go test` including property tests for tighten/loosen |
+| **1** | Live origin (staging) | 1–2 days | `https://lite.nightloch.app` OK page; CF grey-cloud; daily DO backups in tofu |
+| **2** | Sign in | 1–2 days | Magic link → hashed session; CSRF; `/health` |
+| **9** | Continuous deploy | 0.5–1 day | Push to `main` → health-gated binary deploy *(ordered here intentionally)* |
+| **3** | Partner graph + audit | 2–3 days | Invite/accept; cooling-off end; partner-add alerts; roster |
+| **4** | Tunnel + baseline spine | **3–5 days** | Operator peer; OISD; DNS intercept; reboot drill documented |
+| **5** | Device enroll (gated) | 2–3 days | Allowlisted user mints peer; others cannot |
+| **6** | Curfews + reconcile + allow path | 3–4 days | Controlled domain boundary demo; then Instagram; partner allowlist |
+| **7** | Domain logs | 1–2 days | Tenant-isolated logs; IP quarantine honored |
+| **8** | Alerts + coverage + dead-man | 2–3 days | Action emails + coverage report + external heartbeat |
+| **10** | Backups + real restore | 1–2 days | Encrypted pull; **restore on throwaway droplet**; record RTO |
+| **11** | Cutover & dogfood | 1 week dogfood | Apex live; verify security; kill-app drill |
 
-Slices **0–1** are infrastructure-first but still vertical (code/IaC → real HTTPS).  
-Slices **4–6** are the product core.  
-**11** is exit criteria for “v1 dogfood ready,” not infinite polish.
+Sizes are **over-scope detectors**, not schedules. If Slice 4 is estimated at “half a day,” the estimate is wrong (review §9).
 
 ---
 
-## Slice 0 — Repo skeleton
+## Slice −1 — Security & policy design (no application code)
 
-**Goal:** Private repo is a real Go module with layout, lint/test hooks, and docs already present.
+**Goal:** Close holes F1–F10 / F18 before code bakes wrong authZ or AGH assumptions.
 
 ### Deliverables
 
-- `go.mod` module path (e.g. `github.com/JacobStephens2/nightloch-lite`)
-- Layout sketch:
-  - `cmd/nightloch/` — main
-  - `internal/...` — app packages (empty or stubs)
-  - `infra/opentofu/` — empty stack placeholders
-  - `deploy/` — systemd unit template, Caddyfile template, `nightloch-wg` helper stub
-  - `.github/workflows/` — placeholder CI (build only, no deploy secrets yet)
-- `Makefile` or scripts: `test`, `build` (`GOOS=linux GOARCH=amd64`)
-- Keep [shared-understanding.md](./shared-understanding.md), [DECISIONS.md](./DECISIONS.md), this [plan.md](./plan.md)
+- Amend [shared-understanding.md](./shared-understanding.md) and [DECISIONS.md](./DECISIONS.md) for fail mode, baseline allowlisting, cooling-off, zero-partner, enroll gate, coverage reports, From-domain intent
+- **Tighten/loosen predicate** spec ([F18](#f18-reference)): at-least-as-restrictive over horizon H≈14 days, UTC instants, domain union; worked examples including timezone change, subdomain narrowing, split windows, DST
+- **Partner perimeter** rules: add/notify/roster; cooling-off; zero-partner self-loosen; account deletion cooling-off + teardown sketch; last-device revoke policy
+- **AGH rule-generation model** written (table above)
+- Second Protectee: record `edge_type` = peer vs guardian **intent**; implement only `peer` in v1 but add column in Slice 3 ([F33](#))
+- Answers to review §8 questions, written down (defaults = [Plan amendments](#plan-amendments-from-adversarial-review))
+
+### Demo / done
+
+Docs PR merged; a reader can answer “who can loosen when?” and “what does AGH store?” without guessing.
+
+### Out of scope
+
+Go modules beyond optional draft markdown of predicate examples.
+
+---
+
+## Slice 0 — Repo skeleton + policy package
+
+**Goal:** Real Go module; highest-risk pure logic tested first.
+
+### Deliverables
+
+- `go.mod`, `cmd/nightloch/`, `internal/…`, `infra/opentofu/`, `deploy/`, `.github/workflows/` (build-only OK)
+- `Makefile`: `test`, `build` (`GOOS=linux GOARCH=amd64`)
+- **`internal/policy` (or similar):** predicate implementation + **property-based tests** (random policy pairs vs brute-force minute samples)
+- Keep docs: shared-understanding, DECISIONS, plan, adversarial-review
 
 ### Demo / done
 
@@ -87,348 +161,380 @@ go test ./...
 go build -o bin/nightloch ./cmd/nightloch
 ```
 
-### Out of scope
-
-Droplet, real auth, AGH.
+Property tests fail if a disguised loosen is classified as tighten.
 
 ---
 
-## Slice 1 — Live origin (OpenTofu → Caddy)
+## Slice 1 — Live origin (staging hostname)
 
-**Goal:** Dedicated DO droplet exists; Cloudflare grey-cloud names point at it; Caddy terminates TLS.
+**Goal:** Droplet + grey-cloud DNS + Caddy with **stock** HTTP-01 (no custom Cloudflare DNS plugin).
 
 ### Deliverables
 
 - OpenTofu:
-  - `digitalocean_droplet` (`nyc3`, `s-1vcpu-2gb`, backups enabled when ready)
-  - Firewall: 22/tcp, 80/tcp, 443/tcp, **51820/udp**
-  - SSH key
-  - Cloudflare A records **unproxied**: `nightloch.app`, `agh.nightloch.app`, `vpn.nightloch.app` (may stage on a temporary hostname if cutover deferred)
-- cloud-init / provision:
-  - Non-root deploy user
-  - Caddy installed; minimal site “Nightloch” OK page on `nightloch.app`
-  - Placeholder reverse proxy for future app port
-- **Ops checklist (draft)** for later NAT (do not enable full-tunnel NAT until checklist signed off)
-- Document secrets: `DIGITALOCEAN_TOKEN`, `CLOUDFLARE_API_TOKEN`, SSH private key for apply
+  - Droplet `nyc3` `s-1vcpu-2gb`
+  - **`backups = true`** with explicit `backup_policy { plan = "daily" }` ([F24](#))
+  - Firewall: 22, 80, 443, UDP 51820
+  - SSH key; console password set and stored **before** network experiments ([F32](#))
+  - Cloudflare A **unproxied**: `lite.nightloch.app`, `agh.nightloch.app`, `vpn.nightloch.app` (apex left on old stack until Slice 11)
+  - Resend DNS for **`nightloch.app`**: SPF/DKIM/DMARC records ([F29](#))
+- cloud-init:
+  - Deploy user; **swap**; **disable unattended-upgrade auto-reboot** ([F4](#))
+  - Stock Caddy; static OK page on `lite.nightloch.app`
+- Secrets doc: DO token, CF token (zone DNS edit), SSH key
+- Draft NAT ops checklist (not executed)
 
 ### Demo / done
 
-Browser opens `https://nightloch.app` (or agreed staging host) with valid cert and static OK page.  
-`dig +short vpn.nightloch.app` returns droplet IP; Cloudflare proxy is off.
+Browser: valid cert on `https://lite.nightloch.app`.  
+`dig +short vpn.nightloch.app` → droplet IP, unproxied.
 
 ### Gates
 
-- Human runs `tofu apply` (or agent with explicit approval).
-- If old Nightloch still owns apex: use staging hostname until Slice 11, **or** cut apex only when ready.
+- Human-approved `tofu apply`.
+- **Path A only** — no “or cut apex” in this slice.
 
 ### Out of scope
 
-App binary, WireGuard peers, AGH rules, magic links.
+App binary, WG, AGH.
 
 ---
 
 ## Slice 2 — Sign in (magic link)
 
-**Goal:** Full auth loop on the live (or local-with-tunnel) origin.
+**Goal:** Auth loop with security properties that create exposure.
 
 ### Deliverables
 
-- SQLite open/migrate: `users`, `magic_link_tokens`, `sessions`
-- HTTP handlers + minimal HTML:
-  - “Enter email” + Turnstile
-  - Consume link → set session cookie (HttpOnly, Secure, SameSite)
-- Resend client: From `Nightloch <nightloch@stephens.page>`
-- Token: 15 minutes, single-use; session: 30 days
-- Rate limit: per email + per IP
-- Config via env (Resend key, Turnstile keys, `BASE_URL`, session secret)
-- systemd unit running lite on `127.0.0.1:PORT`; Caddy proxies `/` to it
+- SQLite: `users`, `magic_link_tokens`, `sessions` — **tokens/sessions stored hashed** ([F21](#))
+- UI: email + Turnstile; consume link
+- Cookie: HttpOnly, Secure, SameSite=Lax, **host-only** (no `Domain=.nightloch.app`)
+- CSRF middleware on all state-changing POSTs ([F26](#))
+- Token TTL 15m single-use; session 30d
+- Rate limit **per email + per IP** (mail-bomb / From-reputation load-bearing)
+- Resend From: `Nightloch <…@nightloch.app>` once domain verified; else temporary documented fallback
+- Config: `BASE_URL`, secrets via env
+- systemd + Caddy reverse proxy to app
+- **Honest `/health`**: DB writable (+ later AGH/reconcile checks as those exist) ([F25](#))
 
 ### Demo / done
 
-Two different browsers: request link on each email → land on authenticated home (“signed in as …”). Sign out works.
+Two browsers, two emails → signed in / sign out.  
+Confirm cookie not sent to `agh.` host.
 
 ### Out of scope
 
-Partners, devices, blocking.
+Partners, devices.
 
 ---
 
-## Slice 3 — Partner graph
+## Slice 9 — Continuous deploy *(early)*
 
-**Goal:** CE-style invite/accept/end without any enforcement yet.
+**Goal:** Ship binary safely so later slices iterate fast. Number kept as “9” for review cross-refs; **execute immediately after Slice 2**.
 
 ### Deliverables
 
-- Tables: `partner_edges`, `partner_invites` (token, log_sharing_requested, expires_at)
-- Flows:
-  - Invite by email (checkbox: DNS log sharing)
-  - Accept (login/create via magic link if needed)
-  - List “my partners” / “people I protect”
-  - Either party ends edge; email both
-  - Pending invite expiry 7 days (cron or on-read cleanup)
-- Authorization helpers: `CanLoosen(actor, subject)`, `CanViewLogs(actor, subject)`
+- GHA: test + linux/amd64 build on `main`
+- Deploy: rsync binary, **migrate as explicit step** (not boot auto-migrate), restart systemd
+- **Health gate** 30s: on failure restore previous binary and restart ([F25](#))
+- Migrations: forward-only additive; pre-migrate SQLite snapshot kept on server
+- Secrets documented; previous binary retained
 
 ### Demo / done
 
-Email A invites B with log-sharing on → B accepts → A sees B as partner → B opens “protecting A”. End edge → both lose access; emails sent (or logged in dev if mail mocked).
+Version string change → push → production footer/`/health` shows new version; forced bad binary rolls back.
+
+---
+
+## Slice 3 — Partner graph + audit stream
+
+**Goal:** CE-style partners with perimeter security, not metadata-only edges.
+
+### Deliverables
+
+- Tables: `partner_edges` (**`edge_type`**: `peer` \| `guardian`, only `peer` used), `partner_invites` (hashed token, log_sharing, expires 7d)
+- **`events` audit table from day one** ([F28](#)): `id, occurred_at, actor_user_id, subject_user_id, action, target, before_json, after_json`
+- Flows:
+  - Invite (+ log-sharing checkbox); accept; list partners / protecting
+  - **Notify all existing partners** on invite sent / accepted ([F5](#))
+  - **Roster visible to partners** (who else protects subject; since when) — no edit
+  - Partner-initiated end: **immediate**
+  - User-initiated end: **cooling-off (72h)**; email partner; powers retained; user can cancel; enforce policy throughout ([F6](#))
+- AuthZ: `CanLoosen` / `CanViewLogs` — **zero partners ⇒ subject may loosen self** ([F7](#)); with partners ⇒ only partners loosen
+- Prompt after signup: “Add a partner” (unpartnered = weak product)
+- Onboarding notes: partner allowlist / From domain
+
+### Demo / done
+
+A invites B → B accepts → existing partner C (if any) emailed → roster shows both.  
+A requests remove B → B emailed → **72h later** edge ends (or A cancels earlier).  
+Audit rows for each mutation.
 
 ### Out of scope
 
-Curfew mutations, devices.
+Curfew UI, devices.
 
 ---
 
 ## Slice 4 — Tunnel + baseline block (enforcement spine)
 
-**Goal:** Full-tunnel WireGuard + AGH blocks OISD NSFW for a **manually** created peer; product may still be thin.
-
-This is the first **protection** slice. Prefer getting packets right before automating peers in-app.
+**Goal:** Packets and DNS posture correct with **operator-minted** peer. Most expanded slice.
 
 ### Deliverables
 
-- Host:
-  - WireGuard `wg0` `10.66.0.1/24`, listen `51820`
-  - **Ops checklist executed:** `ip_forward`, NAT/MASQUERADE, firewall confirmed not breaking Caddy
-  - AGH listening DNS **only on `10.66.0.1`** (not public open resolver)
-  - OISD NSFW list `https://nsfw.oisd.nl/` enabled
-  - AGH admin behind Caddy + basic auth at `agh.nightloch.app`
-- One **operator-minted** peer for Android (and optionally Mac)
-- Client config: endpoint `vpn.nightloch.app:51820`, DNS `10.66.0.1`, AllowedIPs full tunnel
-- `nightloch-wg` helper + sudoers stub (even if only used by operator scripts at first)
-- Smoke script: `dig @10.66.0.1` from server; from phone: known adult domain fails, general web works
+- WireGuard `wg0` `10.66.0.1/24`, listen 51820; `nightloch-wg` helper + sudoers
+- **Ops checklist executed** with:
+  - Snapshot before first NAT change; **self-cancelling firewall** job; DO web console password ready ([F32](#))
+  - `ip_forward` + MASQUERADE
+  - **REDIRECT** TCP+UDP 53 from `10.66.0.0/24` → `10.66.0.1` ([F16](#))
+  - **REJECT** TCP+UDP 853 from tunnel ([F15](#)); product copy for Android Private DNS strict-mode fallout
+- AGH:
+  - Bind DNS **only** on `10.66.0.1`
+  - OISD NSFW; **HaGeZi Encrypted DNS bypass** list; NXDOMAIN `use-application-dns.net`
+  - **Query log retention = 7 days** explicitly (not 90d default) ([F12](#))
+  - Admin via Caddy + basic auth on `agh.nightloch.app`
+  - Memory/restart policy; filters_update conservative ([F4](#)); unit after `wg0`
+- Client config: endpoint `vpn.nightloch.app:51820`, DNS `10.66.0.1`, full tunnel, **`PersistentKeepalive = 25`**
+- Enroll UI copy draft: server-down blackhole behavior + recovery steps per platform ([F1](#))
+- **Tests / drills:**
+  - Reboot droplet with phone on tunnel; document recovery ([F1](#))
+  - IPv6 leak checks on dual-stack Mac (`curl -6`, `scutil --dns`, dig AAAA of blocked name) ([F19](#))
+  - Android Private DNS = hostname → observe; confirm REJECT/messaging path
+  - Send DNS to `8.8.8.8` over tunnel → still hits AGH via REDIRECT
+  - Day of normal browsing: **record OISD false positives** ([F27](#))
+- Investigate AGH **blocked-services** for Instagram + schedule polarity ([F14](#))
 
 ### Demo / done
 
-Phone: WG on → adult domain from list does not load; WG off → loads (fail-open honesty).  
-Mac optional same day.
+Phone: WG on → OISD sample domain blocked; general web works; WG off → open.  
+Checklist artifacts (reboot notes, IPv6 results, false-positive list) checked into `docs/ops/` or wiki.
 
 ### Gates
 
-- Explicit approval before enabling NAT on the droplet.
-- Confirm no public recursion on `0.0.0.0:53`.
+- Explicit approval before NAT.
+- No public open resolver on `0.0.0.0:53`.
 
 ### Out of scope
 
-In-app enroll, timed Instagram curfew, multi-user automation (single test peer OK).
+In-app peer mint (Slice 5); timed curfew automation (Slice 6).
 
 ---
 
-## Slice 5 — Device enroll in-app
+## Slice 5 — Device enroll (gated)
 
-**Goal:** Protected user mints a peer in the UI; lite owns IP allocation and AGH client identity.
+**Goal:** In-app peers without open VPN exit.
 
 ### Deliverables
 
-- Tables: `devices` / `wg_peers` (user_id, public_key, ipv4, name, created_at)
-- UI: list devices, “Add device” → one-time config/QR display
-- Call `nightloch-wg` helper: add peer, show dump for handshakes
-- On enroll: create AGH “client” (or equivalent) bound to that IP
-- Apply **per-user baseline** desired state for that client (OISD + custom adds)
-- Email all partners of user on enroll
-- Partner (and user) can revoke device → remove peer + AGH client mapping
+- **Enrollment allowlist** (env list of emails or flag) — unauthorized: “invite-only during beta” ([F9](#))
+- Tables: peers/devices (user_id, pubkey, ipv4, name, created_at); **IP quarantine** (`reusable_after = now + retention + 1d`) ([F13](#))
+- Allocate IPs carefully (avoid trivial querylog substring collisions where cheap — e.g. start at `.11+`) ([F12](#))
+- UI: add device → one-time config/QR; enroll email to partners
+- AGH client entry keyed by **tunnel IP**; `filtering_enabled` always true
+- Apply **$client** rules for user baseline additions (not a per-user list copy of OISD)
+- Revoke: remove wg peer + AGH client; quarantine IP
+- **Account/device teardown** transaction sketch implemented for revoke/delete paths ([F8](#)): no orphan peers
+- Cooling-off when revoking **last** device if policy says perimeter shrink ([F18](#) / Slice −1)
 
 ### Demo / done
 
-Signed-in user adds “Android” → installs config without SSH → tunnel works → partner receives enroll email → revoke removes access.
-
-### Out of scope
-
-Curfew schedule UI (baseline only is enough if Slice 4 list is on).
+Allowlisted user enrolls Android without SSH → works → partner emailed.  
+Non-allowlisted account **cannot** mint a peer.  
+Revoke + reallocate after quarantine: new owner sees no old logs (prep for Slice 7 test).
 
 ---
 
-## Slice 6 — Curfews + tighten/loosen + reconcile
+## Slice 6 — Curfews + asymmetry + reconcile + allow path
 
-**Goal:** Timed Instagram curfew works; asymmetry enforced; reconciler is source of truth for AGH client rules.
+**Goal:** Timed policy with AGH-correct model and real asymmetry.
 
 ### Deliverables
 
-- Tables: `curfews`, `curfew_targets`, `baseline_extra_domains`, `baseline_enabled`
-- Policy engine:
-  - Canonicalize domains; subdomain match mode
-  - Timezone-aware windows (cross-midnight); `America/New_York` default example
-  - Classify edits: tighten vs loosen
-- AuthZ: subject may tighten own; partner of subject may loosen/tighten
-- UI: create/edit curfew; add baseline domain; partner disable baseline / remove domain
+- Tables: curfews, targets, baseline_extra_domains, **allowlist entries** (no `baseline_enabled` wholesale flag)
+- **Predicate-based** authZ for subject edits (Slice 0 package); partner may loosen
+- UI: curfew CRUD; add baseline domain; **request allowlist** → partner approve ([F27](#), [F10](#))
 - Reconciler:
-  - Desired rules per client from baseline + active curfews
-  - Run every 5 minutes + kick on write
-  - Idempotent AGH API updates
-- Seed/template: Instagram + subdomains, 20:00–08:00 ET (user applies, not forced at signup)
-- New users: baseline on by default
+  - Build full custom-rule blob from SQLite only
+  - Single-writer; banner rule; **read-back drift** event
+  - **Boundary scheduler** (sleep until next transition) + 5-minute backstop; apply blocks **~60s early** ([F17](#))
+  - Optional: native blocked-services schedule for Instagram if verified
+- Template: Instagram + subdomains 20:00–08:00 America/New_York — **second** acceptance after controlled domain
+- UI honesty: “changes ~1 minute; open apps may lag on DNS TTL”
+- Zero-partner self-loosen path tested
 
 ### Demo / done
 
-Inside window: `instagram.com` blocked on enrolled device.  
-Outside window: allowed.  
-Protected user cannot shorten window; partner can.  
-User can add a domain to baseline; cannot remove OISD without partner.
+1. **Controlled domain** (e.g. subdomain you own): block/allow at boundary, deterministic.  
+2. Then Instagram: document partial CDN/app behavior ([F31](#)).  
+3. User cannot disguised-loosen; partner can allowlist false positive and shorten window.
 
 ### Out of scope
 
-Passes, digests, MITM.
+Passes, MITM.
 
 ---
 
 ## Slice 7 — Domain logs
 
-**Goal:** Query log visibility without copying into SQLite.
+**Goal:** Multi-tenant-safe visibility.
 
 ### Deliverables
 
-- Lite proxies/filters AGH query log API by client IPs for a user
-- UI: “Recent domains” for self
-- Partner view only if edge `log_sharing` enabled
-- Toggle log sharing; email partner on disable
-- Document AGH retention ~7 days
+- Proxy AGH querylog; **re-filter every row** by exact client IP equality ([F12](#))
+- Bound by device `created_at` ([F13](#))
+- Optional quoted search as optimization only
+- UI: self logs; partner if log_sharing; toggle + email on disable
+- **Test:** seed `.2` and `.20` (or equivalent); assert no cross-read
 
 ### Demo / done
 
-Browse a few sites over WG → domains appear for user. Partner with sharing on sees them; after toggle off + email, partner UI denies log access but can still loosen curfews.
+Browse on WG → own domains listed. Isolation test green. Partner with sharing on/off behaves correctly.
 
 ---
 
-## Slice 8 — Integrity alerts
+## Slice 8 — Integrity alerts + coverage + dead-man
 
-**Goal:** Fail-open stays honest via email.
+**Goal:** Actionable alerts; usable coverage; something watches the watcher.
 
 ### Deliverables
 
-- Event/audit table (append-only enough for dedupe keys)
-- Alerts (Resend):
-  - Curfew/baseline loosened (by whom)
-  - Device enrolled / revoked
-  - Log sharing disabled
-  - AGH unreachable / reconcile failure
-  - Desired ≠ enforced drift (if detectable)
-  - WG peer quiet ≥ 1 hour during active curfew (per peer per night dedupe)
-- Status page: last reconcile OK, peer last handshake (from `wg show`)
+- Alerts as **projection of `events`** ([F28](#)) via Resend
+- Action emails: loosen, allowlist, enroll/revoke, log-share off, partner invite/accept, cooling-off start/end, account-delete request, reconcile/AGH failure, drift, optional :853 detect
+- **Coverage report** email (daily or weekly): tunnel uptime per peer while enrolled ([F2](#), [F3](#))
+- Status UI: last reconcile, last handshake, coverage summary
+- **External dead-man**: conditional heartbeat ([F23](#))
+- Resend **bounce webhooks** → UI “cannot reach partner” ([F29](#))
+- No reliance on “1h quiet during curfew” as primary alarm (optional high-bar secondary only after empirical keepalive study)
 
 ### Demo / done
 
-Disable WG for >1 hour in curfew window → partner email with “may have been interrupted”.  
-Partner shortens curfew → integrity email.  
-Force AGH down briefly → failure alert (or next reconcile cycle).
+Partner shortens curfew → email.  
+Kill app 1h → **external** notification ([F23](#)).  
+Coverage mail received (proves deliverability pipe).
 
 ---
 
-## Slice 9 — Continuous deploy
+## Slice 10 — Backups + real restore
 
-**Goal:** Main branch ships the binary without manual scp rituals.
+**Goal:** Survivable loss; demo is restore, not prose.
 
 ### Deliverables
 
-- GitHub Actions: test + `GOOS=linux GOARCH=amd64` build on push to `main`
-- Deploy job: rsync/scp binary, restart systemd (deploy key / SSH secret)
-- Document required secrets and rollback (previous binary keep)
+- DO daily backups remain on
+- **Hourly** encrypted snapshot: `VACUUM INTO` (or `.backup`); WAL mode deliberate ([F24](#))
+- stephens pull via **forced-command** SSH key; script emits ciphertext only ([F22](#))
+- Encrypt to offline age/gpg recipient; private key not on either host if practical
+- Retention: e.g. 24 hourly + 7 daily on stephens (disk-aware)
+- **Demo:** `tofu apply` throwaway droplet → restore SQLite → deploy binary → sign in, verify partners/curfews/devices → `tofu destroy`; **record wall-clock RTO** ([F30](#))
+- Confirm backup path not web-reachable (`curl` test)
 
 ### Demo / done
 
-Trivial version string change → push → production `/health` or footer shows new version within minutes.
+RTO number written in ops notes; restore proven once.
 
 ---
 
-## Slice 10 — Backups
+## Slice 11 — Cutover & dogfood (verify, don’t invent security)
 
-**Goal:** Survive droplet loss without losing SQLite.
-
-### Deliverables
-
-- DO droplet backups remain enabled in OpenTofu
-- stephens.page: cron **pull** consistent SQLite snapshot (and optional encrypted secrets/WG server private key)
-- Retention: small N (disk-aware)
-- Restore runbook: new droplet from OpenTofu + restore DB + redeploy binary
-
-### Demo / done
-
-Fresh snapshot file appears on stephens after cron; restore dry-run documented once.
-
----
-
-## Slice 11 — Hardening & cutover
-
-**Goal:** Dogfood-ready v1 on real names; old stack retired carefully.
+**Goal:** Production names; week of use; verify properties created earlier.
 
 ### Deliverables
 
-- Final CF cutover for `nightloch.app` if still staged
-- Security pass: cookies, CSRF on POSTs, Turnstile, no open resolver, AGH not public without auth
-- Load/failure notes: VPN off behavior documented in UI
-- Dogfood checklist: Android + Mac, two accounts, Instagram night window, partner loosen drill
-- Optional: second peer, false-positive handling for OISD (partner allow path)
+- Lower apex TTL to **60s** ≥1 day before cutover ([F20](#))
+- Point `nightloch.app` → droplet; re-verify `BASE_URL`, cookies, Turnstile domains
+- UI docs: fail modes, Private DNS, false-positive allow flow
+- Dogfood week checklist (below)
+- Security **verification** pass (not first implementation of CSRF/etc.)
 
-### Demo / done
+### Exit criteria — v1 dogfood complete
 
-One full week of personal use without SSH surgery; partner can help loosen when needed; backups green.
+**Original**
 
-### Exit criteria for “v1 dogfood complete”
-
-- [ ] Magic link auth works on phone browser  
-- [ ] Partner invite/accept works  
+- [ ] Magic link on phone browser  
+- [ ] Partner invite/accept  
 - [ ] Full tunnel + baseline NSFW block  
-- [ ] Device enroll without server SSH  
-- [ ] Instagram curfew enforces on schedule  
+- [ ] Device enroll without SSH (allowlisted)  
+- [ ] Timed curfew enforces (controlled domain + Instagram notes)  
 - [ ] Partner-only loosen proven  
-- [ ] Domain logs for self (+ partner when shared)  
-- [ ] Quiet-peer email observed once in test  
+- [ ] Domain logs self (+ partner when shared)  
 - [ ] GHA deploy works  
-- [ ] Backup file on stephens + DO backups on  
+- [ ] Backup on stephens + DO backups on  
+
+**Added from review**
+
+- [ ] Droplet reboot behavior observed/documented per platform  
+- [ ] Android strict Private DNS attempted and handled  
+- [ ] Hardcoded `8.8.8.8` intercepted  
+- [ ] Restore executed on fresh droplet with recorded RTO  
+- [ ] Two-tenant query-log isolation test passes  
+- [ ] Partner cooling-off drill end-to-end  
+- [ ] Unauthorized account cannot mint a peer  
+- [ ] External heartbeat fires when app killed  
+- [ ] Partner-add notifies existing partners  
+- [ ] Coverage report received at least once  
 
 ---
 
-## Cross-cutting concerns (apply as slices need them)
+## Cross-cutting concerns
 
 | Concern | Approach |
 |---|---|
-| Config | Env vars / dotenv for local; systemd `EnvironmentFile` in prod |
-| Migrations | Simple SQL files or embed migrations; run on boot |
-| Logging | Structured logs to journald; no query bodies in app logs |
-| Secrets | Never commit; GHA + server env; Resend via existing patterns where possible |
-| Testing | Unit: policy tighten/loosen, schedule windows; integration: AGH client fake; few smoke scripts on server |
-| UI | Server-rendered HTML first (Go templates); no SPA requirement |
-| AGH API | Thin client interface; mockable for tests |
-| Idempotency | Reconcile safe to re-run; peer add rejects duplicates |
+| Config | Env / systemd `EnvironmentFile`; configurable `BASE_URL` for staging→apex |
+| Migrations | Explicit deploy step; additive only; snapshot before migrate |
+| Logging | Structured journald; no full query bodies in app logs |
+| Secrets | Never commit; AGH basic auth = full admin — protect env |
+| Testing | Policy property tests; AGH client fake; isolation tests; smoke scripts |
+| UI | Server-rendered Go templates |
+| AGH client | Thin interface; mockable; IP as security principal |
+| Idempotency | Full-blob reconcile; single writer |
+| Journal mode | SQLite **WAL** |
 
 ---
 
-## Suggested sequencing & parallelization
+## Sequencing
 
 ```text
-0 → 1 → 2 → 3
-         ↘
-           4 → 5 → 6 → 7 → 8
-1 ──────────────────────────→ 9
-6+ ─────────────────────────→ 10 → 11
+−1 → 0 → 1 → 2 → 9 → 3 → 4 → 5 → 6 → 7 → 8 → 10 → 11
+              ↘________↗
+         (9 early so 3–8 deploy fast)
 ```
 
-- **2 and 3** before any multi-user enforcement.  
-- **4** can start after **1** (even parallel to 2–3 if operator-driven) but productize peers only in **5**.  
-- **9** can land once **2** runs under systemd (deploy early, iterate faster).  
-- **10** after SQLite has real data (**2+**).  
-- **11** last.
+- **4** may overlap late **3** only for operator peer experiments; product enroll stays **5**.  
+- **10** after real data (**2+**); full restore drill before relying on dogfood.  
+- Do **not** defer CSRF, token hashing, enroll gate, or log isolation to Slice 11.
 
 ---
 
-## Explicitly deferred (do not pull into early slices)
+## Explicitly deferred (still out of v1)
 
 - Temporary passes  
 - TLS MITM / search terms  
-- Native apps  
-- Digests / SMS  
-- Postgres  
-- Multi-region HA  
-- Fancy admin beyond AGH basic auth  
+- Native iOS/macOS apps  
+- Guardian edge behavior (column only; no UX)  
+- Postgres / multi-region HA  
+- Partner must approve new partners (optional hard mode; roster+alert is v1 default)  
+- One AGH instance per user  
+
+---
+
+## F18 reference — tighten/loosen predicate (summary)
+
+An edit by the protected user is allowed iff the new policy is **at least as restrictive** as the old over horizon H:
+
+For all domains in the union of old/new targets, and all times in `[now, now+H]` sampled at policy breakpoints (UTC):
+
+`blocked ⊒ allowed` — new may only add blocks, not remove them relative to old.
+
+Timezone changes, subdomain narrowing, target deletes, disables, and splits are handled by evaluating absolute time and domain union — not wall-clock string compares.
+
+Device revocation and partner-edge changes are **perimeter** operations (cooling-off), not this predicate.
 
 ---
 
 ## Implementation go-ahead
 
-This file is the **implementation plan**, not authorization to run `tofu apply` or spend money.
+This file is the implementation plan, not authorization to spend cloud money or enable NAT.
 
-When implementing:
+**Start:** Slice **−1** (docs), then **0**, then **1** with explicit `tofu apply` approval.
 
-1. Complete slices in order unless a dependency allows parallel work above.  
-2. Update [current-decision.md](./current-decision.md) only if product decisions change (prefer amending DECISIONS + shared-understanding).  
-3. Prefer smallest demo that proves the slice before expanding UI polish.
-
-**Start command for humans/agents:** begin at **Slice 0**, then **Slice 1** with explicit cloud apply approval.
+When product decisions in [Plan amendments](#plan-amendments-from-adversarial-review) are accepted permanently, fold them into DECISIONS / shared-understanding in the same PR as Slice −1.
