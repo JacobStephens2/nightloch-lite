@@ -150,14 +150,18 @@ Application code (starts Slice 0).
 
 ## Slice 0 — Repo skeleton + policy package
 
+**Status: complete (2026-07-28)**
+
 **Goal:** Real Go module; highest-risk pure logic tested first.
 
-### Deliverables
+### Deliverables (done)
 
-- `go.mod`, `cmd/nightloch/`, `internal/…`, `infra/opentofu/`, `deploy/`, `.github/workflows/` (build-only OK)
-- `Makefile`: `test`, `build` (`GOOS=linux GOARCH=amd64`)
-- **`internal/policy` (or similar):** predicate implementation + **property-based tests** (random policy pairs vs brute-force minute samples)
-- Keep docs: shared-understanding, DECISIONS, plan, adversarial-review
+- [x] `go.mod` (`github.com/JacobStephens2/nightloch-lite`)
+- [x] `cmd/nightloch/`, `internal/policy/`, `infra/opentofu/`, `deploy/`, `.github/workflows/ci.yml`
+- [x] `Makefile`: `test`, `build`
+- [x] **`internal/policy`:** `IsBlocked`, `AtLeastAsRestrictive`, `SubjectMayApplyEdit`; curfews win over allows; global list lazy in P; probe subdomains for match-mode narrowing
+- [x] Unit tests (worked examples) + property test (breakpoint ≡ brute force; multi-TZ / DST horizon)
+- [x] Slice 0 review S1–S9: DST-safe `AddDate` breakpoints; deny-closed Validate; deploy under `/opt/nightloch`; CI vet/fmt/ldflags
 
 ### Demo / done
 
@@ -166,7 +170,7 @@ go test ./...
 go build -o bin/nightloch ./cmd/nightloch
 ```
 
-Property tests fail if a disguised loosen is classified as tighten.
+Property tests check breakpoint ≡ brute force; unit tests check **disguised loosen → denied** when partnered.
 
 ---
 

@@ -2,7 +2,8 @@
 /bin/
 /dist/
 *.exe
-nightloch
+/nightloch
+cmd/nightloch/nightloch
 
 # Local env / secrets
 .env

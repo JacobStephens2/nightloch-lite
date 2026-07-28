@@ -1,0 +1,14 @@
+# Staging (Slice 1 Path A). Stock Caddy HTTP-01.
+# Keep root at .../public only — never serve /opt/nightloch (SQLite/binary).
+# lite.nightloch.app {
+# 	root * /var/www/nightloch.app/public
+# 	file_server
+# 	# reverse_proxy 127.0.0.1:8080   # slice 2+
+# }
+
+# agh.nightloch.app {
+# 	basicauth {
+# 		# operator hash
+# 	}
+# 	reverse_proxy 127.0.0.1:3000
+# }
