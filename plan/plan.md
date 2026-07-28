@@ -23,8 +23,51 @@ Work proceeds as **vertical slices**: each ships a thin path through the stack t
 | **Thin then thicken** | Smallest real path first; **security properties ship with the exposure**, not in a final “hardening” dump |
 | **Ops gates stay explicit** | Live NAT / DNS cutover / droplet create need human approval |
 | **Design before enforcement productization** | Slice **−1** answers perimeter/policy/integrity questions before Slice 0 ships code that bakes wrong assumptions |
+| **Grill where decisions are, not everywhere** | Slices carrying unresolved *product* decisions open with a [decision grill](#decision-grills); the rest open with a 5-minute gate |
 
 Suggested dogfood pair: two emails you control (protected + partner).
+
+---
+
+## Decision grills
+
+The original 60-question interview (`grill-me` skill → DECISIONS Q1–Q59) held up well: Slice −1 amended only 9 of 59, and **two-thirds of those were forced by external facts** (WireGuard blackholes, AGH cannot scope filter lists per client, AGH query-log `search` is substring) rather than by any change of intent. Those were the adversarial review's job, not an interview's.
+
+The three amendments a better grill *would* have caught — Q34′ (edge end), Q18′ (enroll gate), Q11′ (zero partners) — share a shape. They are not "what should X do?" but questions that live *between* branches of a decision tree. So the second pass asks different questions, and only where decisions remain.
+
+### Gate (every slice, ~5 minutes)
+
+Before starting a slice, list the decisions it forces that are **not** already in DECISIONS / SECURITY-POLICY-DESIGN. Empty list → no grill, start work. Non-empty → grill it first, and fold answers into the decision docs before writing code.
+
+### Slices that get a full grill
+
+| Slice | Why | Depth |
+|---|---|---|
+| **3** Partner graph | Perimeter UX, notification recipients + copy, mutual edges | Full |
+| **5** Device enroll | Gate refusal copy only — mostly settled | Gate only |
+| **6** Curfews + allow path | The product. Edit UX, allowlist request flow, timezone ownership | Full |
+| **7** Domain logs | Most privacy-sensitive surface; specified in one sentence today | Full |
+| **8** Alerts + coverage | Copy, cadence, batching, unsubscribe — all undecided | Full |
+
+Slices 0, 1, 2, 4, 9, 10, 11 are engineering against settled decisions. Use the gate; expect it to come back empty.
+
+### Second-pass question archetypes
+
+The first interview walked the decision tree depth-first. These are the questions that fall between branches:
+
+1. **Negative space** — what happens when the count is **zero**? (Zero partners was undefined through 59 questions.)
+2. **Composition** — two locked decisions are each fine; what does their *combination* now permit? (Open signup ∧ self-enroll = free VPN exit for strangers.)
+3. **Exit paths** — how does each party leave this state, how fast, and who is told?
+4. **Who-gets-told** — for every state change: which recipients, through which channel, with what wording.
+5. **Adversary-as-user** — "the protected user wants out tonight and will use only authorized actions." Walk the path. *(Highest-yield question in the set — it produced F5, F6, and F8.)*
+
+### Standing gap: UX and copy
+
+No screen, email body, or error message is specified anywhere in these documents. Slice 6's central flow — user hits an OISD false positive → requests an allowlist entry → partner approves — is fully specified as *mechanism* and entirely unspecified as *experience*. Same for what a partner sees in Slice 7 and what a coverage report looks like in Slice 8. **If only one more grill happens, grill the UX of Slices 6–8** rather than re-litigating architecture.
+
+### Cost note
+
+Decision churn is not free. The docs already had a precedence problem (R7) and four stale `DECISIONS.md` rows (R6). Every grill round produces more decision records to keep consistent — which is the reason to run four grills rather than eleven.
 
 ---
 
