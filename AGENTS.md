@@ -12,6 +12,7 @@ Self-hosted **partner-locked DNS protection**: full-tunnel WireGuard + AdGuard H
 |---|---|
 | [CONTEXT.md](./CONTEXT.md) | Ubiquitous language — use these terms in code, UI, and prose |
 | [status.md](./status.md) | Project status and what’s next |
+| [HANDOFF.md](./HANDOFF.md) | Latest session handoff for fresh agents |
 | [shared-understanding.md](./shared-understanding.md) | Product freeze |
 | [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md) | Perimeter, tighten/loosen, AGH model, fail modes |
 | [plan/plan.md](./plan/plan.md) | Vertical-slice implementation plan |

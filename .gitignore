@@ -42,3 +42,7 @@ vendor/
 coverage.out
 *.test
 docs/BITWARDEN_BROWSER_AGENT.md
+
+# OpenTofu plan artifacts
+**/tfplan
+*.tfplan
