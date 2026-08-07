@@ -255,20 +255,22 @@ App binary service, WG, AGH, NAT.
 
 ## Slice 2 — Sign in (magic link)
 
+**Status: code complete (2026-08-06)** — live two-email demo pending Slice 1 apply and provider configuration
+
 **Goal:** Auth loop with security properties that create exposure.
 
 ### Deliverables
 
-- SQLite: `users`, `magic_link_tokens`, `sessions` — **tokens/sessions stored hashed** ([F21](#))
-- UI: email + Turnstile; consume link
-- Cookie: HttpOnly, Secure, SameSite=Lax, **host-only** (no `Domain=.nightloch.app`)
-- CSRF middleware on all state-changing POSTs ([F26](#))
-- Token TTL 15m single-use; session 30d
-- Rate limit **per email + per IP** (mail-bomb / From-reputation load-bearing)
-- Resend From: `Nightloch <…@nightloch.app>` once domain verified; else temporary documented fallback
-- Config: `BASE_URL`, secrets via env
-- systemd + Caddy reverse proxy to app
-- **Honest `/health`**: DB writable (+ later AGH/reconcile checks as those exist) ([F25](#))
+- [x] SQLite: `users`, `magic_link_tokens`, `sessions` — **tokens/sessions stored hashed** ([F21](#))
+- [x] UI: email + Turnstile; consume link
+- [x] Cookie: HttpOnly, Secure, SameSite=Lax, **host-only** (no `Domain=.nightloch.app`)
+- [x] CSRF middleware on all state-changing POSTs ([F26](#))
+- [x] Token TTL 15m single-use; session 30d
+- [x] Rate limit **per email + per IP** (mail-bomb / From-reputation load-bearing)
+- [x] Resend From: `Nightloch <…@nightloch.app>` once domain verified; else temporary documented fallback
+- [x] Config: `BASE_URL`, secrets via env
+- [x] systemd + Caddy reverse proxy to app
+- [x] **Honest `/health`**: DB writable (+ later AGH/reconcile checks as those exist) ([F25](#))
 
 ### Demo / done
 
@@ -283,15 +285,17 @@ Partners, devices.
 
 ## Slice 9 — Continuous deploy *(early)*
 
+**Status: code complete (2026-08-06)** — staging environment and first live deploy pending Slice 1/2 setup
+
 **Goal:** Ship binary safely so later slices iterate fast. Number kept as “9” for review cross-refs; **execute immediately after Slice 2**.
 
 ### Deliverables
 
-- GHA: test + linux/amd64 build on `main`
-- Deploy: rsync binary, **migrate as explicit step** (not boot auto-migrate), restart systemd
-- **Health gate** 30s: on failure restore previous binary and restart ([F25](#))
-- Migrations: forward-only additive; pre-migrate SQLite snapshot kept on server
-- Secrets documented; previous binary retained
+- [x] GHA: test + linux/amd64 build on `main`
+- [x] Deploy: rsync binary, **migrate as explicit step** (not boot auto-migrate), restart systemd
+- [x] **Health gate** 30s: on failure restore previous binary and restart ([F25](#))
+- [x] Migrations: forward-only additive; pre-migrate SQLite snapshot kept on server
+- [x] Secrets documented; previous binary retained
 
 ### Demo / done
 

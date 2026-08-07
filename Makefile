@@ -1,4 +1,4 @@
-.PHONY: test build tidy clean fmt vet tofu-init tofu-validate tofu-plan
+.PHONY: test build tidy clean fmt vet migrate tofu-init tofu-validate tofu-plan
 
 test:
 	go test ./...
@@ -16,6 +16,9 @@ build:
 
 tidy:
 	go mod tidy
+
+migrate:
+	go run ./cmd/nightloch migrate
 
 clean:
 	rm -rf bin/

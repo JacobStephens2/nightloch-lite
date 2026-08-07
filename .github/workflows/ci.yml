@@ -1,5 +1,8 @@
 name: ci
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -10,8 +13,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.x"
       - name: Format
@@ -26,3 +29,107 @@ jobs:
             -ldflags "-X main.version=${GITHUB_SHA}" \
             -o bin/nightloch ./cmd/nightloch
           ./bin/nightloch version
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
+        with:
+          name: nightloch-linux-amd64
+          path: bin/nightloch
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy-staging:
+    if: github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: nightloch-staging
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: nightloch-linux-amd64
+          path: bin
+      - name: Configure pinned SSH host and key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_HOST_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/ssh"
+          install -m 0600 /dev/null "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$DEPLOY_HOST_KEY" > "$RUNNER_TEMP/ssh/known_hosts"
+      - name: Upload candidate binary
+        run: |
+          chmod 0755 bin/nightloch
+          rsync -e "ssh -i $RUNNER_TEMP/ssh/key -o UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts -o IdentitiesOnly=yes" \
+            bin/nightloch "$DEPLOY_USER@$DEPLOY_HOST:/opt/nightloch/bin/nightloch.candidate-$GITHUB_SHA"
+      - name: Snapshot, migrate, restart, and health-gate
+        run: |
+          ssh -i "$RUNNER_TEMP/ssh/key" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- '$GITHUB_SHA' '$GITHUB_RUN_ID' '$GITHUB_RUN_ATTEMPT'" <<'REMOTE'
+          set -euo pipefail
+          release_sha="$1"
+          run_id="$2"
+          run_attempt="$3"
+          case "$release_sha" in
+            *[!0-9a-f]*|'') echo "invalid release SHA" >&2; exit 2 ;;
+          esac
+          case "$run_id-$run_attempt" in
+            *[!0-9-]*|'') echo "invalid workflow run identity" >&2; exit 2 ;;
+          esac
+
+          app_root=/opt/nightloch
+          database_path="$app_root/data/nightloch.db"
+          candidate="$app_root/bin/nightloch.candidate-$release_sha"
+          current="$app_root/bin/nightloch"
+          previous="$app_root/bin/nightloch.previous"
+          snapshot="$app_root/backups/pre-migrate-$release_sha-$run_id-$run_attempt.db"
+
+          test -x "$candidate"
+          test "$($candidate version)" = "$release_sha"
+          install -d -m 0700 "$app_root/backups"
+          DATABASE_PATH="$database_path" "$candidate" backup "$snapshot"
+          DATABASE_PATH="$database_path" "$candidate" migrate
+
+          had_previous=false
+          if test -x "$current"; then
+            cp -p "$current" "$previous"
+            had_previous=true
+          fi
+          chmod 0755 "$candidate"
+          mv -f "$candidate" "$current"
+          sudo systemctl restart nightloch
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --output /dev/null http://127.0.0.1:8080/health; then
+              healthy=true
+              break
+            fi
+            sleep 1
+          done
+          if test "$healthy" = true; then
+            echo "deployed $release_sha"
+            exit 0
+          fi
+
+          echo "health gate failed; restoring previous binary" >&2
+          if test "$had_previous" = true; then
+            cp -p "$previous" "$current"
+            sudo systemctl restart nightloch
+            curl --fail --silent --show-error --output /dev/null --retry 10 --retry-delay 1 \
+              --retry-connrefused http://127.0.0.1:8080/health || true
+          else
+            sudo systemctl stop nightloch || true
+            mv "$current" "$app_root/bin/nightloch.failed-$release_sha"
+          fi
+          exit 1
+          REMOTE

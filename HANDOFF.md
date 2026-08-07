@@ -5,6 +5,8 @@
 **Local path:** `/Users/jacob/GitHub/JacobStephens2/nightloch-lite`  
 **Related (do not confuse):** `/Users/jacob/GitHub/JacobStephens2/nightloch` is the **old** bloated product — greenfield is **nightloch-lite** only.
 
+> **2026-08-06 update:** Slice 2 magic-link auth is code-complete: SQLite forward migration, hashed single-use links/sessions, Resend, Turnstile, persistent email/IP quotas, `__Host-` cookies, CSRF, sign-out, and writable-DB `/health`. Slice 9 is also code-complete: consistent pre-migration snapshot, serialized artifact deploy, explicit migration, 30-second health gate, and binary rollback. Live demos wait on the Slice 1 origin and provider/GitHub environment configuration; see `docs/ops/SLICE-2-AUTH.md` and `docs/ops/SLICE-9-DEPLOY.md`. Slice 3 is next and begins with its required full experience grill.
+
 This handoff is for a **fresh agent**. Do **not** re-derive product design from chat history. Read artifacts below.
 
 ---
@@ -40,6 +42,8 @@ Living pointer: **[status.md](./status.md)** (renamed from `current-decision.md`
 | **−1** Security & policy design | Done | [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-POLICY-DESIGN.md), freeze + DECISIONS amendments; reviews in [reviews/slice-neg-1-review.md](./reviews/slice-neg-1-review.md) (R1–R11 addressed) |
 | **0** Policy package + skeleton | Done | `internal/policy/`, `cmd/nightloch/`, CI; [reviews/slice-0-review.md](./reviews/slice-0-review.md) (S1–S9 addressed). `go test ./...` should pass |
 | **1** Live origin | **Code complete; not applied** | [infra/opentofu/](./infra/opentofu/), [scripts/slice1-up.sh](./scripts/slice1-up.sh), [docs/ops/SLICE-1-RUNBOOK.md](./docs/ops/SLICE-1-RUNBOOK.md). **No droplet until human `tofu apply`** |
+| **2** Magic-link sign-in | **Code complete; live demo pending origin** | `internal/auth/`, `internal/database/`, `internal/webapp/`, [docs/ops/SLICE-2-AUTH.md](./docs/ops/SLICE-2-AUTH.md) |
+| **9** Continuous deploy | **Code complete; live demo pending origin** | `.github/workflows/ci.yml`, [docs/ops/SLICE-9-DEPLOY.md](./docs/ops/SLICE-9-DEPLOY.md) |
 
 Plan source of truth: [plan/plan.md](./plan/plan.md) (post adversarial re-cut). Original adversarial review: [plan/adversarial-review.md](./plan/adversarial-review.md) (or root path if present).
 
@@ -65,9 +69,9 @@ Agent orientation: [AGENTS.md](./AGENTS.md).
 5. Optional: adversarial review of Slice 1 **code** before apply (recommended in-session).  
 6. After apply: store console password locally (`tofu output -raw console_password`); verify `https://lite.nightloch.app` and grey-cloud DNS per runbook.
 
-### B. Parallel code: Slice 2 (magic-link auth)
+### B. Next code: Slice 3 (Partner graph + audit)
 
-Can start without droplet if desired; product rules in freeze + SECURITY-POLICY-DESIGN. Use domain terms from CONTEXT (Protectee not Subject). Code may still say `SubjectMayApplyEdit` — rename opportunistically.
+Auth and the health-gated deploy are ready. Slice 3 must begin with the full product-experience grill required by the plan before its schema or UI is implemented.
 
 ---
 

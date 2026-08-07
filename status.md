@@ -1,6 +1,6 @@
 # Status
 
-**As of:** 2026-07-30  
+**As of:** 2026-08-06
 **Full handoff:** [HANDOFF.md](./HANDOFF.md)
 
 ## Now
@@ -10,6 +10,8 @@
 | −1 Security & policy design | Done |
 | 0 Policy package + skeleton | Done (`go test ./...`) |
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human apply |
+| 2 Magic-link sign-in | **Code in repo**; live two-email demo follows Slice 1 apply |
+| 9 Continuous deploy (ordered after Slice 2) | **Code in repo**; enable only after staging service setup |
 
 OpenTofu + `scripts/slice1-up.sh` ready. **No droplet until you apply.** Bitwarden laptop wiring verified (tokens inject; values never logged).
 
@@ -23,7 +25,9 @@ cd ~/GitHub/JacobStephens2/nightloch-lite
 ## Next
 
 1. **You:** `./scripts/slice1-up.sh plan` then `apply` (optional: adversarial review of Slice 1 code first)  
-2. **Code:** Slice 2 (magic-link auth) can proceed in parallel on the skeleton  
+2. **Deploy:** follow [docs/ops/SLICE-2-AUTH.md](./docs/ops/SLICE-2-AUTH.md) for Resend, Turnstile, migration, and the two-email auth demo
+3. **Deploy:** configure the staging GitHub environment using [docs/ops/SLICE-9-DEPLOY.md](./docs/ops/SLICE-9-DEPLOY.md), then set `DEPLOY_ENABLED=true`
+4. **Code:** Slice 3 is next and begins with its required product-experience grill
 
 ## Secrets (non-secret metadata)
 
