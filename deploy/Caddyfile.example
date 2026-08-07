@@ -1,10 +1,13 @@
 # Staging (Slice 1 Path A). Stock Caddy HTTP-01.
 # Keep root at .../public only — never serve /opt/nightloch (SQLite/binary).
-# lite.nightloch.app {
-# 	root * /var/www/nightloch.app/public
-# 	file_server
-# 	# reverse_proxy 127.0.0.1:8080   # slice 2+
-# }
+lite.nightloch.app {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		# Overwrite rather than append so the app's per-IP rate limit cannot be
+		# bypassed with a forged inbound X-Forwarded-For value.
+		header_up X-Forwarded-For {remote_host}
+	}
+}
 
 # agh.nightloch.app {
 # 	basicauth {
