@@ -2,6 +2,7 @@ package webapp
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
 type fakeVerifier struct{}
@@ -26,7 +28,17 @@ func (fakeVerifier) Verify(_ context.Context, token, _ string) error {
 	return nil
 }
 
-func newTestApp(t *testing.T) (*App, *mailmessage.RecordingSender, *githubauth.Service) {
+// testEnv is the whole control plane over one migrated temporary SQLite
+// database, so integration tests can assert durable state as well as HTTP.
+type testEnv struct {
+	app          *App
+	db           *sql.DB
+	sender       *mailmessage.RecordingSender
+	auth         *githubauth.Service
+	partnerships *partnership.Service
+}
+
+func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "nightloch.db"))
 	if err != nil {
@@ -38,15 +50,23 @@ func newTestApp(t *testing.T) (*App, *mailmessage.RecordingSender, *githubauth.S
 	}
 	baseURL, _ := url.Parse("https://lite.nightloch.app")
 	sender := &mailmessage.RecordingSender{}
-	service := githubauth.NewService(githubauth.NewStore(db), sender, fakeVerifier{}, baseURL)
+	authService := githubauth.NewService(githubauth.NewStore(db), sender, fakeVerifier{}, baseURL)
+	partnerships := partnership.NewService(db, baseURL)
 	app, err := New(Options{
-		Auth: service, DB: db, TurnstileSite: "site-key", Version: "test",
+		Auth: authService, DB: db, Partnerships: partnerships,
+		TurnstileSite: "site-key", Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app, sender, service
+	return &testEnv{app: app, db: db, sender: sender, auth: authService, partnerships: partnerships}
+}
+
+func newTestApp(t *testing.T) (*App, *mailmessage.RecordingSender, *githubauth.Service) {
+	t.Helper()
+	env := newTestEnv(t)
+	return env.app, env.sender, env.auth
 }
 
 func TestAuthHTTPFlowCookieSecurityCSRFAndSignOut(t *testing.T) {
