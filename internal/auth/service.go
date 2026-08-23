@@ -5,20 +5,25 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
-	"net/mail"
+	netmail "net/mail"
 	"net/url"
 	"strings"
 	"time"
+
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
 
 const (
-	magicLinkTTL = 15 * time.Minute
-	sessionTTL   = 30 * 24 * time.Hour
-	tokenBytes   = 32
+	magicLinkTTL  = 15 * time.Minute
+	sessionTTL    = 30 * 24 * time.Hour
+	tokenBytes    = 32
+	signInReplyTo = "alerts@nightloch.app"
 )
 
 var (
@@ -26,11 +31,6 @@ var (
 	ErrHumanCheck   = errors.New("human verification failed")
 	ErrDelivery     = errors.New("magic-link delivery failed")
 )
-
-// Mailer sends a sign-in URL without logging or persisting its raw token.
-type Mailer interface {
-	SendMagicLink(context.Context, string, string) error
-}
 
 // HumanVerifier validates a Turnstile response for the originating IP.
 type HumanVerifier interface {
@@ -40,17 +40,17 @@ type HumanVerifier interface {
 // Service coordinates authentication without exposing raw tokens to Store.
 type Service struct {
 	store    *Store
-	mailer   Mailer
+	sender   mailmessage.Sender
 	verifier HumanVerifier
 	baseURL  *url.URL
 	now      func() time.Time
 	random   io.Reader
 }
 
-func NewService(store *Store, mailer Mailer, verifier HumanVerifier, baseURL *url.URL) *Service {
+func NewService(store *Store, sender mailmessage.Sender, verifier HumanVerifier, baseURL *url.URL) *Service {
 	return &Service{
 		store:    store,
-		mailer:   mailer,
+		sender:   sender,
 		verifier: verifier,
 		baseURL:  baseURL,
 		now:      time.Now,
@@ -89,7 +89,18 @@ func (s *Service) RequestMagicLink(ctx context.Context, rawEmail, ip, humanToken
 	query := link.Query()
 	query.Set("token", rawToken)
 	link.RawQuery = query.Encode()
-	if err := s.mailer.SendMagicLink(ctx, email, link.String()); err != nil {
+	linkString := link.String()
+	linkDigest := sha256.Sum256([]byte(linkString))
+	envelope := mailmessage.Envelope{
+		To:      email,
+		Subject: "Your Nightloch sign-in link",
+		Text:    "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n" + linkString,
+		HTML: `<p>Sign in to Nightloch. This link expires in 15 minutes and can be used once.</p><p><a href="` +
+			html.EscapeString(linkString) + `">Sign in to Nightloch</a></p>`,
+		ReplyTo:        signInReplyTo,
+		IdempotencyKey: "nightloch-magic-" + hex.EncodeToString(linkDigest[:]),
+	}
+	if err := s.sender.Send(ctx, envelope); err != nil {
 		// The user receives a generic response, but a failed delivery must not
 		// leave a live bearer token behind.
 		_ = s.store.InvalidateMagicLink(ctx, tokenHash, now)
@@ -154,7 +165,7 @@ func normalizeEmail(raw string) (string, error) {
 	if raw == "" || len(raw) > 254 || strings.ContainsAny(raw, "\r\n") {
 		return "", ErrInvalidEmail
 	}
-	address, err := mail.ParseAddress(raw)
+	address, err := netmail.ParseAddress(raw)
 	if err != nil || address.Name != "" || address.Address != raw {
 		return "", ErrInvalidEmail
 	}
