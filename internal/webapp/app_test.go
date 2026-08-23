@@ -2,6 +2,7 @@ package webapp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,16 +14,8 @@ import (
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
-
-type fakeMailer struct {
-	link string
-}
-
-func (m *fakeMailer) SendMagicLink(_ context.Context, _, link string) error {
-	m.link = link
-	return nil
-}
 
 type fakeVerifier struct{}
 
@@ -33,7 +26,7 @@ func (fakeVerifier) Verify(_ context.Context, token, _ string) error {
 	return nil
 }
 
-func newTestApp(t *testing.T) (*App, *fakeMailer, *githubauth.Service) {
+func newTestApp(t *testing.T) (*App, *mailmessage.RecordingSender, *githubauth.Service) {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "nightloch.db"))
 	if err != nil {
@@ -44,8 +37,8 @@ func newTestApp(t *testing.T) (*App, *fakeMailer, *githubauth.Service) {
 		t.Fatal(err)
 	}
 	baseURL, _ := url.Parse("https://lite.nightloch.app")
-	mailer := &fakeMailer{}
-	service := githubauth.NewService(githubauth.NewStore(db), mailer, fakeVerifier{}, baseURL)
+	sender := &mailmessage.RecordingSender{}
+	service := githubauth.NewService(githubauth.NewStore(db), sender, fakeVerifier{}, baseURL)
 	app, err := New(Options{
 		Auth: service, DB: db, TurnstileSite: "site-key", Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -53,12 +46,12 @@ func newTestApp(t *testing.T) (*App, *fakeMailer, *githubauth.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app, mailer, service
+	return app, sender, service
 }
 
 func TestAuthHTTPFlowCookieSecurityCSRFAndSignOut(t *testing.T) {
 	t.Parallel()
-	app, mailer, service := newTestApp(t)
+	app, sender, service := newTestApp(t)
 
 	getSignIn := httptest.NewRequest(http.MethodGet, "https://lite.nightloch.app/sign-in", nil)
 	getSignIn.RemoteAddr = "127.0.0.1:32100"
@@ -92,11 +85,13 @@ func TestAuthHTTPFlowCookieSecurityCSRFAndSignOut(t *testing.T) {
 	postSignIn.AddCookie(csrfCookie)
 	postRecorder := httptest.NewRecorder()
 	app.ServeHTTP(postRecorder, postSignIn)
-	if postRecorder.Code != http.StatusSeeOther || postRecorder.Header().Get("Location") != "/auth/check-email" || mailer.link == "" {
-		t.Fatalf("POST /sign-in = %d location=%q link=%q", postRecorder.Code, postRecorder.Header().Get("Location"), mailer.link)
+	if postRecorder.Code != http.StatusSeeOther || postRecorder.Header().Get("Location") != "/auth/check-email" || len(sender.Envelopes) != 1 {
+		t.Fatalf("POST /sign-in = %d location=%q envelopes=%#v", postRecorder.Code, postRecorder.Header().Get("Location"), sender.Envelopes)
 	}
 
-	consume := httptest.NewRequest(http.MethodGet, mailer.link, nil)
+	const textPrefix = "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n"
+	link := strings.TrimPrefix(sender.Envelopes[0].Text, textPrefix)
+	consume := httptest.NewRequest(http.MethodGet, link, nil)
 	consumeRecorder := httptest.NewRecorder()
 	app.ServeHTTP(consumeRecorder, consume)
 	if consumeRecorder.Code != http.StatusSeeOther || consumeRecorder.Header().Get("Location") != "/" {
@@ -128,6 +123,36 @@ func TestAuthHTTPFlowCookieSecurityCSRFAndSignOut(t *testing.T) {
 	}
 	if _, err := service.Authenticate(context.Background(), sessionCookie.Value); err == nil {
 		t.Fatal("session remained valid after sign out")
+	}
+}
+
+func TestMagicLinkDeliveryFailureKeepsGenericPublicResponse(t *testing.T) {
+	t.Parallel()
+
+	app, sender, _ := newTestApp(t)
+	sender.SendError = errors.New("delivery unavailable")
+
+	get := httptest.NewRequest(http.MethodGet, "https://lite.nightloch.app/sign-in", nil)
+	get.RemoteAddr = "127.0.0.1:32100"
+	getRecorder := httptest.NewRecorder()
+	app.ServeHTTP(getRecorder, get)
+	csrfCookie := cookieNamed(t, getRecorder.Result().Cookies(), csrfCookieName)
+
+	form := url.Values{
+		"email":                 []string{"person@example.com"},
+		"csrf_token":            []string{csrfCookie.Value},
+		"cf-turnstile-response": []string{"human"},
+	}
+	post := httptest.NewRequest(http.MethodPost, "https://lite.nightloch.app/sign-in", strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.Header.Set("X-Forwarded-For", "203.0.113.78")
+	post.RemoteAddr = "127.0.0.1:32100"
+	post.AddCookie(csrfCookie)
+	postRecorder := httptest.NewRecorder()
+	app.ServeHTTP(postRecorder, post)
+
+	if postRecorder.Code != http.StatusSeeOther || postRecorder.Header().Get("Location") != "/auth/check-email" {
+		t.Fatalf("POST /sign-in after delivery failure = %d location=%q", postRecorder.Code, postRecorder.Header().Get("Location"))
 	}
 }
 
