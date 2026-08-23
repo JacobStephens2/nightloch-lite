@@ -3,6 +3,7 @@ package webapp
 import (
 	"fmt"
 	"html/template"
+	"time"
 )
 
 var templateSources = map[string]string{
@@ -29,20 +30,59 @@ var templateSources = map[string]string{
 <body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That link is unavailable</h1>
 <p class="lede">It may have expired or already been used. Request a fresh link to continue.</p>
 <p><a class="button-link" href="/sign-in">Request another link</a></p></section></main></body></html>`,
-	"home": `<!doctype html>
+	"dashboard": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<title>Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><form method="post" action="/sign-out"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="quiet" type="submit">Sign out</button></form></header>
-<main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection starts with a Partner</h1>
-<p class="lede">You do not have any Partners yet. Until you add one, you can loosen your own Policy; Nightloch’s partner lock is not active.</p>
-<div class="notice"><strong>Next milestone</strong><p>Partner invitations and Your Partners arrive in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+<main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
+{{if .View.PartnerLockActive}}
+<p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
+<h2>Your Partners</h2><ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}.</li>{{end}}</ul>
+{{else}}
+<p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
+{{if not .View.PendingInvitations}}<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>{{end}}
+{{end}}
+{{if .View.PendingInvitations}}
+<h2>Partner invitations</h2>
+<p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
+<p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this invitation is accepted or expires.</p>
+<ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
+Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
+Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.DeliveryState.Label}}.</li>{{end}}</ul>
+{{end}}
+<div class="notice"><strong>Next milestone</strong><p>Reviewing and accepting an invitation, the full Roster, and Activity arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invite": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add a Partner · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Add a Partner</h1>
+<p class="lede">Nightloch emails an invitation that expires in seven days. No Partner powers exist until the invited person signs in and accepts.</p>
+<p class="warn"><strong>Every Partner can act independently. Only add someone you trust.</strong> An active Partner can loosen your Policy, approve Allowlist entries, revoke your Devices, and see your Roster and Activity.</p>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<form method="post" action="/partners/invite"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="invitee_email">Partner email</label>
+<input id="invitee_email" name="invitee_email" type="email" autocomplete="off" required maxlength="254" value="{{.InviteeEmail}}">
+<p class="consent"><label class="inline"><input type="checkbox" name="log_sharing" value="on"> Share my DNS domain log with this Partner. I can turn this off immediately; Nightloch will tell them.</label></p>
+<button type="submit">Send Partner invitation</button></form>
+<p><a href="/">Cancel</a></p></section></main></body></html>`,
+}
+
+// templateFuncs keeps every rendered instant explicitly labelled. The server
+// always writes UTC; /assets/local-time.js adds the viewer's local time and
+// timezone alongside it when scripting is available (S3-27).
+var templateFuncs = template.FuncMap{
+	"utc": func(at time.Time) template.HTML {
+		utc := at.UTC()
+		return template.HTML(fmt.Sprintf(`<time datetime="%s" data-utc>%s UTC</time>`,
+			utc.Format(time.RFC3339), utc.Format("2006-01-02 15:04")))
+	},
 }
 
 func parseTemplates() (map[string]*template.Template, error) {
 	parsed := make(map[string]*template.Template, len(templateSources))
 	for name, source := range templateSources {
-		tmpl, err := template.New(name).Parse(source)
+		tmpl, err := template.New(name).Funcs(templateFuncs).Parse(source)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s template: %w", name, err)
 		}
@@ -51,4 +91,13 @@ func parseTemplates() (map[string]*template.Template, error) {
 	return parsed, nil
 }
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const localTimeScript = `// Add the viewer's local time beside the server-rendered UTC stamp.
+for (const element of document.querySelectorAll("time[data-utc]")) {
+  const instant = new Date(element.getAttribute("datetime"));
+  if (Number.isNaN(instant.getTime())) continue;
+  const local = instant.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" });
+  element.textContent = local + " (" + element.textContent + ")";
+}
+`
+
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`

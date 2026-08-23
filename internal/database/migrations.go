@@ -47,4 +47,83 @@ var migrations = []string{
 		touched_at INTEGER NOT NULL
 	);
 	INSERT INTO health_probe(id, touched_at) VALUES (1, unixepoch());`,
+	`CREATE TABLE partnerships (
+		id INTEGER PRIMARY KEY,
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		partner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		edge_type TEXT NOT NULL CHECK(edge_type IN ('peer', 'guardian')),
+		log_sharing INTEGER NOT NULL CHECK(log_sharing IN (0, 1)),
+		accepted_at INTEGER NOT NULL,
+		cooling_off_requested_at INTEGER,
+		cooling_off_ends_at INTEGER,
+		ended_at INTEGER,
+		ended_reason TEXT,
+		CHECK(protectee_id <> partner_id),
+		CHECK((cooling_off_requested_at IS NULL) = (cooling_off_ends_at IS NULL)),
+		CHECK((ended_at IS NULL) = (ended_reason IS NULL))
+	);
+	-- One live directional relationship at a time; ended rows stay as receipts,
+	-- and the reverse direction is a separate row with its own lifecycle.
+	CREATE UNIQUE INDEX partnerships_live_direction_idx
+		ON partnerships(protectee_id, partner_id) WHERE ended_at IS NULL;
+	CREATE INDEX partnerships_partner_idx ON partnerships(partner_id) WHERE ended_at IS NULL;
+
+	CREATE TABLE partner_invitations (
+		id INTEGER PRIMARY KEY,
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		invitee_email TEXT NOT NULL COLLATE NOCASE,
+		log_sharing INTEGER NOT NULL CHECK(log_sharing IN (0, 1)),
+		token_hash BLOB NOT NULL UNIQUE CHECK(length(token_hash) = 32),
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL,
+		last_sent_at INTEGER NOT NULL,
+		send_count INTEGER NOT NULL CHECK(send_count >= 1),
+		state TEXT NOT NULL CHECK(state IN ('pending', 'accepted', 'declined', 'canceled', 'expired')),
+		resolved_at INTEGER,
+		resolved_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+		CHECK(expires_at > created_at),
+		CHECK((state = 'pending') = (resolved_at IS NULL))
+	);
+	CREATE UNIQUE INDEX partner_invitations_pending_idx
+		ON partner_invitations(protectee_id, invitee_email) WHERE state = 'pending';
+
+	CREATE TABLE activity_entries (
+		id INTEGER PRIMARY KEY,
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		action TEXT NOT NULL,
+		-- A NULL actor is Nightloch itself, such as a completed timer.
+		actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+		actor_email TEXT,
+		target_email TEXT,
+		partnership_id INTEGER REFERENCES partnerships(id) ON DELETE SET NULL,
+		invitation_id INTEGER REFERENCES partner_invitations(id) ON DELETE SET NULL,
+		occurred_at INTEGER NOT NULL,
+		effective_at INTEGER,
+		-- Structured detail for rendering authorized prose. Never product UI.
+		details TEXT NOT NULL
+	);
+	CREATE INDEX activity_entries_protectee_idx
+		ON activity_entries(protectee_id, occurred_at DESC, id DESC);
+
+	CREATE TABLE mail_delivery_jobs (
+		id INTEGER PRIMARY KEY,
+		activity_id INTEGER REFERENCES activity_entries(id) ON DELETE SET NULL,
+		invitation_id INTEGER REFERENCES partner_invitations(id) ON DELETE CASCADE,
+		partnership_id INTEGER REFERENCES partnerships(id) ON DELETE CASCADE,
+		message_kind TEXT NOT NULL,
+		-- Exactly one recipient per job. A combined recipient list is never stored.
+		recipient_email TEXT NOT NULL,
+		subject TEXT NOT NULL,
+		body_text TEXT NOT NULL,
+		body_html TEXT NOT NULL,
+		reply_to TEXT NOT NULL,
+		idempotency_key TEXT NOT NULL UNIQUE,
+		state TEXT NOT NULL CHECK(state IN ('queued', 'sent', 'delivered', 'delayed', 'failed')),
+		attempts INTEGER NOT NULL CHECK(attempts >= 0),
+		next_attempt_at INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
+		sent_at INTEGER,
+		last_error TEXT
+	);
+	CREATE INDEX mail_delivery_jobs_due_idx ON mail_delivery_jobs(state, next_attempt_at);`,
 }

@@ -64,6 +64,21 @@ If you did not expect this invitation, do not accept it. Contact
 Replies to this email go directly to {{protectee_email}}.
 ```
 
+### Zero current Partners
+
+When `partner_count` is zero the Roster paragraphs above would assert two
+falsehoods — that identities will be shown and that current Partners have been
+told. Replace both paragraphs with the following, and keep the rest of the
+message identical. Every other `partner_count` renders the paragraphs above as
+written.
+
+```text
+{{protectee_email}} currently has 0 active Partners.
+
+If you accept, your verified email will remain visible to current and future
+Partners in the Roster and Activity.
+```
+
 ## Invitation landing page
 
 ```text

@@ -32,6 +32,8 @@ Skip full re-reads of [DECISIONS.md](./DECISIONS.md) / adversarial reviews unles
 ```text
 cmd/nightloch/          # binary entry (HTTP later)
 internal/policy/        # tighten/loosen predicate (Slice 0) — pure, well-tested
+internal/partnership/   # Slice 3 relationship perimeter: invitations, Activity,
+                        # authorization, durable per-recipient mail jobs
 infra/opentofu/         # DO droplet + CF DNS (Slice 1)
 deploy/                 # systemd/Caddy/WG helper examples
 docs/                   # security design, secrets, ops runbooks
@@ -49,7 +51,7 @@ CONTEXT.md              # glossary
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human `tofu apply` |
 | 2 Magic-link sign-in | **Code in repo**; live demo pending origin |
 | 9 Continuous deploy | **Code in repo**; live demo pending origin |
-| 3 Partner graph + Activity | Experience grill done; implementation not started |
+| 3 Partner graph + Activity | **3A in progress** — `internal/partnership/` owns invitations, Activity, and durable mail jobs |
 | 4+ WG, AGH, Devices, Policy, … | Not started — follow plan |
 
 ## Commands
