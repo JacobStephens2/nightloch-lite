@@ -49,7 +49,7 @@ func invitationStateInDB(t *testing.T, env *testEnv, id int64) string {
 }
 
 func receivedPath(id int64) string {
-	return "https://lite.nightloch.app/partners/invitations/received/" + strconv.FormatInt(id, 10)
+	return "https://lite.nightloch.app/partners/received-invitations/" + strconv.FormatInt(id, 10)
 }
 
 func mustContain(t *testing.T, body string, wanted ...string) {
@@ -75,7 +75,7 @@ func TestInviteeFindsAndDeclinesAnInvitationWithoutTheBearerLink(t *testing.T) {
 		"Partner invitations",
 		"These Partner invitations were sent to invitee@example.com.",
 		"protectee@example.com</strong> invited you to be their Partner.",
-		"/partners/invitations/received/"+strconv.FormatInt(invitationID, 10),
+		"/partners/received-invitations/"+strconv.FormatInt(invitationID, 10),
 	)
 
 	// It carries the same disclosures and the same two controls as the link.
@@ -92,11 +92,29 @@ func TestInviteeFindsAndDeclinesAnInvitationWithoutTheBearerLink(t *testing.T) {
 		receivedPath(invitationID)[len("https://lite.nightloch.app"):]+"/decline",
 	)
 
+	// Declining takes one consequence-specific confirmation first (S3-46).
+	confirm := get(t, env, receivedPath(invitationID)+"/decline", inviteeSession, inviteeCSRF)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("GET decline confirmation = %d", confirm.Code)
+	}
+	mustContain(t, confirm.Body.String(),
+		"Decline this Partner invitation?",
+		"creates no Partnership and grants no Partner powers",
+		"Nightloch will tell protectee@example.com that you declined.",
+		"This cannot be undone.",
+		"Keep reading the invitation",
+	)
+	if invitationStateInDB(t, env, invitationID) != "pending" {
+		t.Fatal("the confirmation screen resolved the invitation")
+	}
+
 	decline := post(t, env, receivedPath(invitationID)+"/decline",
 		url.Values{"csrf_token": []string{inviteeCSRF.Value}}, inviteeSession, inviteeCSRF)
-	if decline.Code != http.StatusSeeOther || decline.Header().Get("Location") != "/" {
-		t.Fatalf("POST decline = %d -> %q", decline.Code, decline.Header().Get("Location"))
+	if decline.Code != http.StatusOK {
+		t.Fatalf("POST decline = %d", decline.Code)
 	}
+	mustContain(t, decline.Body.String(), "You declined this invitation",
+		"No Partnership was created and no Partner powers were granted.")
 	if state := invitationStateInDB(t, env, invitationID); state != "declined" {
 		t.Fatalf("invitation state = %q", state)
 	}
@@ -148,17 +166,34 @@ func TestProtecteeCancelsAnInvitationAndTheLinkReportsIt(t *testing.T) {
 		"Invitations you sent",
 		"The invited address and the proposed Log sharing cannot be edited.",
 		"cancel this invitation and send a new one",
-		"/partners/invitations/sent/"+strconv.FormatInt(invitationID, 10)+"/cancel",
+		"/partners/sent-invitations/"+strconv.FormatInt(invitationID, 10)+"/cancel",
 	)
 	if strings.Contains(dashboard.Body.String(), "Decline invitation") {
 		t.Fatalf("the Protectee was offered the invitee's control:\n%s", dashboard.Body.String())
 	}
 
-	cancel := post(t, env, "https://lite.nightloch.app/partners/invitations/sent/"+strconv.FormatInt(invitationID, 10)+"/cancel",
+	confirm := get(t, env, "https://lite.nightloch.app/partners/sent-invitations/"+strconv.FormatInt(invitationID, 10)+"/cancel",
+		protecteeSession, protecteeCSRF)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("GET cancel confirmation = %d", confirm.Code)
+	}
+	mustContain(t, confirm.Body.String(),
+		"Cancel this Partner invitation?",
+		"typo@example.com has not answered yet.",
+		"the invited address and the proposed Log sharing cannot be edited",
+		"Keep the invitation",
+	)
+	if invitationStateInDB(t, env, invitationID) != "pending" {
+		t.Fatal("the confirmation screen canceled the invitation")
+	}
+
+	cancel := post(t, env, "https://lite.nightloch.app/partners/sent-invitations/"+strconv.FormatInt(invitationID, 10)+"/cancel",
 		url.Values{"csrf_token": []string{protecteeCSRF.Value}}, protecteeSession, protecteeCSRF)
-	if cancel.Code != http.StatusSeeOther {
+	if cancel.Code != http.StatusOK {
 		t.Fatalf("POST cancel = %d", cancel.Code)
 	}
+	mustContain(t, cancel.Body.String(), "You canceled this invitation",
+		"To invite a different address, or to offer different Log sharing, send a new invitation.")
 	if state := invitationStateInDB(t, env, invitationID); state != "canceled" {
 		t.Fatalf("invitation state = %q", state)
 	}
@@ -247,14 +282,15 @@ func TestUnknownAndMalformedReferencesRevealOnlyUnavailability(t *testing.T) {
 	env := newTestEnv(t)
 	session, csrf := signIn(t, env, "invitee@example.com")
 
-	const base = "https://lite.nightloch.app/partners/invitations/"
+	const bearer = "https://lite.nightloch.app/partners/invitations/"
+	const received = "https://lite.nightloch.app/partners/received-invitations/"
 	for _, target := range []string{
-		base + "not-base64-!!",
-		base + strings.Repeat("A", 43),
-		base + "short",
-		base + "received/4242",
-		base + "received/abc",
-		base + "received/0",
+		bearer + "not-base64-!!",
+		bearer + strings.Repeat("A", 43),
+		bearer + "short",
+		received + "4242",
+		received + "abc",
+		received + "0",
 	} {
 		recorder := get(t, env, target, session, csrf)
 		if recorder.Code != http.StatusNotFound {
@@ -297,7 +333,7 @@ func TestWrongSessionMaySeeAnInvitationButNeverAnswerIt(t *testing.T) {
 		}
 	}
 	// Cancellation belongs to the Protectee alone, and a refusal is silent.
-	cancel := post(t, env, "https://lite.nightloch.app/partners/invitations/sent/"+strconv.FormatInt(invitationID, 10)+"/cancel",
+	cancel := post(t, env, "https://lite.nightloch.app/partners/sent-invitations/"+strconv.FormatInt(invitationID, 10)+"/cancel",
 		form, strangerSession, strangerCSRF)
 	if cancel.Code != http.StatusSeeOther {
 		t.Fatalf("POST cancel as a stranger = %d", cancel.Code)
@@ -332,7 +368,7 @@ func TestOnlyTheFirstAnswerCommitsAndTheRestSeeTheResult(t *testing.T) {
 		}
 		mustContain(t, replay.Body.String(), "This invitation was already accepted")
 	}
-	lateCancel := post(t, env, "https://lite.nightloch.app/partners/invitations/sent/"+strconv.FormatInt(invitationID, 10)+"/cancel",
+	lateCancel := post(t, env, "https://lite.nightloch.app/partners/sent-invitations/"+strconv.FormatInt(invitationID, 10)+"/cancel",
 		url.Values{"csrf_token": []string{protecteeCSRF.Value}}, protecteeSession, protecteeCSRF)
 	if lateCancel.Code != http.StatusSeeOther {
 		t.Fatalf("late cancel = %d", lateCancel.Code)
@@ -359,23 +395,42 @@ func TestNoInvitationMutationIsReachableByGETOrWithoutCSRF(t *testing.T) {
 	protecteeSession, protecteeCSRF := signIn(t, env, "protectee@example.com")
 	reviewURL, invitationID := sendInvitation(t, env, protecteeSession, protecteeCSRF, "invitee@example.com", false)
 	inviteeSession, inviteeCSRF := signIn(t, env, "invitee@example.com")
+	cancelURL := "https://lite.nightloch.app/partners/sent-invitations/" + strconv.FormatInt(invitationID, 10) + "/cancel"
 
-	mutations := []string{
-		reviewURL + "/accept",
-		reviewURL + "/decline",
-		receivedPath(invitationID) + "/accept",
-		receivedPath(invitationID) + "/decline",
-		"https://lite.nightloch.app/partners/invitations/sent/" + strconv.FormatInt(invitationID, 10) + "/cancel",
-	}
-	for _, target := range mutations {
+	// Accept has no GET at all; decline and cancel answer a GET with their
+	// confirmation screen, which is a pure read like every other GET (S3-28).
+	for _, target := range []string{reviewURL + "/accept", receivedPath(invitationID) + "/accept"} {
 		if recorder := get(t, env, target, inviteeSession, inviteeCSRF); recorder.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("GET %s = %d, want 405", target, recorder.Code)
 		}
-		// A POST without the matching CSRF token is refused before any handler.
+	}
+	for _, confirmation := range []struct {
+		target  string
+		session *http.Cookie
+		csrf    *http.Cookie
+	}{
+		{reviewURL + "/decline", inviteeSession, inviteeCSRF},
+		{receivedPath(invitationID) + "/decline", inviteeSession, inviteeCSRF},
+		{cancelURL, protecteeSession, protecteeCSRF},
+	} {
+		recorder := get(t, env, confirmation.target, confirmation.session, confirmation.csrf)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", confirmation.target, recorder.Code)
+		}
+		mustContain(t, recorder.Body.String(), `method="post"`)
+	}
+
+	// Every mutation still refuses a POST without the matching CSRF token.
+	for _, target := range []string{
+		reviewURL + "/accept", reviewURL + "/decline",
+		receivedPath(invitationID) + "/accept", receivedPath(invitationID) + "/decline",
+		cancelURL,
+	} {
 		if recorder := post(t, env, target, url.Values{}, inviteeSession, inviteeCSRF); recorder.Code != http.StatusForbidden {
 			t.Fatalf("POST %s without CSRF = %d, want 403", target, recorder.Code)
 		}
 	}
+
 	// Reading the bearer link itself is still a pure read.
 	if recorder := get(t, env, reviewURL); recorder.Code != http.StatusOK {
 		t.Fatalf("GET review = %d", recorder.Code)

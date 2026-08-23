@@ -66,8 +66,9 @@ type resolvedInvitation struct {
 	resolvedAt     time.Time
 }
 
-// invitationColumns is the one projection every lifecycle decision reads.
-const invitationColumns = `
+// invitationQuery is the projection every lifecycle decision reads, up to and
+// including the WHERE keyword; each caller appends its own predicate.
+const invitationQuery = `
 	SELECT invitation.id, invitation.protectee_id, protectee.email,
 	       invitation.invitee_email, invitation.log_sharing, invitation.state,
 	       invitation.token_hash, invitation.expires_at,
@@ -91,10 +92,10 @@ func resolveInvitation(ctx context.Context, queryer rowQueryer, ref InvitationRe
 			return resolvedInvitation{}, err
 		}
 		return scanInvitation(queryer.QueryRowContext(ctx,
-			invitationColumns+"invitation.token_hash = ?", tokenHash[:]), now)
+			invitationQuery+"invitation.token_hash = ?", tokenHash[:]), now)
 	case ref.id > 0 && viewerEmail != "":
 		return scanInvitation(queryer.QueryRowContext(ctx,
-			invitationColumns+"invitation.id = ? AND invitation.invitee_email = ?",
+			invitationQuery+"invitation.id = ? AND invitation.invitee_email = ?",
 			ref.id, viewerEmail), now)
 	default:
 		return resolvedInvitation{}, ErrInvitationUnavailable
@@ -109,7 +110,7 @@ func resolveInvitationByID(ctx context.Context, queryer rowQueryer, invitationID
 	if invitationID <= 0 {
 		return resolvedInvitation{}, ErrInvitationUnavailable
 	}
-	return scanInvitation(queryer.QueryRowContext(ctx, invitationColumns+"invitation.id = ?", invitationID), now)
+	return scanInvitation(queryer.QueryRowContext(ctx, invitationQuery+"invitation.id = ?", invitationID), now)
 }
 
 // scanInvitation reads one row and derives its effective state. A pending
@@ -403,17 +404,16 @@ func (s *Service) expireInvitation(ctx context.Context, invitationID int64, now 
 		return false, err
 	}
 	if _, err := appendActivity(ctx, tx, activityEntry{
-		ProtecteeID: invitation.protecteeID,
-		Action:      ActionInvitationExpired,
-		// A NULL actor is Nightloch itself; the Protectee who sent the
-		// invitation stays visible as the target of the entry.
+		// A NULL actor is Nightloch itself. The Protectee who sent the
+		// invitation is the entry's own protectee_id, which is how Activity
+		// links a system completion back to its original requester (S3-30);
+		// the target is the address that was invited and never answered.
+		ProtecteeID:  invitation.protecteeID,
+		Action:       ActionInvitationExpired,
 		TargetEmail:  invitation.inviteeEmail,
 		InvitationID: &invitation.id,
 		OccurredAt:   invitation.expiresAt,
-		Details: map[string]any{
-			"protectee_email": invitation.protecteeEmail,
-			"log_sharing":     invitation.logSharing,
-		},
+		Details:      map[string]any{"log_sharing": invitation.logSharing},
 	}); err != nil {
 		return false, err
 	}
@@ -428,6 +428,10 @@ func (s *Service) expireInvitation(ctx context.Context, invitationID int64, now 
 // racing accept, decline, cancel, or expiry that arrives second changes
 // nothing and answers ErrInvitationUnavailable.
 func resolveState(ctx context.Context, tx *sql.Tx, invitation resolvedInvitation, state InvitationState, at time.Time, actorID *int64) error {
+	// The SQL guard below sees the stored state; this one sees the derived
+	// state, and they differ for exactly one row: still stored as pending, but
+	// already past its deadline. Nobody may accept, decline, or cancel that
+	// row — only the sweep that is about to record its expiry.
 	if invitation.state != InvitationPending && state != InvitationExpired {
 		return ErrInvitationUnavailable
 	}
