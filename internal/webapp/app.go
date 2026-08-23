@@ -101,6 +101,11 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("POST /partners/received-invitations/{id}/accept", app.acceptReceivedInvitation)
 	mux.HandleFunc("GET /partners/received-invitations/{id}/decline", app.confirmReceivedDecline)
 	mux.HandleFunc("POST /partners/received-invitations/{id}/decline", app.declineReceivedInvitation)
+	// A Partner ends their own Partnership immediately; the receipt they keep
+	// afterwards is the only thing that survives for them (S3-16).
+	mux.HandleFunc("GET /partners/partnerships/{id}/end", app.confirmEndPartnership)
+	mux.HandleFunc("POST /partners/partnerships/{id}/end", app.endPartnership)
+	mux.HandleFunc("GET /partners/ended-partnerships/{id}", app.partnershipReceipt)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
 	mux.HandleFunc("GET /health", app.health)
@@ -136,6 +141,9 @@ type dashboardData struct {
 	// email, so an invitee who lost the email can still answer it.
 	Received   []partnership.ReceivedInvitation
 	Protecting []partnership.ProtecteeEntry
+	// Ended is the read-only receipts this User keeps for Partnerships they
+	// no longer hold. They carry no Roster and no later Activity.
+	Ended []partnership.EndedPartnership
 }
 
 // invitePageData carries the Add a Partner form, including a rejected
@@ -172,9 +180,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	ended, err := a.partnerships.EndedPartnerships(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
 	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
 		CSRFToken: csrf, User: user, Version: a.version, View: view,
-		Received: received, Protecting: protecting,
+		Received: received, Protecting: protecting, Ended: ended,
 	})
 }
 

@@ -64,9 +64,16 @@ Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log 
 {{if .Protecting}}
 <h2>People you protect</h2>
 <ul class="rows">{{range .Protecting}}<li><strong>{{.ProtecteeEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On — you can view their DNS domain log.{{else}}Off — you cannot view their DNS domain log.{{end}}<br>
-Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.PartnerEmail}}{{end}}</li>{{end}}</ul>
+Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.PartnerEmail}}{{end}}<br>
+<a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Ending a Partnership and browsing Activity arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+{{if .Ended}}
+<h2>Partnerships you ended</h2>
+<p class="lede">You keep a read-only receipt for each Partnership you no longer hold. A receipt shows nothing about that Protectee&rsquo;s remaining Partners or anything that happened after it ended.</p>
+<ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeEmail}}</strong> — ended {{utc .EndedAt}}.<br>
+<a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
+{{end}}
+<div class="notice"><strong>Next milestone</strong><p>Browsing Activity arrives later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -178,6 +185,51 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That invitation is unavailable</h1>
 <p class="lede">Nightloch cannot show this Partner invitation. Ask the person who invited you to send a new one.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
+	"partnership-end-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>End Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>End this Partnership now?</h1>
+<p class="lede">Ending your Partnership with {{.Ending.ProtecteeEmail}} takes effect immediately and cannot be undone. You have protected them since {{utc .Ending.Since}}.</p>
+<p class="lede">You will no longer be able to change their Policy, approve Allowlist entries, revoke their Devices, or view their Roster and ongoing Activity{{if .Ending.LogSharing}}, and you will lose access to their DNS domain log{{end}}.</p>
+{{if .Ending.PartnerLockActive}}
+<p class="warn">{{.Ending.ProtecteeEmail}} will still have {{.Ending.RemainingPartners}} active Partner(s), so their Partner lock remains active.</p>
+{{else}}
+<p class="warn">{{.Ending.ProtecteeEmail}} will have 0 active Partners, so their Partner lock becomes inactive and they will be able to loosen their own Policy themselves.</p>
+{{end}}
+<p class="lede">Nightloch will tell {{.Ending.ProtecteeEmail}} and their remaining Partners. You will keep only a read-only receipt for this ended Partnership.</p>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="confirmation">Type END to confirm</label>
+<input id="confirmation" name="confirmation" type="text" autocomplete="off" required maxlength="16" value="">
+<div class="actions"><button type="submit">End Partnership now</button>
+<a class="quiet-link" href="{{.Back}}">Keep this Partnership</a></div></form>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"partnership-receipt": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ended Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Ended Partnership</h1>
+{{if .JustEnded}}
+<p class="lede">You ended your Partnership with {{.Receipt.ProtecteeEmail}} on {{utc .Receipt.EndedAt}}. Nightloch has told them and their remaining Partners.</p>
+{{else}}
+<p class="lede">Your Partnership with {{.Receipt.ProtecteeEmail}} ended on {{utc .Receipt.EndedAt}}.</p>
+{{end}}
+<p class="lede">You can no longer change their Policy, approve Allowlist entries, revoke their Devices, view their Roster or ongoing Activity, or exercise any other Partner power.</p>
+<ul class="rows"><li>Protectee: {{.Receipt.ProtecteeEmail}}<br>
+Partner since: {{utc .Receipt.Since}}<br>
+Ended: {{utc .Receipt.EndedAt}}<br>
+Log sharing while active: {{if .Receipt.LogSharing}}On{{else}}Off{{end}}<br>
+How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
+<p class="lede">You keep only this read-only receipt, and it covers only this ended Partnership. It shows nothing about {{.Receipt.ProtecteeEmail}}&rsquo;s remaining Partners or anything that happened afterwards. To protect them again, ask them to send a new Partner invitation.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"partnership-unavailable": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Partnership unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That Partnership is unavailable</h1>
+<p class="lede">Nightloch cannot show this Partnership. Only the Partner on a Partnership can end it or read its receipt.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
 	"invite": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Add a Partner · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
@@ -226,4 +278,4 @@ for (const element of document.querySelectorAll("time[data-utc]")) {
 }
 `
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
