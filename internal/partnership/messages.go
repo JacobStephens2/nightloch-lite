@@ -5,6 +5,8 @@ import (
 	"html"
 	"strings"
 	"time"
+
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
 
 // alertsAddress receives replies to Nightloch's own integrity messages.
@@ -18,14 +20,12 @@ func utcStamp(at time.Time) string {
 }
 
 // preparedMessage is one canonical message for exactly one recipient, already
-// rendered so a delivery job can reproduce it verbatim after a restart.
+// rendered so a queued delivery job can reproduce it verbatim after a restart.
 type preparedMessage struct {
-	Kind      string
-	Recipient string
-	Subject   string
-	Text      string
-	HTML      string
-	ReplyTo   string
+	// Kind is the stable message type, used for idempotency and for showing
+	// authorized viewers which signal a delivery job carries.
+	Kind string
+	mailmessage.Envelope
 }
 
 type invitationMessage struct {
@@ -86,12 +86,14 @@ Replies to this email go directly to %[1]s.`,
 	)
 
 	return preparedMessage{
-		Kind:      MessagePartnerInvitation,
-		Recipient: message.InviteeEmail,
-		Subject:   message.ProtecteeEmail + " invited you to be their Nightloch Partner",
-		Text:      text,
-		HTML:      textToHTML(text),
-		ReplyTo:   message.ProtecteeEmail,
+		Kind: MessagePartnerInvitation,
+		Envelope: mailmessage.Envelope{
+			To:      message.InviteeEmail,
+			Subject: message.ProtecteeEmail + " invited you to be their Nightloch Partner",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: message.ProtecteeEmail,
+		},
 	}
 }
 

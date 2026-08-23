@@ -45,9 +45,10 @@ var templateSources = map[string]string{
 {{if .View.PendingInvitations}}
 <h2>Partner invitations</h2>
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
+<p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this invitation is accepted or expires.</p>
 <ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
-Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{deliveryLabel .DeliveryState}}.</li>{{end}}</ul>
+Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.DeliveryState.Label}}.</li>{{end}}</ul>
 {{end}}
 <div class="notice"><strong>Next milestone</strong><p>Reviewing and accepting an invitation, the full Roster, and Activity arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
@@ -76,22 +77,6 @@ var templateFuncs = template.FuncMap{
 		return template.HTML(fmt.Sprintf(`<time datetime="%s" data-utc>%s UTC</time>`,
 			utc.Format(time.RFC3339), utc.Format("2006-01-02 15:04")))
 	},
-	"deliveryLabel": deliveryLabel,
-}
-
-// deliveryLabel describes mail health in the product's words. Reachability is
-// a visible signal only; it never changes Partner powers or a deadline.
-func deliveryLabel(state string) string {
-	switch state {
-	case "sent", "delivered":
-		return "Sent"
-	case "delayed":
-		return "Delivery delayed"
-	case "failed":
-		return "Invitation not delivered"
-	default:
-		return "Queued"
-	}
 }
 
 func parseTemplates() (map[string]*template.Template, error) {

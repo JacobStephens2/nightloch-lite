@@ -289,12 +289,12 @@ func TestDispatchDueRetriesTransientFailureWithoutLosingTheJob(t *testing.T) {
 	if _, err := service.DispatchDue(ctx, failing, 10); err == nil {
 		t.Fatal("DispatchDue hid a delivery failure")
 	}
-	var state string
+	var state DeliveryState
 	var attempts int
 	if err := db.QueryRow("SELECT state, attempts FROM mail_delivery_jobs").Scan(&state, &attempts); err != nil {
 		t.Fatal(err)
 	}
-	if state != "queued" || attempts != 1 {
+	if state != DeliveryDelayed || attempts != 1 {
 		t.Fatalf("after failure state=%q attempts=%d", state, attempts)
 	}
 
@@ -303,5 +303,125 @@ func TestDispatchDueRetriesTransientFailureWithoutLosingTheJob(t *testing.T) {
 	sender := &mailmessage.RecordingSender{}
 	if sent, err := later.DispatchDue(ctx, sender, 10); err != nil || sent != 1 {
 		t.Fatalf("retry DispatchDue = %d, %v", sent, err)
+	}
+}
+
+func TestLapsedInvitationStopsBlockingTheNextInvitation(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	ctx := context.Background()
+
+	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A Protectee whose invitation lapsed must not be locked out of Add a
+	// Partner while waiting for the sweep that marks it expired.
+	lapsed := NewService(db, service.baseURL)
+	lapsed.now = func() time.Time { return testClock.Add(invitationTTL + time.Hour) }
+
+	view, err := lapsed.ProtecteeView(ctx, protectee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.PendingInvitations) != 0 {
+		t.Fatalf("lapsed invitation still listed as pending: %+v", view.PendingInvitations)
+	}
+	if _, err := lapsed.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "someone-else@example.com"}); err != nil {
+		t.Fatalf("lapsed invitation still blocked a new invitation: %v", err)
+	}
+	// The same address may also be invited again once the first one lapsed.
+	if _, err := lapsed.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); !errors.Is(err, ErrOnePartnerLimit) {
+		t.Fatalf("second live invitation error = %v, want the 3A gate", err)
+	}
+}
+
+func TestRetryingDeliveryReportsDelayedAndClearsOnSuccess(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	ctx := context.Background()
+	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &mailmessage.RecordingSender{SendError: errors.New("provider unavailable")}
+	if _, err := service.DispatchDue(ctx, failing, 10); err == nil {
+		t.Fatal("DispatchDue hid a delivery failure")
+	}
+	view, err := service.ProtecteeView(ctx, protectee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.PendingInvitations[0].DeliveryState; got != DeliveryDelayed {
+		t.Fatalf("delivery state after a retryable failure = %q, want %q", got, DeliveryDelayed)
+	}
+	if got := view.PendingInvitations[0].DeliveryState.Label(); got != "Delivery delayed" {
+		t.Fatalf("delivery label = %q", got)
+	}
+
+	later := NewService(db, service.baseURL)
+	later.now = func() time.Time { return testClock.Add(time.Hour) }
+	if sent, err := later.DispatchDue(ctx, &mailmessage.RecordingSender{}, 10); err != nil || sent != 1 {
+		t.Fatalf("retry DispatchDue = %d, %v", sent, err)
+	}
+	recovered, err := later.ProtecteeView(ctx, protectee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recovered.PendingInvitations[0].DeliveryState; got != DeliverySent {
+		t.Fatalf("delivery state after recovery = %q, want %q", got, DeliverySent)
+	}
+}
+
+func TestExhaustedDeliveryReportsInvitationNotDelivered(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	ctx := context.Background()
+	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &mailmessage.RecordingSender{SendError: errors.New("mailbox does not exist")}
+	for attempt := 1; attempt <= maxDeliveryAttempts; attempt++ {
+		service.now = func() time.Time { return testClock.Add(time.Duration(attempt) * 24 * time.Hour) }
+		if _, err := service.DispatchDue(ctx, failing, 10); err == nil {
+			t.Fatalf("attempt %d reported success", attempt)
+		}
+	}
+	var state DeliveryState
+	if err := db.QueryRow("SELECT state FROM mail_delivery_jobs").Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != DeliveryFailed || state.Label() != "Invitation not delivered" {
+		t.Fatalf("exhausted job state = %q label = %q", state, state.Label())
+	}
+}
+
+func TestSentDeliveryJobNoLongerHoldsTheRawBearerToken(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	ctx := context.Background()
+	invitation, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DispatchDue(ctx, &mailmessage.RecordingSender{}, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	var bodyText, bodyHTML, subject, recipient string
+	if err := db.QueryRow("SELECT body_text, body_html, subject, recipient_email FROM mail_delivery_jobs").
+		Scan(&bodyText, &bodyHTML, &subject, &recipient); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bodyText, invitation.RawToken) || strings.Contains(bodyHTML, invitation.RawToken) {
+		t.Fatal("a sent delivery job still stores the raw invitation token")
+	}
+	if subject == "" || recipient != "invitee@example.com" {
+		t.Fatalf("redaction removed the audit trail: subject=%q recipient=%q", subject, recipient)
 	}
 }
