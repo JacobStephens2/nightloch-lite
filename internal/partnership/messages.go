@@ -361,3 +361,59 @@ No Partnership was created and no Partner powers were granted.`,
 		},
 	}
 }
+
+// endingMessage carries the two parties, the exact ending instant, and the
+// Protectee's resulting Partner count for the approved ending alert.
+type endingMessage struct {
+	ProtecteeEmail string
+	PartnerEmail   string
+	EndedAt        time.Time
+	// PartnerCount is the Protectee's active Partners after the ending.
+	PartnerCount int
+	DashboardURL string
+}
+
+// renderPartnershipEnded produces the approved Partnership-ended alert for one
+// recipient. Both parties and every remaining Partner read the same body, each
+// in their own envelope, so no recipient ever learns who else was told
+// (S3-20, S3-21). The zero-Partner consequence is always stated, because it
+// changes who may loosen the Policy.
+func renderPartnershipEnded(message endingMessage, recipient string) preparedMessage {
+	lock := "The Partner lock remains active."
+	if message.PartnerCount == 0 {
+		lock = fmt.Sprintf("The Partner lock is now inactive. %s can loosen their own Policy.",
+			message.ProtecteeEmail)
+	}
+	text := fmt.Sprintf(`%[1]s ended the Partnership immediately.
+
+The Partnership ended on %[3]s.
+
+%[1]s can no longer change %[2]s’s Policy, revoke
+their Devices, view their Roster or ongoing Activity, or exercise any other
+Partner power. They retain only a read-only receipt for this ended
+Partnership.
+
+%[2]s now has %[4]d active Partner(s).
+
+%[5]s
+
+Review the Roster and Activity:
+%[6]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[7]s.`,
+		message.PartnerEmail, message.ProtecteeEmail, utcStamp(message.EndedAt),
+		message.PartnerCount, lock, message.DashboardURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessagePartnershipEnded,
+		Envelope: mailmessage.Envelope{
+			To: recipient,
+			Subject: fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
+				message.PartnerEmail, message.ProtecteeEmail),
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
