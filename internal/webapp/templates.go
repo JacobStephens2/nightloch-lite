@@ -38,6 +38,7 @@ var templateSources = map[string]string{
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
 <h2>Your Partners</h2><ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}.</li>{{end}}</ul>
+<p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this Partnership ends.</p>
 {{else}}
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
 {{if not .View.PendingInvitations}}<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>{{end}}
@@ -50,8 +51,52 @@ var templateSources = map[string]string{
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.DeliveryState.Label}}.</li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Reviewing and accepting an invitation, the full Roster, and Activity arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+{{if .Protecting}}
+<h2>People you protect</h2>
+<ul class="rows">{{range .Protecting}}<li><strong>{{.ProtecteeEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On — you can view their DNS domain log.{{else}}Off — you cannot view their DNS domain log.{{end}}<br>
+Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.PartnerEmail}}{{end}}</li>{{end}}</ul>
+{{end}}
+<div class="notice"><strong>Next milestone</strong><p>Declining and cancelling invitations, ending a Partnership, and browsing Activity arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-review": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review Partner invitation · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong>{{if .SignedIn}}<a href="/">Your protection</a>{{else}}<a href="/sign-in">Sign in</a>{{end}}</header>
+<main class="dashboard"><section><h1>Review Partner invitation</h1>
+<p class="lede">{{.Review.ProtecteeEmail}} invited {{if .Review.ViewerMatches}}{{.Review.InviteeEmail}}{{else}}{{.Review.MaskedInviteeEmail}}{{end}} to become their Nightloch Partner. Viewing this page does not accept the invitation.</p>
+<h2>What Nightloch does</h2>
+<p>Nightloch is partner-locked DNS protection. It can block domains on enrolled Devices. While someone has active Partners, only those Partners can loosen their Policy. Turning off a Device’s VPN removes protection.</p>
+<h2>What you can do as a Partner</h2>
+<ul class="rows"><li>View Coverage and enforcement health</li><li>Tighten or loosen {{.Review.ProtecteeEmail}}’s Policy</li><li>Approve Allowlist entries</li><li>Revoke their Devices</li><li>View their Roster and Activity</li><li>View their DNS domain log only when Log sharing is on</li></ul>
+<p class="warn"><strong>Every Partner can act independently. Only add someone you trust.</strong></p>
+<h2>Who can see you</h2>
+{{if .Review.OtherPartnerCount}}
+<p>{{.Review.OtherPartnerCount}} other Partner(s) currently protect {{.Review.ProtecteeEmail}}. They have been told this invitation was sent to your email. If you accept, you will see their verified emails and they will continue to see yours.</p>
+{{else}}
+<p>0 other Partners currently protect {{.Review.ProtecteeEmail}}. If you accept, your verified email will remain visible to current and future Partners in the Roster and Activity.</p>
+{{end}}
+<h2>Log sharing</h2>
+<p>{{if .Review.LogSharing}}On — you will receive domain-log access after acceptance.{{else}}Off — you will not receive domain-log access.{{end}} {{.Review.ProtecteeEmail}} can turn Log sharing off at any time; Nightloch will tell you when they do.</p>
+<h2>Ending the Partnership</h2>
+<p>You may end immediately. A request by {{.Review.ProtecteeEmail}} takes 72 hours, during which you keep your Partner powers.</p>
+<p class="lede">This invitation expires {{utc .Review.ExpiresAt}}.</p>
+{{if .Review.ViewerMatches}}
+<form method="post" action="/partners/invitations/{{.Token}}/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Accept Partnership</button></form>
+{{else if .SignedIn}}
+<p class="error" role="alert">You are signed in as {{.Review.ViewerEmail}}, but this invitation was sent to {{.Review.MaskedInviteeEmail}}. Sign out and continue with the invited address.</p>
+<form method="post" action="/sign-out"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">Sign out</button></form>
+{{else}}
+<p class="lede">Sign in as {{.Review.MaskedInviteeEmail}} to respond.</p>
+<p><a class="button-link" href="/sign-in">Sign in to respond</a></p>
+{{end}}
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-unavailable": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invitation unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That invitation is unavailable</h1>
+<p class="lede">Nightloch cannot show this Partner invitation. Ask the person who invited you to send a new one.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
 	"invite": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Add a Partner · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
