@@ -90,6 +90,8 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /partners/invite", app.invitePartnerForm)
 	mux.HandleFunc("POST /partners/invite", app.invitePartnerSubmit)
+	mux.HandleFunc("GET /partners/invitations/{token}", app.reviewInvitation)
+	mux.HandleFunc("POST /partners/invitations/{token}/accept", app.acceptInvitation)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
@@ -111,12 +113,15 @@ type pageData struct {
 	Version       string
 }
 
-// dashboardData is the signed-in User's own protection state.
+// dashboardData is the signed-in User's own protection state alongside the
+// Protectees they protect. The two areas stay separate so a Reciprocal
+// Partnership reads correctly in both (S3-45).
 type dashboardData struct {
-	CSRFToken string
-	User      githubauth.User
-	Version   string
-	View      partnership.ProtecteeView
+	CSRFToken  string
+	User       githubauth.User
+	Version    string
+	View       partnership.ProtecteeView
+	Protecting []partnership.ProtecteeEntry
 }
 
 // invitePageData carries the Add a Partner form, including a rejected
@@ -143,8 +148,13 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	protecting, err := a.partnerships.ProtectingView(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
 	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
-		CSRFToken: csrf, User: user, Version: a.version, View: view,
+		CSRFToken: csrf, User: user, Version: a.version, View: view, Protecting: protecting,
 	})
 }
 
@@ -260,7 +270,13 @@ func (a *App) consumeMagicLink(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// An invitee who signed in to respond returns to that review screen
+	// rather than to a dashboard that says nothing about the invitation.
+	destination := "/"
+	if returnPath := a.invitationReturnPath(w, r); returnPath != "" {
+		destination = returnPath
+	}
+	http.Redirect(w, r, destination, http.StatusSeeOther)
 }
 
 func (a *App) signOut(w http.ResponseWriter, r *http.Request) {

@@ -264,29 +264,11 @@ type PendingInvitation struct {
 // the User's own protection.
 func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (ProtecteeView, error) {
 	var view ProtecteeView
-	partners, err := s.db.QueryContext(ctx, `
-		SELECT users.email, partnerships.accepted_at, partnerships.log_sharing
-		FROM partnerships JOIN users ON users.id = partnerships.partner_id
-		WHERE partnerships.protectee_id = ? AND partnerships.ended_at IS NULL
-		ORDER BY partnerships.accepted_at`, protecteeID)
+	partners, err := s.roster(ctx, protecteeID)
 	if err != nil {
-		return ProtecteeView{}, fmt.Errorf("read Roster: %w", err)
+		return ProtecteeView{}, err
 	}
-	defer partners.Close()
-	for partners.Next() {
-		var entry RosterEntry
-		var since int64
-		var logSharing int
-		if err := partners.Scan(&entry.PartnerEmail, &since, &logSharing); err != nil {
-			return ProtecteeView{}, fmt.Errorf("read Roster row: %w", err)
-		}
-		entry.Since = time.Unix(since, 0).UTC()
-		entry.LogSharing = intToBool(logSharing)
-		view.Partners = append(view.Partners, entry)
-	}
-	if err := partners.Err(); err != nil {
-		return ProtecteeView{}, fmt.Errorf("read Roster: %w", err)
-	}
+	view.Partners = partners
 	view.PartnerLockActive = len(view.Partners) > 0
 
 	invitations, err := s.db.QueryContext(ctx, `
