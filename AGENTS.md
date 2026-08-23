@@ -47,7 +47,10 @@ CONTEXT.md              # glossary
 | −1 Security/policy design | Done (docs) |
 | 0 Policy package + skeleton | Done (`go test ./...`) |
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human `tofu apply` |
-| 2+ Auth, Partnerships, WG, AGH, … | Not started — follow plan |
+| 2 Magic-link sign-in | **Code in repo**; live demo pending origin |
+| 9 Continuous deploy | **Code in repo**; live demo pending origin |
+| 3 Partner graph + Activity | Experience grill done; implementation not started |
+| 4+ WG, AGH, Devices, Policy, … | Not started — follow plan |
 
 ## Commands
 
@@ -71,3 +74,17 @@ go build -o bin/nightloch ./cmd/nightloch
 ## When changing the domain
 
 Update [CONTEXT.md](./CONTEXT.md) when terms are resolved. ADRs only for hard-to-reverse, surprising, trade-off decisions (`docs/adr/` when needed). Prefer linking freeze docs over forking new “source of truth” files.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in this repository’s GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and repository-wide ADRs under `docs/adr/`. See `docs/agents/domain.md`.

@@ -307,28 +307,38 @@ Version string change → push → production footer/`/health` shows new version
 
 **Goal:** CE-style partners with perimeter security, not metadata-only edges.
 
-### Grill first (full)
+**Experience and canonical copy:** [docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md](../docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md)
 
-Perimeter mechanics are decided; the *experience* of the perimeter is not. Seed questions:
+### Vertical implementation increments
 
-- **Negative space:** what does the partners screen say at zero partners — and does it nag, or state the weaker guarantee plainly? Is there a maximum? What happens at one?
-- **Mutual edges:** A and B partner each other. Does that change either one's powers? Note this makes the asymmetry cosmetic by mutual consent (R8) — is that acceptable, and is it said out loud in the UI?
-- **Who-gets-told:** for each of invite sent / accepted / cooling-off started / cancelled / ended — exact recipient list and exact wording. Does the *new* partner learn who else already protects the subject?
-- **Cooling-off UX:** where is the countdown shown, to whom? Can the partner waive it and end immediately? What if the partner's email bounces mid-cooling-off — does the clock still run?
-- **Composition:** subject has two partners and requests removal of one. Does the other get told? Can a partner see another partner's actions in the audit stream, or only the roster?
-- **Adversary-as-user:** "I want out tonight." Walk every authorized action in order and confirm each produces the intended friction and signal.
-- **Copy:** the invite email body, and what B lands on when they click — B may have no idea what Nightloch is.
+All three increments belong to Slice 3. Each is demoable and may deploy to staging independently, but Slice 3 is not complete until 3C passes.
+
+| Increment | End-to-end demo | Main scope | Promotion gate |
+|---|---|---|---|
+| **3A — First Partnership** | A invites B → B authenticates and accepts → Partner lock activates → B ends immediately or A completes/cancels Cooling-off | Final many-to-many schema; matching-email acceptance; zero/one states; `CanLoosen`; direct-party mail; durable delivery jobs; basic Activity; canonical copy | Temporarily permit only one active-or-pending Partner protecting each Protectee |
+| **3B — Full Roster** | A with Partner B invites C → B receives alerts → C accepts → both appear in Roster → concurrent Cooling-off works | Multiple Partners; full recipient matrix; pending invitations; Reciprocal Partnerships; invite limits; mixed-role dashboard; delivery/bounce warnings | Lift the one-Partner gate only after the multi-Partner alert demo passes |
+| **3C — Audit and abuse hardening** | Visibility-window and cross-User isolation tests pass; ended receipt works; long Activity remains usable | Activity pagination/filters/details; deletion pseudonymization; reachability recovery; adversarial and isolation tests | Required for Slice 3 completion and before the next product slice |
+
+Do not add a temporary one-Partner schema in 3A. The gate is application behavior removed in 3B, not a later data migration.
+
+### Experience grill (complete 2026-08-23)
+
+Shared understanding is confirmed. Decisions S3-01–S3-86 cover zero/one/many and Reciprocal Partnerships, invitation and Roster disclosure, Activity visibility windows, Cooling-off and account-deletion composition, delivery failure, adversarial exits, and canonical UI/mail copy. Implement from [Slice 3 Partnership experience](../docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md); do not reopen the grill unless implementation reveals a genuinely new product decision.
 
 ### Deliverables
 
 - Tables: `partner_edges` (**`edge_type`**: `peer` \| `guardian`, only `peer` used), `partner_invites` (hashed token, log_sharing, expires 7d)
 - **`events` audit table from day one** ([F28](#)): `id, occurred_at, actor_user_id, subject_user_id, action, target, before_json, after_json`
+- Durable per-recipient delivery jobs committed with Partnership events; async retry and visible delivery state
+- Minimal Resend delivery/bounce webhooks for Partnership mail; surface **cannot reach Partner** without pausing lifecycle state ([F29](#))
 - Flows:
   - Invite (+ log-sharing checkbox); accept; list partners / protecting
+  - Mixed-role dashboard: **Your protection** / **People you protect**; pending invitations separate from the active Roster
   - **Notify all existing partners** on invite sent / accepted ([F5](#))
   - **Roster visible to partners** (who else protects subject; since when) — no edit
   - Partner-initiated end: **immediate**
-  - User-initiated end: **cooling-off (72h)**; email partner; powers retained; user can cancel; enforce policy throughout ([F6](#))
+  - User-initiated end: concurrent per-Partnership **cooling-off (72h)**; email Roster; powers retained; user can cancel; enforce policy throughout ([F6](#))
+- Human-readable Activity UI: newest-first pagination; category/actor/date filters; audience-safe details only
 - AuthZ: `CanLoosen` / `CanViewLogs` — **zero partners ⇒ subject may loosen self** ([F7](#)); with partners ⇒ only partners loosen
 - Prompt after signup: “Add a partner” (unpartnered = weak product)
 - Onboarding notes: partner allowlist / From domain
@@ -516,7 +526,7 @@ Slice −1 restructured integrity from "quiet-peer alarm" to "actions + coverage
 - **Coverage report** email (daily or weekly): tunnel uptime per peer while enrolled ([F2](#), [F3](#))
 - Status UI: last reconcile, last handshake, coverage summary
 - **External dead-man**: conditional heartbeat ([F23](#))
-- Resend **bounce webhooks** → UI “cannot reach partner” ([F29](#))
+- Generalize Slice 3’s Resend delivery/bounce handling to Policy, Device, Coverage, and enforcement mail → UI “cannot reach Partner” ([F29](#))
 - No reliance on “1h quiet during curfew” as primary alarm (optional high-bar secondary only after empirical keepalive study)
 
 ### Demo / done
@@ -627,6 +637,9 @@ RTO number written in ops notes; restore proven once.
 - Guardian edge behavior (column only; no UX)  
 - Postgres / multi-region HA  
 - Partner must approve new partners (optional hard mode; roster+alert is v1 default)  
+- Suspicious-invitation veto, freeze, report, or Operator-escalation workflow  
+- Invitation blocks, including decline-and-block and block-management settings  
+- Dedicated rate limiting for repeated Cooling-off start/cancel churn  
 - One AGH instance per user  
 
 ---

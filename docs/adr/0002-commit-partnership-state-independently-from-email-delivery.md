@@ -1,0 +1,3 @@
+# Commit Partnership state independently from email delivery
+
+Email is the Partnership perimeter’s integrity signal, but making Resend availability part of mutation authorization would turn an external outage into a state-machine failure. Partnership mutations, Activity entries, and durable per-recipient delivery jobs therefore commit together in SQLite; delivery runs asynchronously with retries and visible sent, delivered, or failed state. Delivery failure never rolls back or pauses Cooling-off or termination, and Slice 3 consumes the delivery/bounce signals needed to warn that Nightloch cannot reach a Partner.

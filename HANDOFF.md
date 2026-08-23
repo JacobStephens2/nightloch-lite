@@ -1,11 +1,13 @@
 # Session handoff — Nightloch Lite
 
-**Date:** 2026-07-30  
+**Date:** 2026-08-23  
 **Repo:** https://github.com/JacobStephens2/nightloch-lite (private)  
 **Local path:** `/Users/jacob/GitHub/JacobStephens2/nightloch-lite`  
 **Related (do not confuse):** `/Users/jacob/GitHub/JacobStephens2/nightloch` is the **old** bloated product — greenfield is **nightloch-lite** only.
 
-> **2026-08-06 update:** Slice 2 magic-link auth is code-complete: SQLite forward migration, hashed single-use links/sessions, Resend, Turnstile, persistent email/IP quotas, `__Host-` cookies, CSRF, sign-out, and writable-DB `/health`. Slice 9 is also code-complete: consistent pre-migration snapshot, serialized artifact deploy, explicit migration, 30-second health gate, and binary rollback. Live demos wait on the Slice 1 origin and provider/GitHub environment configuration; see `docs/ops/SLICE-2-AUTH.md` and `docs/ops/SLICE-9-DEPLOY.md`. Slice 3 is next and begins with its required full experience grill.
+> **2026-08-23 update:** The Slice 3 experience grill is complete and shared understanding is confirmed. Decisions S3-01–S3-86, canonical UI/mail copy, vertical increments 3A–3C, the Activity privacy boundary, and the durable-mail boundary are recorded in `DECISIONS.md`, `docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md`, and ADRs 0001–0002. Invitation blocks and dedicated Cooling-off churn limiting are deferred; core 72-hour Cooling-off remains load-bearing. Next engineering work is to turn Slice 3 into a spec and blocker-linked tickets, then implement 3A → 3B → 3C.
+
+> **2026-08-06 update:** Slice 2 magic-link auth is code-complete: SQLite forward migration, hashed single-use links/sessions, Resend, Turnstile, persistent email/IP quotas, `__Host-` cookies, CSRF, sign-out, and writable-DB `/health`. Slice 9 is also code-complete: consistent pre-migration snapshot, serialized artifact deploy, explicit migration, 30-second health gate, and binary rollback. Live demos wait on the Slice 1 origin and provider/GitHub environment configuration; see `docs/ops/SLICE-2-AUTH.md` and `docs/ops/SLICE-9-DEPLOY.md`.
 
 This handoff is for a **fresh agent**. Do **not** re-derive product design from chat history. Read artifacts below.
 
@@ -44,6 +46,7 @@ Living pointer: **[status.md](./status.md)** (renamed from `current-decision.md`
 | **1** Live origin | **Code complete; not applied** | [infra/opentofu/](./infra/opentofu/), [scripts/slice1-up.sh](./scripts/slice1-up.sh), [docs/ops/SLICE-1-RUNBOOK.md](./docs/ops/SLICE-1-RUNBOOK.md). **No droplet until human `tofu apply`** |
 | **2** Magic-link sign-in | **Code complete; live demo pending origin** | `internal/auth/`, `internal/database/`, `internal/webapp/`, [docs/ops/SLICE-2-AUTH.md](./docs/ops/SLICE-2-AUTH.md) |
 | **9** Continuous deploy | **Code complete; live demo pending origin** | `.github/workflows/ci.yml`, [docs/ops/SLICE-9-DEPLOY.md](./docs/ops/SLICE-9-DEPLOY.md) |
+| **3** Partner graph + Activity | **Experience complete; implementation not started** | [docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md](./docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md), `DECISIONS.md` S3-01–S3-86, ADRs 0001–0002 |
 
 Plan source of truth: [plan/plan.md](./plan/plan.md) (post adversarial re-cut). Original adversarial review: [plan/adversarial-review.md](./plan/adversarial-review.md) (or root path if present).
 
@@ -71,7 +74,7 @@ Agent orientation: [AGENTS.md](./AGENTS.md).
 
 ### B. Next code: Slice 3 (Partner graph + audit)
 
-Auth and the health-gated deploy are ready. Slice 3 must begin with the full product-experience grill required by the plan before its schema or UI is implemented.
+Auth and the health-gated deploy are ready. The required product-experience grill is complete. Turn the agreed experience into a spec and blocker-linked GitHub tickets, then implement the three demoable increments in order: **3A First Partnership → 3B Full Roster → 3C Audit and abuse hardening**. Do not re-run the grill or re-derive the canonical copy.
 
 ---
 
