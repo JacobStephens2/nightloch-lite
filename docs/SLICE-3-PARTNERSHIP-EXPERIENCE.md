@@ -254,6 +254,120 @@ No Partnership was created. You may send a new invitation later.
 
 An expired invitation produces Activity only.
 
+## Invitation confirmations
+
+Declining and cancelling each take one consequence-specific confirmation
+(S3-46). Both confirmation screens are reads; only the confirmed POST mutates.
+
+### Decline (invitee)
+
+```text
+Decline this Partner invitation?
+
+Declining {{protectee_email}}’s invitation creates no Partnership and grants
+no Partner powers. Nightloch will tell {{protectee_email}} that you declined.
+
+This cannot be undone. {{protectee_email}} can send you a new invitation later.
+
+[Decline invitation]  Keep reading the invitation
+```
+
+### Cancel (Protectee)
+
+```text
+Cancel this Partner invitation?
+
+{{invitee_email}} has not answered yet. Cancelling creates no Partnership and
+grants no Partner powers. Nightloch will tell {{invitee_email}} that you
+canceled.
+
+This cannot be undone, and the emailed link stops working. Cancelling is also
+how you correct an invitation: the invited address and the proposed Log sharing
+cannot be edited, so send a new invitation afterwards.
+
+[Cancel invitation]  Keep the invitation
+```
+
+## Invitation receipts
+
+The in-app receipt each initiator gets for a mutation that leaves nothing on
+their dashboard (S3-20). Acceptance needs none: the dashboard names the new
+Partner and the active Partner lock.
+
+```text
+You declined this invitation
+
+You declined {{protectee_email}}’s Partner invitation on {{declined_at_utc}}.
+No Partnership was created and no Partner powers were granted.
+
+Nightloch has told {{protectee_email}}. They can send you a new invitation
+later.
+```
+
+```text
+You canceled this invitation
+
+You canceled the Partner invitation to {{invitee_email}} on {{canceled_at_utc}}.
+No Partnership was created and no Partner powers were granted.
+
+Nightloch has told {{invitee_email}}. To invite a different address, or to offer
+different Log sharing, send a new invitation.
+
+[Add a Partner]
+```
+
+## Terminal invitation landing
+
+What a **valid** bearer token or invitation reference shows once the invitation
+is no longer pending (S3-29). The invited address stays masked here exactly as
+it does on the review screen. A malformed or unknown token, and an id belonging
+to someone else, show only the unavailable screen instead.
+
+```text
+This invitation was already accepted
+
+{{You | The invited person}} accepted {{protectee_email}}’s Partner invitation
+on {{accepted_at_utc}}. The Partnership is active, so there is nothing left to
+answer here.
+```
+
+```text
+This invitation was declined
+
+The invitation from {{protectee_email}} was declined on {{declined_at_utc}}. No
+Partnership was created and no Partner powers were granted.
+
+{{protectee_email}} can send a new invitation later.
+```
+
+```text
+This invitation was canceled
+
+{{protectee_email}} canceled this Partner invitation on {{canceled_at_utc}}. No
+Partnership was created and no Partner powers were granted.
+
+Only {{protectee_email}} can send a replacement.
+```
+
+```text
+This invitation expired
+
+The Partner invitation from {{protectee_email}} expired on {{expires_at_utc}}.
+Invitations are valid for seven days and cannot be extended. No Partnership was
+created and no Partner powers were granted.
+
+Ask {{protectee_email}} to send a new invitation.
+```
+
+For an unknown or malformed reference:
+
+```text
+That invitation is unavailable
+
+Nightloch cannot show this Partner invitation. Ask the person who invited you
+to send a new one.
+```
+
 ## Cooling-off started
 
 ### Partner being removed

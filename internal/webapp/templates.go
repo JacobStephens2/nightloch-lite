@@ -51,8 +51,7 @@ var templateSources = map[string]string{
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
 <span class="muted">The invited address and the proposed Log sharing cannot be edited. To correct either, cancel this invitation and send a new one.</span>
-<form method="post" action="/partners/invitations/sent/{{.ID}}/cancel"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<button class="quiet" type="submit">Cancel invitation</button></form></li>{{end}}</ul>
+<a href="/partners/sent-invitations/{{.ID}}/cancel">Cancel invitation</a></li>{{end}}</ul>
 {{end}}
 {{if .Received}}
 <h2>Partner invitations</h2>
@@ -60,7 +59,7 @@ Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.De
 <ul class="rows">{{range .Received}}<li><strong>{{.ProtecteeEmail}}</strong> invited you to be their Partner.<br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log access.{{else}}Off — you will not receive domain-log access.{{end}}<br>
-<a href="/partners/invitations/received/{{.ID}}">Review this invitation</a></li>{{end}}</ul>
+<a href="/partners/received-invitations/{{.ID}}">Review this invitation</a></li>{{end}}</ul>
 {{end}}
 {{if .Protecting}}
 <h2>People you protect</h2>
@@ -95,8 +94,7 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <div class="actions">
 <form method="post" action="{{.ActionBase}}/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">Accept Partnership</button></form>
-<form method="post" action="{{.ActionBase}}/decline"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<button class="quiet" type="submit">Decline invitation</button></form>
+<a class="quiet-link" href="{{.ActionBase}}/decline">Decline invitation</a>
 </div>
 <p class="lede">Declining creates no Partnership and grants no Partner powers. {{.Review.ProtecteeEmail}} can send a new invitation later.</p>
 {{else if .SignedIn}}
@@ -106,6 +104,50 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <p class="lede">Sign in as {{.Review.MaskedInviteeEmail}} to respond.</p>
 <p><a class="button-link" href="/sign-in">Sign in to respond</a></p>
 {{end}}
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-decline-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Decline Partner invitation · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Decline this Partner invitation?</h1>
+<p class="lede">Declining {{.CounterpartyEmail}}&rsquo;s invitation creates no Partnership and grants no Partner powers. Nightloch will tell {{.CounterpartyEmail}} that you declined.</p>
+<p class="lede">This cannot be undone. {{.CounterpartyEmail}} can send you a new invitation later.</p>
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Decline invitation</button></form>
+<a class="quiet-link" href="{{.Back}}">Keep reading the invitation</a>
+</div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-cancel-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cancel Partner invitation · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Cancel this Partner invitation?</h1>
+<p class="lede">{{.CounterpartyEmail}} has not answered yet. Cancelling creates no Partnership and grants no Partner powers. Nightloch will tell {{.CounterpartyEmail}} that you canceled.</p>
+<p class="lede">This cannot be undone, and the emailed link stops working. Cancelling is also how you correct an invitation: the invited address and the proposed Log sharing cannot be edited, so send a new invitation afterwards.</p>
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Cancel invitation</button></form>
+<a class="quiet-link" href="{{.Back}}">Keep the invitation</a>
+</div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-declined-receipt": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invitation declined · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>You declined this invitation</h1>
+<p class="lede">You declined {{.CounterpartyEmail}}&rsquo;s Partner invitation on {{utc .At}}. No Partnership was created and no Partner powers were granted.</p>
+<p class="lede">Nightloch has told {{.CounterpartyEmail}}. They can send you a new invitation later.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-canceled-receipt": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invitation canceled · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>You canceled this invitation</h1>
+<p class="lede">You canceled the Partner invitation to {{.CounterpartyEmail}} on {{utc .At}}. No Partnership was created and no Partner powers were granted.</p>
+<p class="lede">Nightloch has told {{.CounterpartyEmail}}. To invite a different address, or to offer different Log sharing, send a new invitation.</p>
+<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-outcome": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -184,4 +226,4 @@ for (const element of document.querySelectorAll("time[data-utc]")) {
 }
 `
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`

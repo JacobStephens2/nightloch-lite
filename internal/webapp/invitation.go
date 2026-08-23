@@ -1,7 +1,6 @@
 package webapp
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -35,6 +34,25 @@ type invitationPageData struct {
 	SignedIn bool
 }
 
+// invitationConfirmData is one consequence-specific confirmation: the party it
+// affects, where the confirmed mutation posts, and where declining to go
+// through with it returns (S3-46).
+type invitationConfirmData struct {
+	CSRFToken         string
+	Action            string
+	Back              string
+	CounterpartyEmail string
+	Version           string
+}
+
+// invitationReceiptData is the in-app receipt an initiator gets for a mutation
+// that leaves nothing behind on their dashboard (S3-20).
+type invitationReceiptData struct {
+	CounterpartyEmail string
+	At                time.Time
+	Version           string
+}
+
 // invitationRoute is one viewer's path to one invitation: the module reference
 // that identifies it, and the URL prefix their controls post back to.
 type invitationRoute struct {
@@ -65,7 +83,7 @@ func receivedRoute(r *http.Request) (invitationRoute, bool) {
 	}
 	return invitationRoute{
 		ref:        partnership.ByID(id),
-		actionBase: "/partners/invitations/received/" + strconv.FormatInt(id, 10),
+		actionBase: "/partners/received-invitations/" + strconv.FormatInt(id, 10),
 	}, true
 }
 
@@ -142,60 +160,118 @@ func (a *App) renderUnavailable(w http.ResponseWriter, r *http.Request, status i
 }
 
 // acceptInvitation and declineInvitation are the invitee's two mutations from
-// the emailed link; the received variants are the same two from their list.
+// the emailed link; the received variants are the same two from their own
+// **Partner invitations** list.
 func (a *App) acceptInvitation(w http.ResponseWriter, r *http.Request) {
-	a.answerInvitation(w, r, bearerRoute(r), a.accept)
+	a.acceptVia(w, r, bearerRoute(r))
 }
 
 func (a *App) acceptReceivedInvitation(w http.ResponseWriter, r *http.Request) {
-	a.answerReceivedInvitation(w, r, a.accept)
+	if route, ok := a.receivedOr404(w, r); ok {
+		a.acceptVia(w, r, route)
+	}
 }
 
 func (a *App) declineInvitation(w http.ResponseWriter, r *http.Request) {
-	a.answerInvitation(w, r, bearerRoute(r), a.decline)
+	a.declineVia(w, r, bearerRoute(r))
 }
 
 func (a *App) declineReceivedInvitation(w http.ResponseWriter, r *http.Request) {
-	a.answerReceivedInvitation(w, r, a.decline)
+	if route, ok := a.receivedOr404(w, r); ok {
+		a.declineVia(w, r, route)
+	}
 }
 
-// invitationAnswer is the shape accept and decline share: one authenticated,
-// CSRF-protected mutation on one invitation reference. Only the module's
-// refusal matters here; the receipts are what the module returns to itself.
-type invitationAnswer func(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error
-
-func (a *App) accept(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error {
-	_, err := a.partnerships.AcceptInvitation(ctx, ref, viewerID)
-	return err
+// confirmDecline and confirmReceivedDecline render the invitee's one
+// consequence-specific confirmation before they decline (S3-46). Both are
+// GETs, so neither mutates anything (S3-28).
+func (a *App) confirmDecline(w http.ResponseWriter, r *http.Request) {
+	a.confirmDeclineVia(w, r, bearerRoute(r))
 }
 
-func (a *App) decline(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error {
-	_, err := a.partnerships.DeclineInvitation(ctx, ref, viewerID)
-	return err
+func (a *App) confirmReceivedDecline(w http.ResponseWriter, r *http.Request) {
+	if route, ok := a.receivedOr404(w, r); ok {
+		a.confirmDeclineVia(w, r, route)
+	}
 }
 
-func (a *App) answerReceivedInvitation(w http.ResponseWriter, r *http.Request, answer invitationAnswer) {
+func (a *App) receivedOr404(w http.ResponseWriter, r *http.Request) (invitationRoute, bool) {
 	route, ok := receivedRoute(r)
 	if !ok {
 		a.renderUnavailable(w, r, http.StatusNotFound)
-		return
 	}
-	a.answerInvitation(w, r, route, answer)
+	return route, ok
 }
 
-// answerInvitation performs one explicit, authenticated, CSRF-protected
-// mutation. A refusal re-renders the screen the viewer is authorized to see
-// rather than a bare error, and a losing race lands on the outcome that won.
-func (a *App) answerInvitation(w http.ResponseWriter, r *http.Request, route invitationRoute, answer invitationAnswer) {
+func (a *App) acceptVia(w http.ResponseWriter, r *http.Request, route invitationRoute) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
 	}
-	err := answer(r.Context(), route.ref, user.ID)
+	if _, err := a.partnerships.AcceptInvitation(r.Context(), route.ref, user.ID); err != nil {
+		a.refuseAnswer(w, r, route, err)
+		return
+	}
+	// The dashboard is the acceptance receipt: it now names the Partner and
+	// says the Partner lock is active.
+	a.clearInvitationReturn(w)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *App) declineVia(w http.ResponseWriter, r *http.Request, route invitationRoute) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	receipt, err := a.partnerships.DeclineInvitation(r.Context(), route.ref, user.ID)
+	if err != nil {
+		a.refuseAnswer(w, r, route, err)
+		return
+	}
+	// Nothing about a declined invitation survives on the dashboard, so the
+	// decliner gets their own in-app receipt (S3-20).
+	a.clearInvitationReturn(w)
+	a.render(w, r, http.StatusOK, "invitation-declined-receipt", invitationReceiptData{
+		CounterpartyEmail: receipt.ProtecteeEmail, At: receipt.DeclinedAt, Version: a.version,
+	})
+}
+
+func (a *App) confirmDeclineVia(w http.ResponseWriter, r *http.Request, route invitationRoute) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	review, err := a.partnerships.ReviewInvitation(r.Context(), route.ref, user.ID)
+	if errors.Is(err, partnership.ErrInvitationUnavailable) {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	if !review.MayDecline() {
+		// A settled invitation or a wrong session has nothing to confirm; the
+		// review screen already carries the right answer for both.
+		a.renderInvitation(w, r, http.StatusOK, route, false)
+		return
+	}
+	csrf, err := a.csrfToken(w, r)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	a.render(w, r, http.StatusOK, "invitation-decline-confirm", invitationConfirmData{
+		CSRFToken: csrf, Action: route.actionBase + "/decline", Back: route.actionBase,
+		CounterpartyEmail: review.ProtecteeEmail, Version: a.version,
+	})
+}
+
+// refuseAnswer renders the screen a refused mutation's actor is authorized to
+// see: the outcome that won the race, or the approved mismatch guidance for a
+// wrong session.
+func (a *App) refuseAnswer(w http.ResponseWriter, r *http.Request, route invitationRoute, err error) {
 	switch {
-	case err == nil:
-		a.clearInvitationReturn(w)
-		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, partnership.ErrInvitationUnavailable):
 		a.renderInvitation(w, r, http.StatusConflict, route, false)
 	case errors.Is(err, partnership.ErrInvitationNotYours):
@@ -203,6 +279,51 @@ func (a *App) answerInvitation(w http.ResponseWriter, r *http.Request, route inv
 	default:
 		a.internalError(w, r, err)
 	}
+}
+
+// confirmCancelInvitation renders the Protectee's one consequence-specific
+// confirmation before they withdraw an invitation (S3-46). The invitation is
+// read through their own authorized view, so this route discloses nothing a
+// non-Protectee could not already see on their dashboard.
+func (a *App) confirmCancelInvitation(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	id, valid := pathID(r)
+	if !valid {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	view, err := a.partnerships.ProtecteeView(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	pending, found := pendingInvitation(view, id)
+	if !found {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	csrf, err := a.csrfToken(w, r)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	action := "/partners/sent-invitations/" + strconv.FormatInt(id, 10) + "/cancel"
+	a.render(w, r, http.StatusOK, "invitation-cancel-confirm", invitationConfirmData{
+		CSRFToken: csrf, Action: action, Back: "/",
+		CounterpartyEmail: pending.InviteeEmail, Version: a.version,
+	})
+}
+
+func pendingInvitation(view partnership.ProtecteeView, id int64) (partnership.PendingInvitation, bool) {
+	for _, pending := range view.PendingInvitations {
+		if pending.ID == id {
+			return pending, true
+		}
+	}
+	return partnership.PendingInvitation{}, false
 }
 
 // cancelInvitation withdraws an invitation the signed-in Protectee sent. It is
@@ -218,9 +339,13 @@ func (a *App) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 		a.renderUnavailable(w, r, http.StatusNotFound)
 		return
 	}
-	_, err := a.partnerships.CancelInvitation(r.Context(), id, user.ID)
+	receipt, err := a.partnerships.CancelInvitation(r.Context(), id, user.ID)
 	switch {
-	case err == nil, errors.Is(err, partnership.ErrInvitationUnavailable):
+	case err == nil:
+		a.render(w, r, http.StatusOK, "invitation-canceled-receipt", invitationReceiptData{
+			CounterpartyEmail: receipt.InviteeEmail, At: receipt.CanceledAt, Version: a.version,
+		})
+	case errors.Is(err, partnership.ErrInvitationUnavailable):
 		// A cancellation that lost its race, or that was never this User's to
 		// make, mutates nothing and lands on the state they are authorized to
 		// see. Neither answer confirms the invitation exists.
