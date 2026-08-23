@@ -251,8 +251,11 @@ type RosterEntry struct {
 	LogSharing   bool
 }
 
-// PendingInvitation is one outstanding Partner invitation.
+// PendingInvitation is one outstanding Partner invitation as its Protectee
+// sees it. The Protectee never holds the bearer token, so ID is how they
+// reach the one control they have: cancellation.
 type PendingInvitation struct {
+	ID            int64
 	InviteeEmail  string
 	LogSharing    bool
 	SentAt        time.Time
@@ -272,7 +275,7 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 	view.PartnerLockActive = len(view.Partners) > 0
 
 	invitations, err := s.db.QueryContext(ctx, `
-		SELECT invitation.invitee_email, invitation.log_sharing,
+		SELECT invitation.id, invitation.invitee_email, invitation.log_sharing,
 		       invitation.last_sent_at, invitation.expires_at,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.invitation_id = invitation.id
@@ -290,7 +293,7 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 		var pending PendingInvitation
 		var logSharing int
 		var sentAt, expiresAt int64
-		if err := invitations.Scan(&pending.InviteeEmail, &logSharing, &sentAt, &expiresAt, &pending.DeliveryState); err != nil {
+		if err := invitations.Scan(&pending.ID, &pending.InviteeEmail, &logSharing, &sentAt, &expiresAt, &pending.DeliveryState); err != nil {
 			return ProtecteeView{}, fmt.Errorf("read pending Partner invitation: %w", err)
 		}
 		pending.LogSharing = intToBool(logSharing)

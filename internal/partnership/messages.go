@@ -311,3 +311,53 @@ func yesNo(value bool) string {
 	}
 	return "No"
 }
+
+// terminalMessage carries the two parties and the exact instant an invitation
+// ended without becoming a Partnership.
+type terminalMessage struct {
+	ProtecteeEmail string
+	InviteeEmail   string
+	ResolvedAt     time.Time
+}
+
+// renderInvitationDeclined produces the approved decline alert. It goes only
+// to the Protectee who sent the invitation (S3-20) and carries no review link,
+// because there is nothing left to review.
+func renderInvitationDeclined(message terminalMessage) preparedMessage {
+	text := fmt.Sprintf(`%[1]s declined your Partner invitation on %[2]s.
+
+No Partnership was created. You may send a new invitation later.`,
+		message.InviteeEmail, utcStamp(message.ResolvedAt))
+
+	return preparedMessage{
+		Kind: MessageInvitationDeclined,
+		Envelope: mailmessage.Envelope{
+			To:      message.ProtecteeEmail,
+			Subject: message.InviteeEmail + " declined your Nightloch Partner invitation",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// renderInvitationCanceled produces the approved cancellation alert for the
+// invitee. In 3B the current-Partner variant goes separately to each Partner.
+func renderInvitationCanceled(message terminalMessage) preparedMessage {
+	text := fmt.Sprintf(`%[1]s canceled the Partner invitation sent to you on
+%[2]s.
+
+No Partnership was created and no Partner powers were granted.`,
+		message.ProtecteeEmail, utcStamp(message.ResolvedAt))
+
+	return preparedMessage{
+		Kind: MessageInvitationCanceled,
+		Envelope: mailmessage.Envelope{
+			To:      message.InviteeEmail,
+			Subject: message.ProtecteeEmail + " canceled your Nightloch Partner invitation",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}

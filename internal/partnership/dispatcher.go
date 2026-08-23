@@ -13,10 +13,11 @@ const (
 	defaultDispatchBatch    = 20
 )
 
-// Dispatcher drains durable delivery jobs from the single-process control
-// plane. It owns no relationship rules; it only asks the Partnership module
-// for due work. Because the queue lives in SQLite, a restart resumes whatever
-// the previous process had not yet sent.
+// Dispatcher runs the Partnership module's due background work in the
+// single-process control plane: the invitation-expiry sweep and the durable
+// mail queue. It owns no relationship rules; it only asks the module what is
+// due. Both kinds of work live in SQLite, so a restart resumes whatever the
+// previous process had not finished.
 type Dispatcher struct {
 	Service  *Service
 	Sender   mailmessage.Sender
@@ -25,8 +26,9 @@ type Dispatcher struct {
 	Batch    int
 }
 
-// Run dispatches until ctx is cancelled. A delivery failure is logged and
-// retried later; it never stops the loop and never touches Partnership state.
+// Run works until ctx is cancelled. A failure in either sweep is logged and
+// retried on the next tick; it never stops the loop and never touches
+// Partnership state the module did not change itself.
 func (d *Dispatcher) Run(ctx context.Context) {
 	interval := d.Interval
 	if interval <= 0 {
@@ -43,6 +45,11 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		// Expiry runs first so an invitation that lapsed while the process was
+		// down stops being answerable before anything else is attempted.
+		if expired, err := d.Service.ExpireDueInvitations(ctx, batch); err != nil {
+			logger.Error("partner invitation expiry failed", "expired", expired, "error", err)
+		}
 		if sent, err := d.Service.DispatchDue(ctx, d.Sender, batch); err != nil {
 			logger.Error("partnership mail delivery failed", "sent", sent, "error", err)
 		}

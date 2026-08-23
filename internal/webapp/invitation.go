@@ -1,8 +1,10 @@
 package webapp
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
@@ -19,33 +21,88 @@ const invitationReturnCookie = "__Host-nightloch_invitation"
 // destination. It is comfortably longer than the 15-minute magic link.
 const invitationReturnTTL = time.Hour
 
-// invitationPageData is the review disclosure plus whatever the current
+// invitationPageData is the invitation disclosure plus whatever the current
 // viewer is authorized to act on.
 type invitationPageData struct {
 	CSRFToken string
-	Token     string
-	Version   string
-	Review    partnership.InvitationReview
+	// ActionBase is the URL prefix this viewer's own controls post back to.
+	// It is rebuilt server-side from however they reached the invitation, so
+	// the emailed bearer link and the signed-in list share one screen.
+	ActionBase string
+	Version    string
+	Review     partnership.InvitationReview
 	// SignedIn is true whenever any User holds a session, matching or not.
 	SignedIn bool
 }
 
-// reviewInvitation renders the approved pre-acceptance disclosure. It is a
-// GET over a bearer token and mutates nothing (S3-28).
-func (a *App) reviewInvitation(w http.ResponseWriter, r *http.Request) {
-	a.renderInvitationReview(w, r, http.StatusOK, true)
+// invitationRoute is one viewer's path to one invitation: the module reference
+// that identifies it, and the URL prefix their controls post back to.
+type invitationRoute struct {
+	ref        partnership.InvitationRef
+	actionBase string
+	// token is the emailed bearer token, empty on the signed-in path. Only a
+	// bearer link can arm a return destination for a visitor who has not
+	// authenticated yet.
+	token string
 }
 
-// renderInvitationReview shows the review screen at the given status. Only the
-// GET path arms the sign-in return; a refused POST must not plant a return
-// destination in the browser of a User who was never invited.
-func (a *App) renderInvitationReview(w http.ResponseWriter, r *http.Request, status int, armReturn bool) {
+// bearerRoute is the invitation as reached from the emailed link.
+func bearerRoute(r *http.Request) invitationRoute {
 	token := r.PathValue("token")
+	return invitationRoute{
+		ref:        partnership.ByToken(token),
+		actionBase: "/partners/invitations/" + token,
+		token:      token,
+	}
+}
+
+// receivedRoute is the invitation as reached from the signed-in invitee's own
+// **Partner invitations** list, with no bearer token involved.
+func receivedRoute(r *http.Request) (invitationRoute, bool) {
+	id, ok := pathID(r)
+	if !ok {
+		return invitationRoute{}, false
+	}
+	return invitationRoute{
+		ref:        partnership.ByID(id),
+		actionBase: "/partners/invitations/received/" + strconv.FormatInt(id, 10),
+	}, true
+}
+
+func pathID(r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return id, err == nil && id > 0
+}
+
+// reviewInvitation renders the approved disclosure for an emailed bearer link.
+// It is a GET and mutates nothing (S3-28).
+func (a *App) reviewInvitation(w http.ResponseWriter, r *http.Request) {
+	a.renderInvitation(w, r, http.StatusOK, bearerRoute(r), true)
+}
+
+// reviewReceivedInvitation renders the same disclosure for a signed-in invitee
+// who found the invitation in their own list instead of their inbox.
+func (a *App) reviewReceivedInvitation(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.currentUser(w, r); !ok {
+		return
+	}
+	route, ok := receivedRoute(r)
+	if !ok {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	a.renderInvitation(w, r, http.StatusOK, route, false)
+}
+
+// renderInvitation shows a pending invitation's disclosure or a settled one's
+// precise outcome. Only the bearer GET arms the sign-in return; a refused POST
+// must not plant a return destination in the browser of a User who was never
+// invited.
+func (a *App) renderInvitation(w http.ResponseWriter, r *http.Request, status int, route invitationRoute, armReturn bool) {
 	viewer, signedIn := a.optionalUser(r)
-	review, err := a.partnerships.ReviewInvitation(r.Context(), token, viewer.ID)
+	review, err := a.partnerships.ReviewInvitation(r.Context(), route.ref, viewer.ID)
 	if errors.Is(err, partnership.ErrInvitationUnavailable) {
-		a.clearInvitationReturn(w)
-		a.render(w, r, http.StatusNotFound, "invitation-unavailable", pageData{Version: a.version})
+		a.renderUnavailable(w, r, http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -58,41 +115,116 @@ func (a *App) renderInvitationReview(w http.ResponseWriter, r *http.Request, sta
 		return
 	}
 	switch {
-	case review.ViewerMatches:
-		// The invited User is here, so the return destination has done its job.
+	case review.State != partnership.InvitationPending, review.ViewerMatches:
+		// Either the invited User is here, or there is nothing left to answer.
+		// Both retire the return destination.
 		a.clearInvitationReturn(w)
 	case armReturn:
 		// Nobody matching is signed in yet. A wrong session counts too: the
 		// approved guidance is to sign out and return with the invited
 		// address, and that round trip needs the destination remembered.
-		a.rememberInvitationReturn(w, token)
+		a.rememberInvitationReturn(w, route.token)
 	}
-	a.render(w, r, status, "invitation-review", invitationPageData{
-		CSRFToken: csrf, Token: token, Version: a.version, Review: review, SignedIn: signedIn,
-	})
+	page := invitationPageData{
+		CSRFToken: csrf, ActionBase: route.actionBase, Version: a.version,
+		Review: review, SignedIn: signedIn,
+	}
+	template := "invitation-review"
+	if review.State != partnership.InvitationPending {
+		template = "invitation-outcome"
+	}
+	a.render(w, r, status, template, page)
 }
 
-// acceptInvitation performs the one explicit, authenticated, CSRF-protected
-// mutation that creates a Partnership.
+func (a *App) renderUnavailable(w http.ResponseWriter, r *http.Request, status int) {
+	a.clearInvitationReturn(w)
+	a.render(w, r, status, "invitation-unavailable", pageData{Version: a.version})
+}
+
+// acceptInvitation and declineInvitation are the invitee's two mutations from
+// the emailed link; the received variants are the same two from their list.
 func (a *App) acceptInvitation(w http.ResponseWriter, r *http.Request) {
+	a.answerInvitation(w, r, bearerRoute(r), a.accept)
+}
+
+func (a *App) acceptReceivedInvitation(w http.ResponseWriter, r *http.Request) {
+	a.answerReceivedInvitation(w, r, a.accept)
+}
+
+func (a *App) declineInvitation(w http.ResponseWriter, r *http.Request) {
+	a.answerInvitation(w, r, bearerRoute(r), a.decline)
+}
+
+func (a *App) declineReceivedInvitation(w http.ResponseWriter, r *http.Request) {
+	a.answerReceivedInvitation(w, r, a.decline)
+}
+
+// invitationAnswer is the shape accept and decline share: one authenticated,
+// CSRF-protected mutation on one invitation reference. Only the module's
+// refusal matters here; the receipts are what the module returns to itself.
+type invitationAnswer func(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error
+
+func (a *App) accept(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error {
+	_, err := a.partnerships.AcceptInvitation(ctx, ref, viewerID)
+	return err
+}
+
+func (a *App) decline(ctx context.Context, ref partnership.InvitationRef, viewerID int64) error {
+	_, err := a.partnerships.DeclineInvitation(ctx, ref, viewerID)
+	return err
+}
+
+func (a *App) answerReceivedInvitation(w http.ResponseWriter, r *http.Request, answer invitationAnswer) {
+	route, ok := receivedRoute(r)
+	if !ok {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	a.answerInvitation(w, r, route, answer)
+}
+
+// answerInvitation performs one explicit, authenticated, CSRF-protected
+// mutation. A refusal re-renders the screen the viewer is authorized to see
+// rather than a bare error, and a losing race lands on the outcome that won.
+func (a *App) answerInvitation(w http.ResponseWriter, r *http.Request, route invitationRoute, answer invitationAnswer) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
 	}
-	token := r.PathValue("token")
-	_, err := a.partnerships.AcceptInvitation(r.Context(), token, user.ID)
+	err := answer(r.Context(), route.ref, user.ID)
 	switch {
 	case err == nil:
 		a.clearInvitationReturn(w)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	case errors.Is(err, partnership.ErrInvitationUnavailable):
-		a.clearInvitationReturn(w)
-		a.render(w, r, http.StatusConflict, "invitation-unavailable", pageData{Version: a.version})
+		a.renderInvitation(w, r, http.StatusConflict, route, false)
 	case errors.Is(err, partnership.ErrInvitationNotYours):
-		// Refuse the mutation, but re-render the review screen so the wrong
-		// signed-in User gets the approved mismatch guidance rather than a
-		// bare error.
-		a.renderInvitationReview(w, r, http.StatusForbidden, false)
+		a.renderInvitation(w, r, http.StatusForbidden, route, false)
+	default:
+		a.internalError(w, r, err)
+	}
+}
+
+// cancelInvitation withdraws an invitation the signed-in Protectee sent. It is
+// also the only way to correct one, because the invited address and proposed
+// Log sharing are immutable while the invitation is pending.
+func (a *App) cancelInvitation(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	id, valid := pathID(r)
+	if !valid {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	_, err := a.partnerships.CancelInvitation(r.Context(), id, user.ID)
+	switch {
+	case err == nil, errors.Is(err, partnership.ErrInvitationUnavailable):
+		// A cancellation that lost its race, or that was never this User's to
+		// make, mutates nothing and lands on the state they are authorized to
+		// see. Neither answer confirms the invitation exists.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 	default:
 		a.internalError(w, r, err)
 	}

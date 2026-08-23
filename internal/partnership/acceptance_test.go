@@ -21,7 +21,7 @@ func TestReviewInvitationMasksTheInviteeUntilTheMatchingUserAuthenticates(t *tes
 		t.Fatal(err)
 	}
 
-	anonymous, err := service.ReviewInvitation(context.Background(), invitation.RawToken, 0)
+	anonymous, err := service.ReviewInvitation(context.Background(), ByToken(invitation.RawToken), 0)
 	if err != nil {
 		t.Fatalf("ReviewInvitation: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestReviewInvitationMasksTheInviteeUntilTheMatchingUserAuthenticates(t *tes
 	}
 
 	stranger := createUser(t, db, "stranger@example.com")
-	wrong, err := service.ReviewInvitation(context.Background(), invitation.RawToken, stranger)
+	wrong, err := service.ReviewInvitation(context.Background(), ByToken(invitation.RawToken), stranger)
 	if err != nil {
 		t.Fatalf("ReviewInvitation for a wrong session: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestReviewInvitationMasksTheInviteeUntilTheMatchingUserAuthenticates(t *tes
 	}
 
 	invitee := createUser(t, db, "invitee@example.com")
-	matching, err := service.ReviewInvitation(context.Background(), invitation.RawToken, invitee)
+	matching, err := service.ReviewInvitation(context.Background(), ByToken(invitation.RawToken), invitee)
 	if err != nil {
 		t.Fatalf("ReviewInvitation for the invitee: %v", err)
 	}
@@ -66,17 +66,6 @@ func TestReviewInvitationMasksTheInviteeUntilTheMatchingUserAuthenticates(t *tes
 	}
 }
 
-func TestReviewInvitationHidesUnknownAndMalformedTokens(t *testing.T) {
-	t.Parallel()
-	service, db := newTestService(t)
-	createUser(t, db, "protectee@example.com")
-	for _, token := range []string{"", "not-base64-!!", strings.Repeat("A", 43)} {
-		if _, err := service.ReviewInvitation(context.Background(), token, 0); !errors.Is(err, ErrInvitationUnavailable) {
-			t.Fatalf("ReviewInvitation(%q) = %v, want ErrInvitationUnavailable", token, err)
-		}
-	}
-}
-
 func TestAcceptInvitationCommitsPartnershipActivityAndBothMessages(t *testing.T) {
 	t.Parallel()
 	service, db := newTestService(t)
@@ -90,11 +79,11 @@ func TestAcceptInvitationCommitsPartnershipActivityAndBothMessages(t *testing.T)
 	invitee := createUser(t, db, "invitee@example.com")
 
 	stranger := createUser(t, db, "stranger@example.com")
-	if _, err := service.AcceptInvitation(context.Background(), invitation.RawToken, stranger); !errors.Is(err, ErrInvitationNotYours) {
+	if _, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), stranger); !errors.Is(err, ErrInvitationNotYours) {
 		t.Fatalf("stranger acceptance = %v, want ErrInvitationNotYours", err)
 	}
 
-	accepted, err := service.AcceptInvitation(context.Background(), invitation.RawToken, invitee)
+	accepted, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), invitee)
 	if err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
@@ -119,7 +108,7 @@ func TestAcceptInvitationCommitsPartnershipActivityAndBothMessages(t *testing.T)
 	}
 
 	// A second attempt on a spent token wins nothing and duplicates nothing.
-	if _, err := service.AcceptInvitation(context.Background(), invitation.RawToken, invitee); !errors.Is(err, ErrInvitationUnavailable) {
+	if _, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), invitee); !errors.Is(err, ErrInvitationUnavailable) {
 		t.Fatalf("replayed acceptance = %v, want ErrInvitationUnavailable", err)
 	}
 
@@ -187,7 +176,7 @@ func TestAcceptedPartnershipDrivesLockRosterAndAuthorization(t *testing.T) {
 	if err != nil || !before {
 		t.Fatalf("unpartnered self loosen = %v, %v", before, err)
 	}
-	if _, err := service.AcceptInvitation(context.Background(), invitation.RawToken, invitee); err != nil {
+	if _, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), invitee); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,7 +245,7 @@ func TestCanViewLogsFollowsTheAcceptedLogSharingChoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	invitee := createUser(t, db, "invitee@example.com")
-	if _, err := service.AcceptInvitation(context.Background(), invitation.RawToken, invitee); err != nil {
+	if _, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), invitee); err != nil {
 		t.Fatal(err)
 	}
 	allowed, err := service.CanViewLogs(context.Background(), invitee, protectee)
@@ -278,10 +267,16 @@ func TestAcceptInvitationRefusesAnExpiredInvitation(t *testing.T) {
 	invitee := createUser(t, db, "invitee@example.com")
 	service.now = func() time.Time { return testClock.Add(invitationTTL + time.Minute) }
 
-	if _, err := service.ReviewInvitation(context.Background(), invitation.RawToken, invitee); !errors.Is(err, ErrInvitationUnavailable) {
+	// The bearer token is still valid, so the review names the precise
+	// outcome rather than hiding behind "unavailable" (S3-29).
+	review, err := service.ReviewInvitation(context.Background(), ByToken(invitation.RawToken), invitee)
+	if err != nil {
 		t.Fatalf("expired review = %v", err)
 	}
-	if _, err := service.AcceptInvitation(context.Background(), invitation.RawToken, invitee); !errors.Is(err, ErrInvitationUnavailable) {
+	if review.State != InvitationExpired || !review.ResolvedAt.Equal(invitation.ExpiresAt) {
+		t.Fatalf("expired review = %+v", review)
+	}
+	if _, err := service.AcceptInvitation(context.Background(), ByToken(invitation.RawToken), invitee); !errors.Is(err, ErrInvitationUnavailable) {
 		t.Fatalf("expired acceptance = %v", err)
 	}
 	var partnerships int

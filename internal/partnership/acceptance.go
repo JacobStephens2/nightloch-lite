@@ -28,21 +28,30 @@ const (
 )
 
 var (
-	// ErrInvitationUnavailable is the single answer for a token that is
-	// unknown, malformed, expired, or no longer pending. It deliberately
-	// distinguishes none of those to an unauthorized reader; the precise
-	// terminal outcomes for a valid token arrive with the invitation inbox.
+	// ErrInvitationUnavailable is the single answer for a reference Nightloch
+	// will not resolve: a malformed or unknown token, an id belonging to
+	// someone else, or a mutation that lost its race. It deliberately
+	// distinguishes none of those. A reference that does resolve reports its
+	// precise state instead, so a valid token names its own outcome (S3-29).
 	ErrInvitationUnavailable = errors.New("that Partner invitation is unavailable")
 	// ErrInvitationNotYours refuses a signed-in User whose verified email is
 	// not the invited address.
 	ErrInvitationNotYours = errors.New("that Partner invitation was sent to a different address")
 )
 
-// InvitationReview is the pre-acceptance disclosure for one pending
-// invitation. It is a pure read: opening a bearer link never mutates state
-// (S3-28). The invited address stays masked until a matching verified User
-// authenticates, so a leaked link does not disclose who was invited.
+// InvitationReview is the disclosure for one invitation the viewer reached,
+// pending or terminal. It is a pure read: opening a bearer link never mutates
+// state (S3-28). The invited address stays masked until a matching verified
+// User authenticates, so neither a leaked link nor a settled outcome discloses
+// who was invited.
 type InvitationReview struct {
+	// ID lets an authenticated invitee act on this invitation from their own
+	// **Partner invitations** list, without the bearer token.
+	ID    int64
+	State InvitationState
+	// ResolvedAt is when a terminal invitation reached its outcome, and zero
+	// while it is still pending.
+	ResolvedAt         time.Time
 	ProtecteeEmail     string
 	MaskedInviteeEmail string
 	// InviteeEmail is populated only once ViewerMatches is true.
@@ -58,6 +67,68 @@ type InvitationReview struct {
 	ViewerMatches bool
 }
 
+// MayAccept and MayDecline report whether this viewer holds the invitee's
+// controls. Only the invited User ever does; the Protectee cancels instead,
+// and everyone else — including an existing Partner — may look but not act.
+func (r InvitationReview) MayAccept() bool { return r.State == InvitationPending && r.ViewerMatches }
+
+// MayDecline mirrors MayAccept: the two invitee controls always appear together.
+func (r InvitationReview) MayDecline() bool { return r.MayAccept() }
+
+// Outcome is the invitation's state as a plain string, so a template can pick
+// the approved copy for it without importing this package's types.
+func (r InvitationReview) Outcome() string { return string(r.State) }
+
+// ReviewInvitation renders the approved disclosure for one invitation without
+// touching any state. A pending invitation shows what accepting would mean; a
+// terminal one names its precise outcome.
+func (s *Service) ReviewInvitation(ctx context.Context, ref InvitationRef, viewerID int64) (InvitationReview, error) {
+	now := s.now().UTC()
+	viewerEmail, err := readUserEmail(ctx, s.db, viewerID)
+	if err != nil {
+		return InvitationReview{}, err
+	}
+	invitation, err := resolveInvitation(ctx, s.db, ref, viewerEmail, now)
+	if err != nil {
+		return InvitationReview{}, err
+	}
+
+	review := InvitationReview{
+		ID:                 invitation.id,
+		State:              invitation.state,
+		ResolvedAt:         invitation.resolvedAt,
+		ProtecteeEmail:     invitation.protecteeEmail,
+		MaskedInviteeEmail: maskEmail(invitation.inviteeEmail),
+		LogSharing:         invitation.logSharing,
+		ExpiresAt:          invitation.expiresAt,
+		ViewerEmail:        viewerEmail,
+		ViewerMatches:      viewerEmail != "" && viewerEmail == invitation.inviteeEmail,
+	}
+	// Masking is the whole point of the review screen: withhold the invited
+	// address from everyone except the User who was actually invited.
+	if review.ViewerMatches {
+		review.InviteeEmail = invitation.inviteeEmail
+	}
+	if invitation.state != InvitationPending {
+		// A settled invitation discloses its outcome and nothing more; the
+		// Roster shape describes a Partnership decision nobody can still make.
+		return review, nil
+	}
+
+	// The reverse-direction count belongs to the acceptance disclosure, which
+	// 3B adds once a Reciprocal Partnership is reachable.
+	inviteeUserID, err := readUserID(ctx, s.db, invitation.inviteeEmail)
+	if err != nil {
+		return InvitationReview{}, err
+	}
+	partnerCount, _, err := readRosterShape(ctx, s.db, invitation.protecteeID, inviteeUserID)
+	if err != nil {
+		return InvitationReview{}, err
+	}
+	review.OtherPartnerCount = partnerCount
+	return review, nil
+}
+
 // Acceptance is the durable Partnership an invitee just created.
 type Acceptance struct {
 	PartnershipID  int64
@@ -66,73 +137,11 @@ type Acceptance struct {
 	AcceptedAt     time.Time
 }
 
-// ReviewInvitation renders the approved review disclosure for a bearer token
-// without touching any state. Anything other than a live pending invitation
-// answers ErrInvitationUnavailable.
-func (s *Service) ReviewInvitation(ctx context.Context, rawToken string, viewerID int64) (InvitationReview, error) {
-	tokenHash, err := hashInvitationToken(rawToken)
-	if err != nil {
-		return InvitationReview{}, err
-	}
-	now := s.now().UTC()
-
-	var review InvitationReview
-	var protecteeID, inviteeUserID int64
-	var logSharing int
-	var expiresAt int64
-	err = s.db.QueryRowContext(ctx, `
-		SELECT invitation.protectee_id, protectee.email, invitation.invitee_email,
-		       invitation.log_sharing, invitation.expires_at,
-		       COALESCE((SELECT id FROM users WHERE email = invitation.invitee_email), 0)
-		FROM partner_invitations invitation
-		JOIN users protectee ON protectee.id = invitation.protectee_id
-		WHERE invitation.token_hash = ? AND invitation.state = 'pending'
-		  AND invitation.expires_at > ?`, tokenHash[:], now.Unix()).
-		Scan(&protecteeID, &review.ProtecteeEmail, &review.InviteeEmail, &logSharing, &expiresAt, &inviteeUserID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return InvitationReview{}, ErrInvitationUnavailable
-	}
-	if err != nil {
-		return InvitationReview{}, fmt.Errorf("read Partner invitation: %w", err)
-	}
-
-	inviteeEmail := review.InviteeEmail
-	review.MaskedInviteeEmail = maskEmail(inviteeEmail)
-	review.LogSharing = intToBool(logSharing)
-	review.ExpiresAt = time.Unix(expiresAt, 0).UTC()
-
-	// The reverse-direction count belongs to the acceptance disclosure, which
-	// 3B adds once a Reciprocal Partnership is reachable.
-	partnerCount, _, err := readRosterShape(ctx, s.db, protecteeID, inviteeUserID)
-	if err != nil {
-		return InvitationReview{}, err
-	}
-	review.OtherPartnerCount = partnerCount
-
-	if viewerID > 0 {
-		if err := s.db.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ?", viewerID).
-			Scan(&review.ViewerEmail); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return InvitationReview{}, fmt.Errorf("read reviewing User: %w", err)
-		}
-		review.ViewerMatches = review.ViewerEmail != "" && review.ViewerEmail == inviteeEmail
-	}
-	// Masking is the whole point of the review screen: withhold the invited
-	// address from everyone except the User who was actually invited.
-	if !review.ViewerMatches {
-		review.InviteeEmail = ""
-	}
-	return review, nil
-}
-
 // AcceptInvitation atomically terminates the invitation, creates the durable
 // Partnership, appends Activity, and queues one message per recipient. The
 // invitation's pending state is the concurrency token, so a replayed or racing
 // acceptance changes nothing and answers ErrInvitationUnavailable.
-func (s *Service) AcceptInvitation(ctx context.Context, rawToken string, viewerID int64) (Acceptance, error) {
-	tokenHash, err := hashInvitationToken(rawToken)
-	if err != nil {
-		return Acceptance{}, err
-	}
+func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewerID int64) (Acceptance, error) {
 	if viewerID <= 0 {
 		return Acceptance{}, ErrInvitationNotYours
 	}
@@ -144,50 +153,26 @@ func (s *Service) AcceptInvitation(ctx context.Context, rawToken string, viewerI
 	}
 	defer tx.Rollback()
 
-	var invitationID, protecteeID int64
-	var protecteeEmail, inviteeEmail string
-	var logSharing int
-	err = tx.QueryRowContext(ctx, `
-		SELECT invitation.id, invitation.protectee_id, protectee.email,
-		       invitation.invitee_email, invitation.log_sharing
-		FROM partner_invitations invitation
-		JOIN users protectee ON protectee.id = invitation.protectee_id
-		WHERE invitation.token_hash = ? AND invitation.state = 'pending'
-		  AND invitation.expires_at > ?`, tokenHash[:], now.Unix()).
-		Scan(&invitationID, &protecteeID, &protecteeEmail, &inviteeEmail, &logSharing)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Acceptance{}, ErrInvitationUnavailable
-	}
+	viewerEmail, err := readUserEmail(ctx, tx, viewerID)
 	if err != nil {
-		return Acceptance{}, fmt.Errorf("read Partner invitation: %w", err)
+		return Acceptance{}, err
 	}
-
-	var viewerEmail string
-	if err := tx.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ?", viewerID).Scan(&viewerEmail); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Acceptance{}, ErrInvitationNotYours
-		}
-		return Acceptance{}, fmt.Errorf("read accepting User: %w", err)
+	invitation, err := resolveInvitation(ctx, tx, ref, viewerEmail, now)
+	if err != nil {
+		return Acceptance{}, err
 	}
-	if viewerEmail != inviteeEmail {
+	if viewerEmail == "" || viewerEmail != invitation.inviteeEmail {
 		return Acceptance{}, ErrInvitationNotYours
 	}
-
 	// First commit wins: only the transaction that still sees 'pending' may
 	// resolve the invitation, and every later mutation hangs off that row.
-	resolved, err := tx.ExecContext(ctx, `
-		UPDATE partner_invitations
-		SET state = 'accepted', resolved_at = ?, resolved_by_user_id = ?
-		WHERE id = ? AND state = 'pending'`, now.Unix(), viewerID, invitationID)
-	if err != nil {
-		return Acceptance{}, fmt.Errorf("resolve Partner invitation: %w", err)
+	if err := resolveState(ctx, tx, invitation, InvitationAccepted, now, &viewerID); err != nil {
+		return Acceptance{}, err
 	}
-	if affected, err := resolved.RowsAffected(); err != nil || affected != 1 {
-		if err != nil {
-			return Acceptance{}, fmt.Errorf("resolve Partner invitation: %w", err)
-		}
-		return Acceptance{}, ErrInvitationUnavailable
-	}
+	invitationID, protecteeID := invitation.id, invitation.protecteeID
+	protecteeEmail, inviteeEmail := invitation.protecteeEmail, invitation.inviteeEmail
+	logSharing := boolToInt(invitation.logSharing)
+	tokenHash := invitation.tokenHash
 
 	created, err := tx.ExecContext(ctx, `
 		INSERT INTO partnerships(protectee_id, partner_id, edge_type, log_sharing, accepted_at)
