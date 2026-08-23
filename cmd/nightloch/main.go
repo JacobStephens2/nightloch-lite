@@ -16,6 +16,7 @@ import (
 	"github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/config"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 	"github.com/JacobStephens2/nightloch-lite/internal/webapp"
 )
 
@@ -122,7 +123,7 @@ func runServe() error {
 	store := auth.NewStore(db)
 	authService := auth.NewService(
 		store,
-		&auth.ResendMailer{APIKey: settings.ResendAPIKey, From: settings.ResendFrom, Client: externalHTTP},
+		&mailmessage.ResendSender{APIKey: settings.ResendAPIKey, From: settings.ResendFrom, Client: externalHTTP},
 		&auth.TurnstileVerifier{
 			Secret: settings.TurnstileSecret, Hostname: settings.BaseURL.Hostname(),
 			Action: "sign-in", Client: externalHTTP,

@@ -12,19 +12,8 @@ import (
 	"time"
 
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
-
-type recordingMailer struct {
-	to   []string
-	link []string
-	err  error
-}
-
-func (m *recordingMailer) SendMagicLink(_ context.Context, to, link string) error {
-	m.to = append(m.to, to)
-	m.link = append(m.link, link)
-	return m.err
-}
 
 type acceptingVerifier struct {
 	calls int
@@ -38,7 +27,7 @@ func (v *acceptingVerifier) Verify(_ context.Context, token, ip string) error {
 	return nil
 }
 
-func newTestService(t *testing.T) (*Service, *recordingMailer) {
+func newTestService(t *testing.T) (*Service, *mailmessage.RecordingSender) {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "nightloch.db"))
 	if err != nil {
@@ -49,28 +38,39 @@ func newTestService(t *testing.T) (*Service, *recordingMailer) {
 		t.Fatal(err)
 	}
 	baseURL, _ := url.Parse("https://lite.nightloch.app")
-	mailer := &recordingMailer{}
-	service := NewService(NewStore(db), mailer, &acceptingVerifier{}, baseURL)
+	sender := &mailmessage.RecordingSender{}
+	service := NewService(NewStore(db), sender, &acceptingVerifier{}, baseURL)
 	service.now = func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) }
-	return service, mailer
+	return service, sender
 }
 
 func TestMagicLinkSessionLifecycleStoresOnlyHashes(t *testing.T) {
 	t.Parallel()
-	service, mailer := newTestService(t)
+	service, sender := newTestService(t)
 	ctx := context.Background()
 
 	if err := service.RequestMagicLink(ctx, "Person@Example.com", "203.0.113.7", "human"); err != nil {
 		t.Fatalf("RequestMagicLink: %v", err)
 	}
-	if len(mailer.link) != 1 || mailer.to[0] != "person@example.com" {
-		t.Fatalf("mail = to %v link %v", mailer.to, mailer.link)
+	if len(sender.Envelopes) != 1 {
+		t.Fatalf("envelopes = %#v", sender.Envelopes)
 	}
-	parsed, err := url.Parse(mailer.link[0])
+	envelope := sender.Envelopes[0]
+	parsed, err := url.Parse(strings.TrimPrefix(envelope.Text, "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	link := parsed.String()
 	rawLink := parsed.Query().Get("token")
+	wantText := "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n" + link
+	wantHTML := `<p>Sign in to Nightloch. This link expires in 15 minutes and can be used once.</p><p><a href="` + link + `">Sign in to Nightloch</a></p>`
+	if envelope.To != "person@example.com" || envelope.Subject != "Your Nightloch sign-in link" ||
+		envelope.Text != wantText || envelope.HTML != wantHTML || envelope.ReplyTo != "alerts@nightloch.app" {
+		t.Fatalf("magic-link envelope = %#v", envelope)
+	}
+	if !strings.HasPrefix(envelope.IdempotencyKey, "nightloch-magic-") || len(envelope.IdempotencyKey) != 80 || strings.Contains(envelope.IdempotencyKey, rawLink) {
+		t.Fatalf("magic-link idempotency key = %q", envelope.IdempotencyKey)
+	}
 	decodedLink, err := base64.RawURLEncoding.DecodeString(rawLink)
 	if err != nil {
 		t.Fatal(err)
@@ -121,25 +121,25 @@ func TestMagicLinkSessionLifecycleStoresOnlyHashes(t *testing.T) {
 
 func TestMagicLinkExpiresAndDeliveryFailureInvalidates(t *testing.T) {
 	t.Parallel()
-	service, mailer := newTestService(t)
+	service, sender := newTestService(t)
 	ctx := context.Background()
 
 	if err := service.RequestMagicLink(ctx, "person@example.com", "203.0.113.8", "human"); err != nil {
 		t.Fatal(err)
 	}
-	raw := mustTokenFromLink(t, mailer.link[0])
+	raw := mustTokenFromEnvelope(t, sender.Envelopes[0])
 	service.now = func() time.Time { return time.Date(2026, 8, 6, 12, 15, 0, 0, time.UTC) }
 	if _, _, err := service.ConsumeMagicLink(ctx, raw); !errors.Is(err, ErrInvalidLink) {
 		t.Fatalf("ConsumeMagicLink at expiry = %v", err)
 	}
 
-	service2, mailer2 := newTestService(t)
-	mailer2.err = errors.New("mail unavailable")
+	service2, sender2 := newTestService(t)
+	sender2.SendError = errors.New("mail unavailable")
 	err := service2.RequestMagicLink(ctx, "person@example.com", "203.0.113.9", "human")
 	if !errors.Is(err, ErrDelivery) {
 		t.Fatalf("RequestMagicLink delivery error = %v", err)
 	}
-	if _, _, err := service2.ConsumeMagicLink(ctx, mustTokenFromLink(t, mailer2.link[0])); !errors.Is(err, ErrInvalidLink) {
+	if _, _, err := service2.ConsumeMagicLink(ctx, mustTokenFromEnvelope(t, sender2.Envelopes[0])); !errors.Is(err, ErrInvalidLink) {
 		t.Fatalf("undelivered link remained valid: %v", err)
 	}
 }
@@ -183,9 +183,10 @@ func TestNormalizeEmailRejectsDisplayNamesAndMalformedInput(t *testing.T) {
 	}
 }
 
-func mustTokenFromLink(t *testing.T, link string) string {
+func mustTokenFromEnvelope(t *testing.T, envelope mailmessage.Envelope) string {
 	t.Helper()
-	parsed, err := url.Parse(link)
+	const prefix = "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n"
+	parsed, err := url.Parse(strings.TrimPrefix(envelope.Text, prefix))
 	if err != nil {
 		t.Fatal(err)
 	}
