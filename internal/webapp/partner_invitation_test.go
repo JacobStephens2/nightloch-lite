@@ -130,7 +130,7 @@ func TestProtecteeSendsFirstPartnerInvitationEndToEnd(t *testing.T) {
 		"invitee@example.com", "Partner lock is inactive", "acceptance is required",
 		// The primary action is unavailable under the 3A gate, so the screen
 		// must say why rather than silently dropping it.
-		"once this invitation is accepted or expires", "Delivery: Queued",
+		"once this invitation is accepted, declined, canceled, or expires", "Delivery: Queued",
 	} {
 		if !strings.Contains(afterBody, want) {
 			t.Fatalf("pending state missing %q:\n%s", want, afterBody)

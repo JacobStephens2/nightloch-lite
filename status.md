@@ -12,7 +12,7 @@
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human apply |
 | 2 Magic-link sign-in | **Code in repo**; live two-email demo follows Slice 1 apply |
 | 9 Continuous deploy (ordered after Slice 2) | **Code in repo**; enable only after staging service setup |
-| 3 Partner graph + Activity | **3A in progress** — issues #3, #4, and #5 done (mail envelopes, durable invitation, first Partnership accepted with Partner lock); next is #6 invitation discovery and terminal outcomes |
+| 3 Partner graph + Activity | **3A in progress** — issues #3–#6 done (mail envelopes, durable invitation, first Partnership accepted with Partner lock, invitation discovery/decline/cancel/expiry with precise terminal outcomes); next is #7 immediate Partner ending |
 
 OpenTofu + `scripts/slice1-up.sh` ready. **No droplet until you apply.** Bitwarden laptop wiring verified (tokens inject; values never logged).
 
