@@ -19,7 +19,7 @@
 | 1 | User-initiated partner edge end? | **Yes, with 72-hour cooling-off.** Partner-initiated end is **immediate**. |
 | 2 | Notify existing partners on new partner? See who else protects the Protectee? | **Yes** — email all Partners on the Protectee’s **Roster** on invite **sent** and **accepted**. They **see the Roster** (who protects the Protectee, since when); they **cannot** edit others’ Partnerships. |
 | 3 | Zero partners — can user loosen? | **Yes.** Self-loosen allowed when the protectee has **no active partner edges**. Restraint teeth come from cooling-off when leaving a partnered state, not permanent self-lock. |
-| 4 | User account deletion? | **Yes, via 72h cooling-off.** Notify all partners (both directions: people they protect and partners who protect them). Teardown is transactional: revoke all peers from `wg0` + AGH, quarantine IPs, end all edges with notice, then delete account. |
+| 4 | User account deletion? | **Yes, via 72h cooling-off.** Send separate notices to related parties. Immediately end Partnerships in which the deleting User is the Partner, cancel all pending invitations involving them, and prohibit new sends or acceptances; canceling deletion restores none of these. Ordinary rules continue for the deleting User’s own Policy, Devices, and Log sharing, and only that User may cancel the fixed timer. Partnerships protecting the deleting User and their Partners’ powers remain active through Cooling-off. Final teardown is transactional: revoke all Devices from `wg0` + AGH, quarantine IPs, end remaining Partnerships with notice, then delete the User. |
 | 5 | User revoke own device? | **All protectee-initiated device revokes are immediate** (including the last device). Stolen/lost phone must not wait 72h. Perimeter signal: **action alert + coverage → 0%** on next report ([R4](../reviews/slice-neg-1-review.md#r4)). |
 | 6 | Device enrollment gated? | **Yes for v1.** Operator allowlist (e.g. env `ENROLL_ALLOWLIST` emails). Signup and partner-accept stay open. Unauthorized: “Device enrollment is invite-only during beta.” **v2 follow-up:** `enrollment_allowed` on user row (UI toggle) so adding a user is not a deploy/restart ([R9](../reviews/slice-neg-1-review.md#r9)). |
 
@@ -255,14 +255,19 @@ Does **not** apply to:
 
 During cooling-off: **all policy remains enforced**; partner retains full powers; UI shows countdown; protectee may cancel.
 
+For account-deletion Cooling-off specifically, only the deleting User may cancel. Partners and the Operator cannot accelerate, delay, or cancel the 72-hour product timer. The deleting User may still tighten Policy, revoke Devices, and disable Log sharing; loosening remains subject to the ordinary Partner-lock rule.
+
+Starting deletion requires typing `DELETE` after the UI names immediate and delayed effects and warns that canceling deletion will not restore immediately ended Partnerships or canceled invitations. The deleting User and active Partners protecting them see the exact deadline; only the deleting User receives the cancel control. The completion Action email remains attributable to the verified email, while retained product receipts pseudonymize the identity as **Deleted User**.
+
 ### Account deletion teardown (order)
 
-1. Enter cooling-off; notify all related parties  
-2. On fire: revoke every peer (`wg` + AGH client); quarantine each IP  
-3. End all edges both directions (subject as protected and as partner); notify  
-4. Cancel pending invites  
-5. Delete sessions/tokens; delete user row (or soft-delete)  
-6. Audit event `account_deleted`
+1. Enter Cooling-off; immediately end Partnerships in which the deleting User is the Partner, cancel every pending invitation involving them, prohibit new invitation sends or acceptances, and notify all related parties  
+2. Keep Partnerships protecting the deleting User active until expiry; canceling deletion does not restore already-ended Partnerships  
+3. On fire: revoke every Device (`wg` + AGH client); quarantine each IP  
+4. End remaining Partnerships; notify  
+5. Delete sessions/tokens; delete User row (or soft-delete)  
+6. Retain only pseudonymized former-Partner receipts; delete or pseudonymize other mappings as required  
+7. Audit event `account_deleted`
 
 ### Sock-puppet mitigation (v1)
 

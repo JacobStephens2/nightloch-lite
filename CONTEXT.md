@@ -21,8 +21,28 @@ The set of Partners who currently protect a given Protectee (visible to those Pa
 _Avoid_: Accountability partners (as a type name), circle, partner list (ambiguous with “people I protect”)
 
 **Partnership**:
-An active relationship binding one Partner to one Protectee (invite → accept → end / cooling-off).
+A durable relationship created when a Partner invitation is accepted, binding one Partner to one Protectee through its active, Cooling-off, and ended states.
 _Avoid_: Partner edge, peer edge, link, connection (for this relationship)
+
+**Partner invitation**:
+A pending invitation from a Protectee to another User to form a Partnership. It grants no Partner powers until accepted.
+_Avoid_: Partner request, edge invite, relationship request
+
+**Invitation block**:
+A User’s refusal to receive future Partner invitations from a specific other User. It creates no Partnership and grants no Partner powers.
+_Avoid_: Blocked Partner, blocked Partnership, email block
+
+**Reciprocal Partnerships**:
+Two independent active Partnerships in opposite directions between the same Users, with each User protecting the other as a Partner. The Partnerships do not merge or change one another’s powers.
+_Avoid_: Mutual edge, two-way Partnership, merged Partnership
+
+**Partner lock**:
+The restraint active while a Protectee has at least one active Partnership: the Protectee may tighten their Policy but only a Partner may loosen it.
+_Avoid_: Hard mode, locked account, partner mode
+
+**Partner reachability**:
+Nightloch’s known ability to deliver Action alerts to a Partner’s verified email. It describes mail delivery, not whether the Partner is online or attentive.
+_Avoid_: Online status, Partner availability, email health (alone)
 
 **Device**:
 An enrolled tunnel identity for a Protectee (keys, address, and enrollment lifecycle)—not the human and not the Partnership.
@@ -47,6 +67,10 @@ _Avoid_: Baseline extra, custom baseline, always-on curfew
 **Allowlist entry**:
 A domain exception that carves out Baseline lists only—not Curfews.
 _Avoid_: Exception, false-positive fix, whitelist, allow (alone)
+
+**Log sharing**:
+A per-Partnership permission from a Protectee that lets that Partner view the Protectee’s DNS domain log. Disabling it immediately removes that access without ending the Partnership.
+_Avoid_: Log access (alone), DNS sharing, surveillance toggle
 
 **Coverage**:
 The measured fraction of time a Device was on the tunnel while enrolled.
@@ -76,6 +100,10 @@ _Avoid_: Invite-only (alone), beta list, device allowlist (confusable with Allow
 An immediate integrity email about a discrete event (loosen, enroll, Partnership change, cooling-off start, etc.).
 _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity path)
 
+**Activity**:
+The human-readable history of attributable changes affecting a Protectee, visible to that Protectee and authorized Partners.
+_Avoid_: Audit log (in product UI), event stream, history (alone)
+
 **Coverage report**:
 A periodic summary of Coverage for a Protectee’s Devices, sent to Partners (and useful as a deliverability heartbeat).
 _Avoid_: Digest (unless meaning this report), weekly email (alone)
@@ -83,8 +111,10 @@ _Avoid_: Digest (unless meaning this report), weekly email (alone)
 ## Product UI copy
 
 - **Protectee side:** “Your Partners” / Roster of who protects you.
+- **Protectee area:** “Your protection” / the Protectee’s own Partner lock, Policy, Devices, and Activity.
 - **Partner side:** “People you protect” (not the Roster of someone else unless viewing that Protectee).
 - **Roster** may appear as a section title where Partners see who else protects the same Protectee.
+- **Partner lock** is active with one or more active Partnerships and inactive with zero.
 
 ## Code note
 
