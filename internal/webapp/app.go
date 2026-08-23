@@ -90,8 +90,19 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("POST /sign-out", app.signOut)
 	mux.HandleFunc("GET /partners/invite", app.invitePartnerForm)
 	mux.HandleFunc("POST /partners/invite", app.invitePartnerSubmit)
+	// An invitee reaches the same invitation two ways: the emailed bearer
+	// link, and — once signed in — their own Partner invitations list, which
+	// needs no token at all.
 	mux.HandleFunc("GET /partners/invitations/{token}", app.reviewInvitation)
 	mux.HandleFunc("POST /partners/invitations/{token}/accept", app.acceptInvitation)
+	mux.HandleFunc("GET /partners/invitations/{token}/decline", app.confirmDecline)
+	mux.HandleFunc("POST /partners/invitations/{token}/decline", app.declineInvitation)
+	mux.HandleFunc("GET /partners/received-invitations/{id}", app.reviewReceivedInvitation)
+	mux.HandleFunc("POST /partners/received-invitations/{id}/accept", app.acceptReceivedInvitation)
+	mux.HandleFunc("GET /partners/received-invitations/{id}/decline", app.confirmReceivedDecline)
+	mux.HandleFunc("POST /partners/received-invitations/{id}/decline", app.declineReceivedInvitation)
+	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
+	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
@@ -117,10 +128,13 @@ type pageData struct {
 // Protectees they protect. The two areas stay separate so a Reciprocal
 // Partnership reads correctly in both (S3-45).
 type dashboardData struct {
-	CSRFToken  string
-	User       githubauth.User
-	Version    string
-	View       partnership.ProtecteeView
+	CSRFToken string
+	User      githubauth.User
+	Version   string
+	View      partnership.ProtecteeView
+	// Received is every live invitation addressed to this User's verified
+	// email, so an invitee who lost the email can still answer it.
+	Received   []partnership.ReceivedInvitation
 	Protecting []partnership.ProtecteeEntry
 }
 
@@ -153,8 +167,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
+	received, err := a.partnerships.ReceivedInvitations(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
 	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
-		CSRFToken: csrf, User: user, Version: a.version, View: view, Protecting: protecting,
+		CSRFToken: csrf, User: user, Version: a.version, View: view,
+		Received: received, Protecting: protecting,
 	})
 }
 
