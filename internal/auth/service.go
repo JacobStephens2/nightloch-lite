@@ -11,11 +11,10 @@ import (
 	"html"
 	"io"
 	"net"
-	netmail "net/mail"
 	"net/url"
-	"strings"
 	"time"
 
+	"github.com/JacobStephens2/nightloch-lite/internal/emailaddr"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
 
@@ -27,7 +26,7 @@ const (
 )
 
 var (
-	ErrInvalidEmail = errors.New("enter a valid email address")
+	ErrInvalidEmail = emailaddr.ErrInvalid
 	ErrHumanCheck   = errors.New("human verification failed")
 	ErrDelivery     = errors.New("magic-link delivery failed")
 )
@@ -67,7 +66,7 @@ func (s *Service) RequestMagicLink(ctx context.Context, rawEmail, ip, humanToken
 		}
 		return fmt.Errorf("verify human challenge: %w", err)
 	}
-	email, err := normalizeEmail(rawEmail)
+	email, err := emailaddr.Normalize(rawEmail)
 	if err != nil {
 		return err
 	}
@@ -158,20 +157,4 @@ func decodeAndHash(raw string) ([32]byte, error) {
 		return [32]byte{}, ErrInvalidLink
 	}
 	return sha256.Sum256(decoded), nil
-}
-
-func normalizeEmail(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || len(raw) > 254 || strings.ContainsAny(raw, "\r\n") {
-		return "", ErrInvalidEmail
-	}
-	address, err := netmail.ParseAddress(raw)
-	if err != nil || address.Name != "" || address.Address != raw {
-		return "", ErrInvalidEmail
-	}
-	at := strings.LastIndexByte(address.Address, '@')
-	if at <= 0 || at == len(address.Address)-1 || !strings.Contains(address.Address[at+1:], ".") {
-		return "", ErrInvalidEmail
-	}
-	return strings.ToLower(address.Address), nil
 }

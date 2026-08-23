@@ -12,7 +12,7 @@
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human apply |
 | 2 Magic-link sign-in | **Code in repo**; live two-email demo follows Slice 1 apply |
 | 9 Continuous deploy (ordered after Slice 2) | **Code in repo**; enable only after staging service setup |
-| 3 Partner graph + Activity | **Experience grill complete**; implementation not started |
+| 3 Partner graph + Activity | **3A in progress** — issues #3 and #4 done (transactional mail envelopes, durable Partner invitation); next is #5 acceptance |
 
 OpenTofu + `scripts/slice1-up.sh` ready. **No droplet until you apply.** Bitwarden laptop wiring verified (tokens inject; values never logged).
 
@@ -28,7 +28,7 @@ cd ~/GitHub/JacobStephens2/nightloch-lite
 1. **You:** `./scripts/slice1-up.sh plan` then `apply` (optional: adversarial review of Slice 1 code first)  
 2. **Deploy:** follow [docs/ops/SLICE-2-AUTH.md](./docs/ops/SLICE-2-AUTH.md) for Resend, Turnstile, migration, and the two-email auth demo
 3. **Deploy:** configure the staging GitHub environment using [docs/ops/SLICE-9-DEPLOY.md](./docs/ops/SLICE-9-DEPLOY.md), then set `DEPLOY_ENABLED=true`
-4. **Code:** turn the completed Slice 3 experience into a spec and blocker-linked tickets, then implement 3A → 3B → 3C
+4. **Code:** continue Slice 3 in ticket order — #5 accept the first Partnership, then #6–#8 to finish 3A, then 3B (#9–#13) and 3C (#14–#17)
 
 ## Secrets (non-secret metadata)
 

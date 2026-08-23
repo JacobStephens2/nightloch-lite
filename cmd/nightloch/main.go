@@ -17,6 +17,7 @@ import (
 	"github.com/JacobStephens2/nightloch-lite/internal/config"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 	"github.com/JacobStephens2/nightloch-lite/internal/webapp"
 )
 
@@ -130,13 +131,27 @@ func runServe() error {
 		},
 		settings.BaseURL,
 	)
+	partnerships := partnership.NewService(db, settings.BaseURL)
 	app, err := webapp.New(webapp.Options{
-		Auth: authService, DB: db, Logger: logger,
+		Auth: authService, DB: db, Logger: logger, Partnerships: partnerships,
 		TurnstileSite: settings.TurnstileSite, Version: version,
 	})
 	if err != nil {
 		return err
 	}
+
+	// Partnership mail is committed durably and transmitted afterwards, so the
+	// dispatcher both drains new work and resumes whatever a previous process
+	// left queued.
+	dispatchCtx, stopDispatch := context.WithCancel(context.Background())
+	defer stopDispatch()
+	go (&partnership.Dispatcher{
+		Service: partnerships,
+		Sender: &mailmessage.ResendSender{
+			APIKey: settings.ResendAPIKey, From: settings.ResendFrom, Client: externalHTTP,
+		},
+		Logger: logger,
+	}).Run(dispatchCtx)
 
 	server := &http.Server{
 		Addr:              settings.HTTPAddr,

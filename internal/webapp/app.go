@@ -18,6 +18,7 @@ import (
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
 const (
@@ -38,6 +39,7 @@ type Options struct {
 	Auth          authService
 	DB            *sql.DB
 	Logger        *slog.Logger
+	Partnerships  *partnership.Service
 	TurnstileSite string
 	Version       string
 }
@@ -47,6 +49,7 @@ type App struct {
 	auth          authService
 	db            *sql.DB
 	logger        *slog.Logger
+	partnerships  *partnership.Service
 	turnstileSite string
 	version       string
 	now           func() time.Time
@@ -56,8 +59,8 @@ type App struct {
 }
 
 func New(options Options) (*App, error) {
-	if options.Auth == nil || options.DB == nil || options.TurnstileSite == "" {
-		return nil, errors.New("webapp requires Auth, DB, and TurnstileSite")
+	if options.Auth == nil || options.DB == nil || options.Partnerships == nil || options.TurnstileSite == "" {
+		return nil, errors.New("webapp requires Auth, DB, Partnerships, and TurnstileSite")
 	}
 	if options.Logger == nil {
 		options.Logger = slog.Default()
@@ -70,6 +73,7 @@ func New(options Options) (*App, error) {
 		auth:          options.Auth,
 		db:            options.DB,
 		logger:        options.Logger,
+		partnerships:  options.Partnerships,
 		turnstileSite: options.TurnstileSite,
 		version:       options.Version,
 		now:           time.Now,
@@ -84,8 +88,11 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("GET /auth/check-email", app.checkEmail)
 	mux.HandleFunc("GET /auth/consume", app.consumeMagicLink)
 	mux.HandleFunc("POST /sign-out", app.signOut)
+	mux.HandleFunc("GET /partners/invite", app.invitePartnerForm)
+	mux.HandleFunc("POST /partners/invite", app.invitePartnerSubmit)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
+	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
 
 	app.handler = app.recoverPanics(app.securityHeaders(app.verifyCSRF(mux)))
 	return app, nil
@@ -104,6 +111,23 @@ type pageData struct {
 	Version       string
 }
 
+// dashboardData is the signed-in User's own protection state.
+type dashboardData struct {
+	CSRFToken string
+	User      githubauth.User
+	Version   string
+	View      partnership.ProtecteeView
+}
+
+// invitePageData carries the Add a Partner form, including a rejected
+// submission's own address so the Protectee can correct it.
+type invitePageData struct {
+	CSRFToken    string
+	Error        string
+	InviteeEmail string
+	Version      string
+}
+
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
@@ -114,7 +138,56 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	a.render(w, r, http.StatusOK, "home", pageData{CSRFToken: csrf, User: user, Version: a.version})
+	view, err := a.partnerships.ProtecteeView(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
+		CSRFToken: csrf, User: user, Version: a.version, View: view,
+	})
+}
+
+func (a *App) invitePartnerForm(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.currentUser(w, r); !ok {
+		return
+	}
+	csrf, err := a.csrfToken(w, r)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	a.render(w, r, http.StatusOK, "invite", invitePageData{CSRFToken: csrf, Version: a.version})
+}
+
+func (a *App) invitePartnerSubmit(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	inviteeEmail := r.PostFormValue("invitee_email")
+	_, err := a.partnerships.InvitePartner(r.Context(), partnership.InviteCommand{
+		ProtecteeID:  user.ID,
+		InviteeEmail: inviteeEmail,
+		// Log sharing defaults off: only an explicitly checked box turns it on.
+		LogSharing: r.PostFormValue("log_sharing") == "on",
+	})
+	if err == nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	if !partnership.IsRefusal(err) {
+		a.internalError(w, r, err)
+		return
+	}
+	csrf, csrfErr := a.csrfToken(w, r)
+	if csrfErr != nil {
+		a.internalError(w, r, csrfErr)
+		return
+	}
+	a.render(w, r, http.StatusUnprocessableEntity, "invite", invitePageData{
+		CSRFToken: csrf, Error: err.Error(), InviteeEmail: inviteeEmail, Version: a.version,
+	})
 }
 
 func (a *App) signInForm(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +321,13 @@ func (a *App) styles(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, stylesheet)
 }
 
-func (a *App) render(w http.ResponseWriter, r *http.Request, status int, name string, data pageData) {
+func (a *App) localTimeScript(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = io.WriteString(w, localTimeScript)
+}
+
+func (a *App) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
 	tmpl, ok := a.templates[name]
 	if !ok {
 		a.internalError(w, r, fmt.Errorf("unknown template %q", name))
