@@ -176,7 +176,7 @@ func (a *App) invitePartnerSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	if !isInvitationRefusal(err) {
+	if !partnership.IsRefusal(err) {
 		a.internalError(w, r, err)
 		return
 	}
@@ -188,23 +188,6 @@ func (a *App) invitePartnerSubmit(w http.ResponseWriter, r *http.Request) {
 	a.render(w, r, http.StatusUnprocessableEntity, "invite", invitePageData{
 		CSRFToken: csrf, Error: err.Error(), InviteeEmail: inviteeEmail, Version: a.version,
 	})
-}
-
-// isInvitationRefusal reports whether the Partnership module refused the
-// invitation on a rule the Protectee can see and correct, rather than failing.
-func isInvitationRefusal(err error) bool {
-	for _, refusal := range []error{
-		partnership.ErrInvalidEmail,
-		partnership.ErrSelfInvitation,
-		partnership.ErrDuplicateInvitation,
-		partnership.ErrAlreadyPartnered,
-		partnership.ErrOnePartnerLimit,
-	} {
-		if errors.Is(err, refusal) {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *App) signInForm(w http.ResponseWriter, r *http.Request) {

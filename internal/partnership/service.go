@@ -51,6 +51,25 @@ var (
 	ErrOnePartnerLimit = errors.New("Nightloch currently supports one Partner per Protectee")
 )
 
+// invitationRefusals are the rules a Protectee can see and correct. Callers
+// use IsRefusal rather than restating this list.
+var invitationRefusals = []error{
+	ErrInvalidEmail, ErrSelfInvitation, ErrDuplicateInvitation,
+	ErrAlreadyPartnered, ErrOnePartnerLimit,
+}
+
+// IsRefusal reports whether err is the module refusing an invitation on a rule
+// the Protectee can act on, rather than a failure. Its message is safe to show
+// to the Protectee who submitted the invitation.
+func IsRefusal(err error) bool {
+	for _, refusal := range invitationRefusals {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
 // Service is the deep Partnership module. Callers pass authenticated User IDs
 // and receive viewer-authorized views; transaction ordering, recipient
 // selection, token hashing, and canonical rendering stay inside.
@@ -110,7 +129,8 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		Scan(&protecteeEmail); err != nil {
 		return Invitation{}, fmt.Errorf("read inviting Protectee: %w", err)
 	}
-	if err := checkInvitationAllowed(ctx, tx, command.ProtecteeID, protecteeEmail, inviteeEmail); err != nil {
+	livePartners, err := checkInvitationAllowed(ctx, tx, command.ProtecteeID, protecteeEmail, inviteeEmail, now)
+	if err != nil {
 		return Invitation{}, err
 	}
 
@@ -150,18 +170,18 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		ProtecteeEmail: protecteeEmail,
 		InviteeEmail:   inviteeEmail,
 		LogSharing:     command.LogSharing,
-		// 3A permits no existing Partners. 3B recounts the live Roster here and
-		// adds the current-Partner Action alerts as further delivery jobs.
-		PartnerCount: 0,
+		// The 3A exposure gate means this is always zero today. 3B lifts the
+		// gate and adds one Action alert per current Partner (S3-20).
+		PartnerCount: livePartners,
 		ReviewURL:    s.reviewURL(rawToken),
 		ExpiresAt:    expiresAt,
 	})
+	message.IdempotencyKey = idempotencyKey(message.Kind, message.To, tokenHash, 1)
 	if err := queueDelivery(ctx, tx, deliveryJob{
-		ActivityID:     activityID,
-		InvitationID:   &invitationID,
-		Message:        message,
-		IdempotencyKey: idempotencyKey(message.Kind, message.Recipient, tokenHash, 1),
-		CreatedAt:      now,
+		ActivityID:   activityID,
+		InvitationID: &invitationID,
+		Message:      message,
+		CreatedAt:    now,
 	}); err != nil {
 		return Invitation{}, err
 	}
@@ -176,17 +196,21 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 }
 
 // checkInvitationAllowed applies the pending-invitation, live-Partnership, and
-// temporary 3A exposure rules. Every check is scoped to one direction, so the
-// reverse-direction invitation that forms a Reciprocal Partnership stays open.
-func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, protecteeEmail, inviteeEmail string) error {
+// temporary 3A exposure rules, and returns the Protectee's live Partner count.
+// Every check is scoped to one direction, so the reverse-direction invitation
+// that forms a Reciprocal Partnership stays open. An invitation past its
+// seven-day expiry stops counting immediately, so a Protectee is never locked
+// out of Add a Partner while waiting for the sweep that marks it expired.
+func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, protecteeEmail, inviteeEmail string, now time.Time) (int, error) {
 	if inviteeEmail == protecteeEmail {
-		return ErrSelfInvitation
+		return 0, ErrSelfInvitation
 	}
-	var duplicateInvitation, duplicatePartnership, livePartners, pendingInvitations int
+	var duplicateInvitation, duplicatePartnership, livePartners, liveInvitations int
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM partner_invitations
-			  WHERE protectee_id = ?1 AND state = 'pending' AND invitee_email = ?2),
+			  WHERE protectee_id = ?1 AND state = 'pending' AND expires_at > ?3
+			    AND invitee_email = ?2),
 			(SELECT COUNT(*) FROM partnerships
 			  JOIN users ON users.id = partnerships.partner_id
 			  WHERE partnerships.protectee_id = ?1 AND partnerships.ended_at IS NULL
@@ -194,21 +218,21 @@ func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, 
 			(SELECT COUNT(*) FROM partnerships
 			  WHERE protectee_id = ?1 AND ended_at IS NULL),
 			(SELECT COUNT(*) FROM partner_invitations
-			  WHERE protectee_id = ?1 AND state = 'pending')`,
-		protecteeID, inviteeEmail).
-		Scan(&duplicateInvitation, &duplicatePartnership, &livePartners, &pendingInvitations)
+			  WHERE protectee_id = ?1 AND state = 'pending' AND expires_at > ?3)`,
+		protecteeID, inviteeEmail, now.Unix()).
+		Scan(&duplicateInvitation, &duplicatePartnership, &livePartners, &liveInvitations)
 	if err != nil {
-		return fmt.Errorf("check existing Partner relationships: %w", err)
+		return 0, fmt.Errorf("check existing Partner relationships: %w", err)
 	}
 	switch {
 	case duplicateInvitation > 0:
-		return ErrDuplicateInvitation
+		return 0, ErrDuplicateInvitation
 	case duplicatePartnership > 0:
-		return ErrAlreadyPartnered
-	case livePartners+pendingInvitations > 0:
-		return ErrOnePartnerLimit
+		return 0, ErrAlreadyPartnered
+	case livePartners+liveInvitations > 0:
+		return 0, ErrOnePartnerLimit
 	}
-	return nil
+	return livePartners, nil
 }
 
 // ProtecteeView is the authenticated Protectee's own protection state.
@@ -233,7 +257,7 @@ type PendingInvitation struct {
 	LogSharing    bool
 	SentAt        time.Time
 	ExpiresAt     time.Time
-	DeliveryState string
+	DeliveryState DeliveryState
 }
 
 // ProtecteeView returns the Partner lock, Roster, and pending invitations for
@@ -257,7 +281,7 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 			return ProtecteeView{}, fmt.Errorf("read Roster row: %w", err)
 		}
 		entry.Since = time.Unix(since, 0).UTC()
-		entry.LogSharing = logSharing == 1
+		entry.LogSharing = intToBool(logSharing)
 		view.Partners = append(view.Partners, entry)
 	}
 	if err := partners.Err(); err != nil {
@@ -271,10 +295,11 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.invitation_id = invitation.id
 		                    AND job.recipient_email = invitation.invitee_email
-		                  ORDER BY job.id DESC LIMIT 1), 'queued')
+		                  ORDER BY job.id DESC LIMIT 1), ?)
 		FROM partner_invitations invitation
 		WHERE invitation.protectee_id = ? AND invitation.state = 'pending'
-		ORDER BY invitation.created_at`, protecteeID)
+		  AND invitation.expires_at > ?
+		ORDER BY invitation.created_at`, DeliveryQueued, protecteeID, s.now().UTC().Unix())
 	if err != nil {
 		return ProtecteeView{}, fmt.Errorf("read pending Partner invitations: %w", err)
 	}
@@ -286,7 +311,7 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 		if err := invitations.Scan(&pending.InviteeEmail, &logSharing, &sentAt, &expiresAt, &pending.DeliveryState); err != nil {
 			return ProtecteeView{}, fmt.Errorf("read pending Partner invitation: %w", err)
 		}
-		pending.LogSharing = logSharing == 1
+		pending.LogSharing = intToBool(logSharing)
 		pending.SentAt = time.Unix(sentAt, 0).UTC()
 		pending.ExpiresAt = time.Unix(expiresAt, 0).UTC()
 		view.PendingInvitations = append(view.PendingInvitations, pending)
@@ -348,4 +373,8 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func intToBool(value int) bool {
+	return value == 1
 }

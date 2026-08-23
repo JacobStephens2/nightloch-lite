@@ -171,18 +171,6 @@ func TestMagicLinkRateLimitsByEmailAndIP(t *testing.T) {
 	}
 }
 
-func TestNormalizeEmailRejectsDisplayNamesAndMalformedInput(t *testing.T) {
-	t.Parallel()
-	for _, input := range []string{"", "Person <person@example.com>", "person@localhost", "person@example.com\nBcc:x@example.com"} {
-		if _, err := normalizeEmail(input); !errors.Is(err, ErrInvalidEmail) {
-			t.Errorf("normalizeEmail(%q) = %v", input, err)
-		}
-	}
-	if got, err := normalizeEmail("Person@Example.com"); err != nil || got != "person@example.com" {
-		t.Fatalf("normalizeEmail(valid) = %q, %v", got, err)
-	}
-}
-
 func mustTokenFromEnvelope(t *testing.T, envelope mailmessage.Envelope) string {
 	t.Helper()
 	const prefix = "Sign in to Nightloch (this link expires in 15 minutes and can be used once):\n\n"

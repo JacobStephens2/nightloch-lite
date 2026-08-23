@@ -66,7 +66,7 @@ func (s *Service) RequestMagicLink(ctx context.Context, rawEmail, ip, humanToken
 		}
 		return fmt.Errorf("verify human challenge: %w", err)
 	}
-	email, err := normalizeEmail(rawEmail)
+	email, err := emailaddr.Normalize(rawEmail)
 	if err != nil {
 		return err
 	}
@@ -157,8 +157,4 @@ func decodeAndHash(raw string) ([32]byte, error) {
 		return [32]byte{}, ErrInvalidLink
 	}
 	return sha256.Sum256(decoded), nil
-}
-
-func normalizeEmail(raw string) (string, error) {
-	return emailaddr.Normalize(raw)
 }
