@@ -101,7 +101,7 @@ Authoritative detail: [SECURITY-POLICY-DESIGN §3](./docs/SECURITY-POLICY-DESIGN
 
 ### Account deletion
 
-Protectee may delete account via **72h cooling-off** + notify related parties; transactional teardown of peers, AGH clients, IPs (quarantine), and edges.
+Protectee may delete account via **72h cooling-off** + separate per-recipient notices to related parties. Starting deletion requires typing `DELETE` after an exact consequence summary, immediately ends every Partnership in which the deleting User is the Partner, cancels all pending invitations involving them, and prevents new invitation sends or acceptances; canceling deletion restores none of these. Ordinary rules continue for the deleting User’s Policy, Devices, and Log sharing, while only that User may cancel the fixed timer. The deleting User and active Partners protecting them see the exact deadline. Those Partnerships and Partners’ ordinary powers remain active until deletion completes, followed by transactional teardown of Devices, AGH clients, IPs (quarantine), and those remaining Partnerships. Completion email is attributable; retained former-Partner receipts use **Deleted User**.
 
 ---
 
@@ -128,6 +128,7 @@ Full predicate and examples: [docs/SECURITY-POLICY-DESIGN.md](./docs/SECURITY-PO
 - **Server unreachable** with full tunnel typically **blackholes** the device until the user disables the VPN (not “fail open”).  
 - **DNS-level app blocks** (e.g. Instagram) can be partial due to CDNs and client caches.  
 - **Mutual peer edges** make asymmetry cosmetic by mutual consent: if A and B partner each other, either can loosen the other on request (inherent to peer accountability, same class as Covenant Eyes).  
+- **A colluding Partner can loosen immediately.** Adding that Partner is visible to the existing Roster but does not require their approval in v1. Nightloch provides signal and a delay on removing independent Partners; it does not prevent collusion or a Protectee from turning off the VPN.  
 - **Solo dogfood** (one human, two inboxes) validates plumbing, not that a real second person will honor cooling-off or notice partner-add alerts.
 
 ---
