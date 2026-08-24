@@ -54,6 +54,48 @@ func (s DeliveryState) Label() string {
 	}
 }
 
+// Reachability is what an active Roster row says about Nightloch's ability to
+// reach one Partner by email. It is derived from that Partner's most recent
+// delivery job, so a later success clears the warning while the failure itself
+// stays in Activity. It is a visible signal only: an unreachable Partner keeps
+// every power and every lifecycle clock keeps running (S3-58).
+type Reachability string
+
+const (
+	// ReachabilityOK is the ordinary state and renders as no warning at all.
+	ReachabilityOK          Reachability = ""
+	ReachabilityDelayed     Reachability = "delayed"
+	ReachabilityUnreachable Reachability = "unreachable"
+)
+
+// Warning reports whether this Roster row should show a reachability warning.
+func (r Reachability) Warning() bool { return r != ReachabilityOK }
+
+// Label is the approved product wording for this state (S3-47).
+func (r Reachability) Label() string {
+	switch r {
+	case ReachabilityDelayed:
+		return "Delivery delayed"
+	case ReachabilityUnreachable:
+		return "Nightloch cannot reach this Partner"
+	default:
+		return "Reachable"
+	}
+}
+
+// reachabilityOf folds one delivery job's state into what the Roster shows. A
+// queued job is not yet evidence of anything, so only an actual failure warns.
+func reachabilityOf(state DeliveryState) Reachability {
+	switch state {
+	case DeliveryDelayed:
+		return ReachabilityDelayed
+	case DeliveryFailed:
+		return ReachabilityUnreachable
+	default:
+		return ReachabilityOK
+	}
+}
+
 // deliveryJob is one prepared message queued for exactly one recipient, in the
 // same transaction as the mutation it reports (ADR 0002).
 type deliveryJob struct {
@@ -77,6 +119,36 @@ func queueDelivery(ctx context.Context, tx *sql.Tx, job deliveryJob) error {
 		job.CreatedAt.UTC().Unix(), job.CreatedAt.UTC().Unix())
 	if err != nil {
 		return fmt.Errorf("queue delivery job: %w", err)
+	}
+	return nil
+}
+
+// invitationDelivery is the scope every message about one invitation shares:
+// the Activity entry the messages report, the invitation and any Partnership
+// they hang off, and the token hash that keeps their idempotency keys stable.
+type invitationDelivery struct {
+	ActivityID    int64
+	InvitationID  int64
+	PartnershipID *int64
+	TokenHash     [32]byte
+	At            time.Time
+}
+
+// queueInvitationMessages queues one prepared message per recipient. Position
+// within this scope is what separates two recipients' idempotency keys, so a
+// retry after a crashed process cannot become a second provider send.
+func queueInvitationMessages(ctx context.Context, tx *sql.Tx, messages []preparedMessage, scope invitationDelivery) error {
+	for sequence, message := range messages {
+		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, scope.TokenHash, sequence+1)
+		if err := queueDelivery(ctx, tx, deliveryJob{
+			ActivityID:    scope.ActivityID,
+			InvitationID:  &scope.InvitationID,
+			PartnershipID: scope.PartnershipID,
+			Message:       message,
+			CreatedAt:     scope.At,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

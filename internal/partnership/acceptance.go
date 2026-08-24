@@ -16,11 +16,13 @@ const (
 	// acceptance that creates a durable Partnership.
 	ActionInvitationAccepted = "partner_invitation_accepted"
 
-	// MessagePartnershipAcceptedProtectee and MessagePartnershipAcceptedPartner
-	// are the two separate acceptance messages. Recipients never share an
-	// envelope, so no recipient list is ever exposed (S3-21).
-	MessagePartnershipAcceptedProtectee = "partnership_accepted_protectee"
-	MessagePartnershipAcceptedPartner   = "partnership_accepted_partner"
+	// MessagePartnershipAcceptedExisting and MessagePartnershipAcceptedPartner
+	// are the two separate acceptance messages, named for their audiences: the
+	// Protectee and their prior Partners read the first, the Partner who just
+	// accepted reads the second. Recipients never share an envelope, so no
+	// recipient list is ever exposed (S3-21).
+	MessagePartnershipAcceptedExisting = "partnership_accepted_existing"
+	MessagePartnershipAcceptedPartner  = "partnership_accepted_partner"
 
 	// edgeTypePeer is the only relationship implemented in v1. The `guardian`
 	// value stays reserved in the schema (F33).
@@ -115,13 +117,10 @@ func (s *Service) ReviewInvitation(ctx context.Context, ref InvitationRef, viewe
 		return review, nil
 	}
 
-	// The reverse-direction count belongs to the acceptance disclosure, which
-	// 3B adds once a Reciprocal Partnership is reachable.
-	inviteeUserID, err := readUserID(ctx, s.db, invitation.inviteeEmail)
-	if err != nil {
-		return InvitationReview{}, err
-	}
-	partnerCount, _, err := readRosterShape(ctx, s.db, invitation.protecteeID, inviteeUserID)
+	// Before acceptance the invitee learns only how many Partners already
+	// protect this Protectee, never who they are (S3-06). The reciprocal
+	// consequence belongs to the acceptance disclosures instead.
+	partnerCount, err := countLivePartners(ctx, s.db, invitation.protecteeID)
 	if err != nil {
 		return InvitationReview{}, err
 	}
@@ -185,7 +184,16 @@ func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewe
 		return Acceptance{}, fmt.Errorf("read Partnership id: %w", err)
 	}
 
-	partnerCount, reciprocal, err := readRosterShape(ctx, tx, protecteeID, viewerID)
+	// The Roster now includes the Partner who just accepted, so it answers
+	// both the count every recipient is told and who the prior Partners are.
+	roster, err := livePartnerEmails(ctx, tx, protecteeID)
+	if err != nil {
+		return Acceptance{}, err
+	}
+	partnerCount := len(roster)
+	// Reciprocal is the reverse direction: this Protectee also protects the
+	// Partner who just accepted.
+	reciprocal, err := protects(ctx, tx, protecteeID, viewerID)
 	if err != nil {
 		return Acceptance{}, err
 	}
@@ -218,23 +226,25 @@ func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewe
 		AcceptedAt:      now,
 		DashboardURL:    s.dashboardURL(),
 	}
-	// The Protectee and the new Partner receive different disclosures, so each
-	// gets its own envelope; 3B adds one more per prior Partner (S3-20).
+	// The new Partner reads a different disclosure from everyone else, and
+	// every recipient gets their own envelope, so no recipient learns who else
+	// was told (S3-20, S3-21). The prior Partners are entitled to the same
+	// alert as the Protectee: a new Partner acts independently of them.
 	messages := []preparedMessage{
-		renderAcceptanceToProtectee(acceptance),
+		renderAcceptanceToProtecteeAndPriorPartners(acceptance, protecteeEmail),
 		renderAcceptanceToNewPartner(acceptance),
 	}
-	for sequence, message := range messages {
-		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, tokenHash, sequence+1)
-		if err := queueDelivery(ctx, tx, deliveryJob{
-			ActivityID:    activityID,
-			InvitationID:  &invitationID,
-			PartnershipID: &partnershipID,
-			Message:       message,
-			CreatedAt:     now,
-		}); err != nil {
-			return Acceptance{}, err
+	for _, priorPartner := range roster {
+		if priorPartner != inviteeEmail {
+			messages = append(messages,
+				renderAcceptanceToProtecteeAndPriorPartners(acceptance, priorPartner))
 		}
+	}
+	if err := queueInvitationMessages(ctx, tx, messages, invitationDelivery{
+		ActivityID: activityID, InvitationID: invitationID,
+		PartnershipID: &partnershipID, TokenHash: tokenHash, At: now,
+	}); err != nil {
+		return Acceptance{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -262,6 +272,9 @@ type ProtecteeEntry struct {
 	// keeps every power until it arrives.
 	CoolingOffEndsAt time.Time
 	Roster           []RosterEntry
+	// PendingInvitations is this Protectee's outstanding invitations. A
+	// Partner may inspect them but holds no control over them (S3-15).
+	PendingInvitations []PendingInvitation
 }
 
 // CoolingOffRunning reports whether this Protectee has asked to end this
@@ -309,7 +322,12 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 		if err != nil {
 			return nil, err
 		}
+		pending, err := s.pendingInvitations(ctx, person.ProtecteeID)
+		if err != nil {
+			return nil, err
+		}
 		protecting[index].Roster = roster
+		protecting[index].PendingInvitations = pending
 	}
 	return protecting, nil
 }
@@ -337,13 +355,28 @@ func (s *Service) CanViewLogs(ctx context.Context, actorID, protecteeID int64) (
 	return sharing > 0, nil
 }
 
+// roster is the Protectee's active Roster, identical for every entitled
+// viewer. Reciprocal state and reachability are derived here rather than by
+// the caller, so the Protectee and each of their Partners cannot disagree
+// about the same row. Reachability follows the address rather than this one
+// Partnership, because the question a Roster row answers is whether Nightloch
+// can reach that Partner at all — an alert about someone else's Partnership
+// bounces from the same mailbox. #13 replaces the retry-derived source with
+// provider delivery events.
 func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT partnerships.id, users.email, partnerships.accepted_at,
-		       partnerships.log_sharing, COALESCE(partnerships.cooling_off_ends_at, 0)
+		       partnerships.log_sharing, COALESCE(partnerships.cooling_off_ends_at, 0),
+		       EXISTS(SELECT 1 FROM partnerships reverse
+		               WHERE reverse.protectee_id = partnerships.partner_id
+		                 AND reverse.partner_id = partnerships.protectee_id
+		                 AND reverse.ended_at IS NULL),
+		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
+		                  WHERE job.recipient_email = users.email
+		                  ORDER BY job.id DESC LIMIT 1), ?)
 		FROM partnerships JOIN users ON users.id = partnerships.partner_id
 		WHERE partnerships.protectee_id = ? AND partnerships.ended_at IS NULL
-		ORDER BY partnerships.accepted_at`, protecteeID)
+		ORDER BY partnerships.accepted_at, partnerships.id`, DeliveryQueued, protecteeID)
 	if err != nil {
 		return nil, fmt.Errorf("read Roster: %w", err)
 	}
@@ -352,12 +385,16 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 	for rows.Next() {
 		var entry RosterEntry
 		var since, endsAt int64
-		var logSharing int
-		if err := rows.Scan(&entry.PartnershipID, &entry.PartnerEmail, &since, &logSharing, &endsAt); err != nil {
+		var logSharing, reciprocal int
+		var delivery DeliveryState
+		if err := rows.Scan(&entry.PartnershipID, &entry.PartnerEmail, &since, &logSharing,
+			&endsAt, &reciprocal, &delivery); err != nil {
 			return nil, fmt.Errorf("read Roster row: %w", err)
 		}
 		entry.Since = time.Unix(since, 0).UTC()
 		entry.LogSharing = intToBool(logSharing)
+		entry.Reciprocal = intToBool(reciprocal)
+		entry.Reachability = reachabilityOf(delivery)
 		if endsAt != 0 {
 			entry.CoolingOffEndsAt = time.Unix(endsAt, 0).UTC()
 		}
@@ -375,21 +412,36 @@ func (s *Service) dashboardURL() string {
 	return link.String()
 }
 
-// readRosterShape reports how many Partners currently protect protecteeID and
-// whether partnerID already protects them in the opposite direction. Both the
-// review disclosure and the acceptance messages need the same two numbers, and
-// acceptance needs them inside its transaction, so it takes either handle.
-func readRosterShape(ctx context.Context, queryer rowQueryer, protecteeID, partnerID int64) (partners int, reciprocal bool, err error) {
-	var reverse int
-	if err := queryer.QueryRowContext(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM partnerships WHERE protectee_id = ?1 AND ended_at IS NULL),
-			(SELECT COUNT(*) FROM partnerships
-			  WHERE protectee_id = ?2 AND partner_id = ?1 AND ended_at IS NULL)`,
-		protecteeID, partnerID).Scan(&partners, &reverse); err != nil {
-		return 0, false, fmt.Errorf("read Roster shape: %w", err)
+// countLivePartners is how many Partners currently protect protecteeID. It is
+// the one number an invitee learns before acceptance (S3-06) and the count
+// every acceptance disclosure is stated in.
+func countLivePartners(ctx context.Context, queryer rowQueryer, protecteeID int64) (int, error) {
+	var partners int
+	if err := queryer.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM partnerships WHERE protectee_id = ? AND ended_at IS NULL",
+		protecteeID).Scan(&partners); err != nil {
+		return 0, fmt.Errorf("read active Partner count: %w", err)
 	}
-	return partners, reverse > 0, nil
+	return partners, nil
+}
+
+// protects reports whether partnerID holds a live Partnership over
+// protecteeID. Partnerships are directional, so this is the single question
+// behind "reciprocal": the reverse-direction Partnership either exists or it
+// does not. A partnerID of zero is an address that has never signed in, which
+// protects nobody.
+func protects(ctx context.Context, queryer rowQueryer, partnerID, protecteeID int64) (bool, error) {
+	if partnerID <= 0 || protecteeID <= 0 {
+		return false, nil
+	}
+	var live int
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM partnerships
+		WHERE protectee_id = ? AND partner_id = ? AND ended_at IS NULL`,
+		protecteeID, partnerID).Scan(&live); err != nil {
+		return false, fmt.Errorf("read reverse-direction Partnership: %w", err)
+	}
+	return live > 0, nil
 }
 
 // rowQueryer is satisfied by both *sql.DB and *sql.Tx.

@@ -134,8 +134,10 @@ func TestInvitePartnerRejectsSelfDuplicateAndAllowsReverseDirection(t *testing.T
 	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); !errors.Is(err, ErrDuplicateInvitation) {
 		t.Fatalf("duplicate invitation error = %v", err)
 	}
-	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "someone-else@example.com"}); !errors.Is(err, ErrOnePartnerLimit) {
-		t.Fatalf("3A exposure gate error = %v", err)
+	// Nightloch caps nothing: a second address is invitable while the first
+	// invitation is still pending.
+	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "someone-else@example.com"}); err != nil {
+		t.Fatalf("second pending invitation refused: %v", err)
 	}
 	if _, err := service.InvitePartner(ctx, InviteCommand{ProtecteeID: invitee, InviteeEmail: "protectee@example.com"}); err != nil {
 		t.Fatalf("reverse direction rejected: %v", err)
@@ -332,8 +334,8 @@ func TestLapsedInvitationStopsBlockingTheNextInvitation(t *testing.T) {
 		t.Fatalf("lapsed invitation still blocked a new invitation: %v", err)
 	}
 	// The same address may also be invited again once the first one lapsed.
-	if _, err := lapsed.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); !errors.Is(err, ErrOnePartnerLimit) {
-		t.Fatalf("second live invitation error = %v, want the 3A gate", err)
+	if _, err := lapsed.InvitePartner(ctx, InviteCommand{ProtecteeID: protectee, InviteeEmail: "invitee@example.com"}); err != nil {
+		t.Fatalf("lapsed invitation still blocked its own address: %v", err)
 	}
 }
 
