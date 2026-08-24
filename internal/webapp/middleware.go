@@ -38,6 +38,13 @@ func (a *App) verifyCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// A provider delivery callback has no session to ride on, so CSRF is
+		// not the control that protects it; its signature is, and the body
+		// that signature covers must not be consumed by ParseForm here.
+		if r.URL.Path == deliveryWebhookPath {
+			next.ServeHTTP(w, r)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "Invalid form submission.", http.StatusBadRequest)

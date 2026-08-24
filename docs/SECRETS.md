@@ -32,6 +32,7 @@
 | API key | Resend dashboard → API keys |
 | Domain | Add `nightloch.app`; copy DKIM/SPF/verify TXT into tfvars with `manage_resend_dns = true` |
 | From | `Nightloch <alerts@nightloch.app>` (monitored) once domain verified |
+| Webhook signing secret | Resend dashboard → Webhooks → endpoint `https://lite.nightloch.app/webhooks/resend` → **Signing Secret** (`whsec_…`). Required from Slice 3B: it authenticates the delivery, bounce, and complaint callbacks behind Partner reachability |
 
 ## Later slices (not Slice 1)
 

@@ -15,13 +15,17 @@ const defaultResendFrom = "Nightloch <alerts@nightloch.app>"
 
 // Config contains the configuration required by the HTTP control plane.
 type Config struct {
-	BaseURL         *url.URL
-	DatabasePath    string
-	HTTPAddr        string
-	ResendAPIKey    string
-	ResendFrom      string
-	TurnstileSecret string
-	TurnstileSite   string
+	BaseURL      *url.URL
+	DatabasePath string
+	HTTPAddr     string
+	ResendAPIKey string
+	ResendFrom   string
+	// ResendWebhookSecret authenticates Resend's delivery callbacks. Without
+	// it Partner reachability could only reflect Nightloch's own send
+	// attempts, never a bounce or a complaint, so it is required.
+	ResendWebhookSecret string
+	TurnstileSecret     string
+	TurnstileSite       string
 }
 
 // DatabasePath returns the configured SQLite path for commands that only need
@@ -58,13 +62,14 @@ func Load() (Config, error) {
 	}
 
 	config := Config{
-		BaseURL:         baseURL,
-		DatabasePath:    databasePath,
-		HTTPAddr:        httpAddr,
-		ResendAPIKey:    strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
-		ResendFrom:      strings.TrimSpace(os.Getenv("RESEND_FROM")),
-		TurnstileSecret: strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
-		TurnstileSite:   strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
+		BaseURL:             baseURL,
+		DatabasePath:        databasePath,
+		HTTPAddr:            httpAddr,
+		ResendAPIKey:        strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
+		ResendFrom:          strings.TrimSpace(os.Getenv("RESEND_FROM")),
+		ResendWebhookSecret: strings.TrimSpace(os.Getenv("RESEND_WEBHOOK_SECRET")),
+		TurnstileSecret:     strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
+		TurnstileSite:       strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
 	}
 	if config.ResendFrom == "" {
 		config.ResendFrom = defaultResendFrom
@@ -72,9 +77,10 @@ func Load() (Config, error) {
 
 	var missing []string
 	for name, value := range map[string]string{
-		"RESEND_API_KEY":       config.ResendAPIKey,
-		"TURNSTILE_SECRET_KEY": config.TurnstileSecret,
-		"TURNSTILE_SITE_KEY":   config.TurnstileSite,
+		"RESEND_API_KEY":        config.ResendAPIKey,
+		"RESEND_WEBHOOK_SECRET": config.ResendWebhookSecret,
+		"TURNSTILE_SECRET_KEY":  config.TurnstileSecret,
+		"TURNSTILE_SITE_KEY":    config.TurnstileSite,
 	} {
 		if value == "" {
 			missing = append(missing, name)

@@ -29,30 +29,58 @@ type DeliveryState string
 
 const (
 	DeliveryQueued DeliveryState = "queued"
-	// DeliveryDelayed marks a retryable failure that is still being retried.
+	// DeliveryDelayed marks a retryable failure that is still being retried,
+	// whether Nightloch's own send attempt failed or the provider reported a
+	// delay or a transient bounce.
 	DeliveryDelayed DeliveryState = "delayed"
-	DeliverySent    DeliveryState = "sent"
-	// DeliveryDelivered and hard-bounce handling arrive with the provider
-	// webhooks in 3B; the vocabulary is fixed here so no migration is needed.
+	// DeliverySent is accepted by the provider; DeliveryDelivered is the
+	// provider reporting that it reached the mailbox.
+	DeliverySent      DeliveryState = "sent"
 	DeliveryDelivered DeliveryState = "delivered"
-	DeliveryFailed    DeliveryState = "failed"
+	// DeliveryFailed is over and unsuccessful: a hard bounce, a complaint, or
+	// exhausted retries.
+	DeliveryFailed DeliveryState = "failed"
 )
 
-// Label is the approved product wording for this state (S3-47).
-func (s DeliveryState) Label() string {
-	switch s {
-	case DeliverySent:
-		return "Sent"
-	case DeliveryDelivered:
-		return "Delivered"
-	case DeliveryDelayed:
-		return "Delivery delayed"
-	case DeliveryFailed:
-		return "Invitation not delivered"
-	default:
-		return "Queued"
-	}
+// deliveryMeaning is everything one delivery state means, in one place. Three
+// derivations hang off a delivery state — the product wording, the Roster
+// warning, and how conclusive it is when two provider events tie on the same
+// second — and a state that appeared in only two of three switches would read
+// correctly on one screen and wrongly on another.
+type deliveryMeaning struct {
+	// label is the approved product wording (S3-47).
+	label string
+	// reachability is what this state makes a Roster row say.
+	reachability Reachability
+	// precedence ranks how conclusive this state is. It is the only ordering
+	// available when two provider events share a timestamp.
+	precedence int
 }
+
+// deliveryMeanings is keyed by state; a state missing from it reads as queued,
+// which claims nothing.
+var deliveryMeanings = map[DeliveryState]deliveryMeaning{
+	DeliveryQueued:    {label: "Queued", reachability: ReachabilityOK, precedence: 0},
+	DeliverySent:      {label: "Sent", reachability: ReachabilityOK, precedence: 1},
+	DeliveryDelivered: {label: "Delivered", reachability: ReachabilityOK, precedence: 2},
+	DeliveryDelayed:   {label: "Delivery delayed", reachability: ReachabilityDelayed, precedence: 3},
+	DeliveryFailed:    {label: "Invitation not delivered", reachability: ReachabilityUnreachable, precedence: 4},
+}
+
+func (s DeliveryState) meaning() deliveryMeaning {
+	if meaning, known := deliveryMeanings[s]; known {
+		return meaning
+	}
+	return deliveryMeanings[DeliveryQueued]
+}
+
+// Failed reports whether this delivery is over and unsuccessful, which is the
+// one delivery state with a remedy: an invitation is immutable, so a Protectee
+// corrects a bad address by cancelling and sending a new invitation (S3-47).
+func (s DeliveryState) Failed() bool { return s == DeliveryFailed }
+
+// Label is the approved product wording for this state (S3-47).
+func (s DeliveryState) Label() string { return s.meaning().label }
 
 // Reachability is what an active Roster row says about Nightloch's ability to
 // reach one Partner by email. It is derived from that Partner's most recent
@@ -85,16 +113,7 @@ func (r Reachability) Label() string {
 
 // reachabilityOf folds one delivery job's state into what the Roster shows. A
 // queued job is not yet evidence of anything, so only an actual failure warns.
-func reachabilityOf(state DeliveryState) Reachability {
-	switch state {
-	case DeliveryDelayed:
-		return ReachabilityDelayed
-	case DeliveryFailed:
-		return ReachabilityUnreachable
-	default:
-		return ReachabilityOK
-	}
-}
+func reachabilityOf(state DeliveryState) Reachability { return state.meaning().reachability }
 
 // deliveryJob is one prepared message queued for exactly one recipient, in the
 // same transaction as the mutation it reports (ADR 0002).
@@ -186,14 +205,15 @@ func (s *Service) DispatchDue(ctx context.Context, sender mailmessage.Sender, li
 		if !claimed {
 			continue
 		}
-		if sendErr := sender.Send(ctx, job.envelope); sendErr != nil {
+		receipt, sendErr := sender.Send(ctx, job.envelope)
+		if sendErr != nil {
 			failures = append(failures, fmt.Errorf("delivery job %d: %w", job.id, sendErr))
 			if err := s.recordDeliveryFailure(ctx, job.id, job.attempts+1, sendErr); err != nil {
 				return sent, err
 			}
 			continue
 		}
-		if err := s.recordDeliverySuccess(ctx, job.id, now); err != nil {
+		if err := s.recordDeliverySuccess(ctx, job.id, receipt.ProviderMessageID, now); err != nil {
 			return sent, err
 		}
 		sent++
@@ -249,18 +269,24 @@ func (s *Service) claimDeliveryJob(ctx context.Context, job dueJob, now time.Tim
 	return affected == 1, nil
 }
 
-// recordDeliverySuccess drops the rendered body. The message is gone to the
-// provider, so keeping a live invitation bearer token in a second table would
-// widen the token's blast radius for no operational gain. Recipient, subject,
-// and idempotency key remain for the audit trail.
-func (s *Service) recordDeliverySuccess(ctx context.Context, id int64, now time.Time) error {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE mail_delivery_jobs
-		SET state = ?, sent_at = ?, last_error = NULL, body_text = ?, body_html = ?
-		WHERE id = ?`, DeliverySent, now.Unix(), redactedBody, redactedBody, id); err != nil {
-		return fmt.Errorf("record delivery success: %w", err)
-	}
-	return nil
+// recordDeliverySuccess drops the rendered body and keeps the provider's own
+// message id. The message is gone to the provider, so keeping a live
+// invitation bearer token in a second table would widen the token's blast
+// radius for no operational gain. Recipient, subject, idempotency key, and the
+// provider message id remain: the first three are the audit trail, and the
+// last is what a later delivery, bounce, or complaint callback names.
+func (s *Service) recordDeliverySuccess(ctx context.Context, id int64, providerMessageID string, now time.Time) error {
+	return s.inDeliveryTx(ctx, "record delivery success", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE mail_delivery_jobs
+			SET sent_at = ?, last_error = NULL, body_text = ?, body_html = ?,
+			    provider_message_id = ?
+			WHERE id = ?`, now.Unix(), redactedBody, redactedBody,
+			nullString(providerMessageID), id); err != nil {
+			return err
+		}
+		return applyDeliveryState(ctx, tx, id, DeliverySent, now, "")
+	})
 }
 
 func (s *Service) recordDeliveryFailure(ctx context.Context, id int64, attempts int, cause error) error {
@@ -268,12 +294,109 @@ func (s *Service) recordDeliveryFailure(ctx context.Context, id int64, attempts 
 	if attempts >= maxDeliveryAttempts {
 		state = DeliveryFailed
 	}
-	if _, err := s.db.ExecContext(ctx,
-		"UPDATE mail_delivery_jobs SET state = ?, last_error = ? WHERE id = ?",
-		state, cause.Error(), id); err != nil {
-		return fmt.Errorf("record delivery failure: %w", err)
+	return s.inDeliveryTx(ctx, "record delivery failure", func(tx *sql.Tx) error {
+		return applyDeliveryState(ctx, tx, id, state, s.now().UTC(), cause.Error())
+	})
+}
+
+// inDeliveryTx runs one delivery-state change and its Activity entry together.
+// Neither is worth having without the other: a warning nobody can trace back
+// to an event, or an event that changed nothing, would both be misleading.
+func (s *Service) inDeliveryTx(ctx context.Context, what string, apply func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	defer tx.Rollback()
+	if err := apply(tx); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	return nil
+}
+
+// applyDeliveryState moves one job to state and appends Activity when that
+// changes what an authorized viewer is told about reachability. Only the
+// change is worth an entry: retrying a delayed job eight times is one
+// reachability story, not eight, and Activity is append-only (S3-17).
+func applyDeliveryState(ctx context.Context, tx *sql.Tx, id int64, state DeliveryState, at time.Time, cause string) error {
+	var previous DeliveryState
+	if err := tx.QueryRowContext(ctx,
+		"SELECT state FROM mail_delivery_jobs WHERE id = ?", id).Scan(&previous); err != nil {
+		return fmt.Errorf("read delivery job state: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE mail_delivery_jobs SET state = ?, last_error = ? WHERE id = ?",
+		state, nullString(cause), id); err != nil {
+		return fmt.Errorf("store delivery job state: %w", err)
+	}
+	before, after := reachabilityOf(previous), reachabilityOf(state)
+	if before == after {
+		return nil
+	}
+	return appendDeliveryActivity(ctx, tx, id, after, at, cause)
+}
+
+// deliveryActivityAction is the Activity action for arriving at reachability.
+// The three actions are stable strings, so a later Activity read path renders
+// them without re-deriving anything from a delivery job.
+func deliveryActivityAction(reachability Reachability) string {
+	switch reachability {
+	case ReachabilityDelayed:
+		return ActionDeliveryDelayed
+	case ReachabilityUnreachable:
+		return ActionDeliveryFailed
+	default:
+		return ActionDeliveryRecovered
+	}
+}
+
+// appendDeliveryActivity records one reachability change against the Protectee
+// whose Activity the failing message already belonged to. A job whose own
+// Activity entry is gone records nothing: there is no Protectee to attribute
+// it to, and inventing one would put a delivery event on the wrong chronology.
+func appendDeliveryActivity(ctx context.Context, tx *sql.Tx, id int64, reachability Reachability, at time.Time, cause string) error {
+	var protecteeID sql.NullInt64
+	var recipient, kind string
+	var invitationID, partnershipID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT origin.protectee_id, job.recipient_email, job.message_kind,
+		       job.invitation_id, job.partnership_id
+		FROM mail_delivery_jobs job
+		LEFT JOIN activity_entries origin ON origin.id = job.activity_id
+		WHERE job.id = ?`, id).
+		Scan(&protecteeID, &recipient, &kind, &invitationID, &partnershipID); err != nil {
+		return fmt.Errorf("read delivery job origin: %w", err)
+	}
+	if !protecteeID.Valid {
+		return nil
+	}
+	details := map[string]any{"message_kind": kind, "reachability": string(reachability)}
+	// The provider's own words can name a mailbox or a policy Nightloch does
+	// not control, so they stay out of Activity details; whether a delivery
+	// failed is the fact a viewer is entitled to.
+	if cause != "" {
+		details["failed"] = true
+	}
+	_, err := appendActivity(ctx, tx, activityEntry{
+		ProtecteeID:   protecteeID.Int64,
+		Action:        deliveryActivityAction(reachability),
+		TargetEmail:   recipient,
+		PartnershipID: nullableID(partnershipID),
+		InvitationID:  nullableID(invitationID),
+		OccurredAt:    at,
+		Details:       details,
+	})
+	return err
+}
+
+func nullableID(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	return &value.Int64
 }
 
 func retryBackoff(attempts int) time.Duration {

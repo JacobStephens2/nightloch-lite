@@ -59,7 +59,8 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
 <ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
-Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}.<br>
+{{if .DeliveryState.Failed}}<span class="warn-inline">Delivery: {{.DeliveryState.Label}}.</span> Nightloch could not deliver this invitation to {{.InviteeEmail}}. Resending it would go to the same address. If the address is wrong, cancel this invitation and send a new one to the corrected address.<br>{{else}}Delivery: {{.DeliveryState.Label}}.<br>{{end}}
 {{if .Resends}}{{if eq .Resends 1}}Resent once, on {{utc .LastSentAt}}.{{else}}Resent {{.Resends}} times, most recently {{utc .LastSentAt}}.{{end}} Resending does not extend the expiry above.<br>{{end}}
 <span class="muted">The invited address and the proposed Log sharing cannot be edited. To correct either, cancel this invitation and send a new one.</span>
 {{if $.Now.Before .ResendDueAt}}<span class="muted">You can resend this invitation from {{utc .ResendDueAt}}. Resending is available once every 24 hours.</span>{{else}}<a href="/partners/sent-invitations/{{.ID}}/resend">Resend invitation</a>{{end}}

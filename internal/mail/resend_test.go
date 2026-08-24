@@ -62,6 +62,7 @@ func TestResendSenderTransmitsPreparedEnvelope(t *testing.T) {
 			t.Errorf("payload = %#v, want %#v", payload, want)
 		}
 		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"4ef9a417-02e9-4d39-ad75-9611e0fcc33c"}`))
 	}))
 	defer server.Close()
 
@@ -69,8 +70,14 @@ func TestResendSenderTransmitsPreparedEnvelope(t *testing.T) {
 		APIKey: "secret", From: "Nightloch <alerts@nightloch.app>",
 		Client: server.Client(), Endpoint: server.URL,
 	}
-	if err := sender.Send(context.Background(), envelope); err != nil {
+	receipt, err := sender.Send(context.Background(), envelope)
+	if err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	// Without the provider's own message id, a later delivery or bounce
+	// callback cannot be attributed to this recipient's message.
+	if receipt.ProviderMessageID != "4ef9a417-02e9-4d39-ad75-9611e0fcc33c" {
+		t.Fatalf("provider message id = %q", receipt.ProviderMessageID)
 	}
 }
 
@@ -88,7 +95,7 @@ func TestResendSenderRejectsNonSuccessWithoutExposingMessage(t *testing.T) {
 		APIKey: "secret", From: "Nightloch <alerts@nightloch.app>",
 		Client: server.Client(), Endpoint: server.URL,
 	}
-	err := sender.Send(context.Background(), Envelope{
+	_, err := sender.Send(context.Background(), Envelope{
 		To: "person@example.com", Subject: "Subject", Text: messageSecret,
 		HTML: "<p>" + messageSecret + "</p>", ReplyTo: "alerts@nightloch.app",
 		IdempotencyKey: "message/secret",

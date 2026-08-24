@@ -19,8 +19,11 @@ type ResendSender struct {
 	Endpoint string
 }
 
-// Send transmits envelope without including its contents in returned errors.
-func (s *ResendSender) Send(ctx context.Context, envelope Envelope) error {
+// Send transmits envelope without including its contents in returned errors,
+// and returns Resend's own id for the accepted message. That id is what a
+// later delivery, bounce, or complaint callback names, so a caller that stores
+// it can attribute the callback to exactly one recipient's message.
+func (s *ResendSender) Send(ctx context.Context, envelope Envelope) (Receipt, error) {
 	endpoint := s.Endpoint
 	if endpoint == "" {
 		endpoint = resendEndpoint
@@ -42,23 +45,34 @@ func (s *ResendSender) Send(ctx context.Context, envelope Envelope) error {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode Resend request: %w", err)
+		return Receipt{}, fmt.Errorf("encode Resend request: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create Resend request: %w", err)
+		return Receipt{}, fmt.Errorf("create Resend request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+s.APIKey)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", envelope.IdempotencyKey)
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("send Resend request: %w", err)
+		return Receipt{}, fmt.Errorf("send Resend request: %w", err)
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("Resend returned HTTP %d", response.StatusCode)
+	accepted, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil {
+		return Receipt{}, fmt.Errorf("read Resend response: %w", err)
 	}
-	return nil
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return Receipt{}, fmt.Errorf("Resend returned HTTP %d", response.StatusCode)
+	}
+	// A message id is not required for the send to have happened, so a
+	// response Nightloch cannot parse is still a success. It only means this
+	// message has no delivery callbacks to attribute, which the retry-derived
+	// delivery state already covers.
+	var result struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(accepted, &result)
+	return Receipt{ProviderMessageID: result.ID}, nil
 }
