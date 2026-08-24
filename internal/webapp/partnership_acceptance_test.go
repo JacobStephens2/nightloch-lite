@@ -197,7 +197,8 @@ func TestTwoUsersReviewSignInAndAcceptTheFirstPartnership(t *testing.T) {
 	partnerBody := get(t, env, "https://lite.nightloch.app/", inviteeSession, inviteeCSRF).Body.String()
 	for _, want := range []string{
 		"People you protect", "protectee@example.com",
-		"On — you can view their DNS domain log.", "Their Roster: invitee@example.com",
+		"On — you can view their DNS domain log.", "Their Roster",
+		"invitee@example.com — Partner since", "Reciprocal: No",
 	} {
 		if !strings.Contains(partnerBody, want) {
 			t.Fatalf("Partner dashboard missing %q:\n%s", want, partnerBody)

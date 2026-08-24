@@ -253,12 +253,12 @@ func TestCorrectingAnInvitationRequiresCancellationAndANewInvitation(t *testing.
 	protectee := createUser(t, db, "protectee@example.com")
 	first := invite(t, service, protectee, "typo@example.com", false)
 
-	// The address and the proposed Log sharing are immutable while pending, so
-	// a second invitation is refused until the first is canceled.
+	// The invited address and the proposed Log sharing are immutable, so the
+	// typo cannot be edited; it can only be withdrawn.
 	if _, err := service.InvitePartner(context.Background(), InviteCommand{
-		ProtecteeID: protectee, InviteeEmail: "correct@example.com", LogSharing: true,
-	}); !errors.Is(err, ErrOnePartnerLimit) {
-		t.Fatalf("second pending invitation = %v, want ErrOnePartnerLimit", err)
+		ProtecteeID: protectee, InviteeEmail: "typo@example.com", LogSharing: true,
+	}); !errors.Is(err, ErrDuplicateInvitation) {
+		t.Fatalf("re-inviting the same address = %v, want ErrDuplicateInvitation", err)
 	}
 	if _, err := service.CancelInvitation(context.Background(), first.ID, protectee); err != nil {
 		t.Fatalf("CancelInvitation: %v", err)

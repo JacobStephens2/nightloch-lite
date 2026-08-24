@@ -29,6 +29,10 @@ const (
 
 	// MessagePartnerInvitation identifies the invitation sent to an invitee.
 	MessagePartnerInvitation = "partner_invitation"
+	// MessagePartnerInvitationSent is the separate Action alert each current
+	// Partner receives about that same invitation. It is a different message
+	// to a different audience, so it carries its own kind.
+	MessagePartnerInvitationSent = "partner_invitation_sent_partner"
 
 	// ActionInvitationSent is the stable Activity action for a sent invitation.
 	ActionInvitationSent = "partner_invitation_sent"
@@ -45,17 +49,12 @@ var (
 	// ErrAlreadyPartnered rejects an invitation duplicating a live directional
 	// Partnership.
 	ErrAlreadyPartnered = errors.New("that Partner already protects you")
-	// ErrOnePartnerLimit is the temporary 3A exposure gate from S3-60. The
-	// schema is already many-to-many; this limit is application behavior and
-	// is removed in 3B.
-	ErrOnePartnerLimit = errors.New("Nightloch currently supports one Partner per Protectee")
 )
 
 // invitationRefusals are the rules a Protectee can see and correct. Callers
 // use IsRefusal rather than restating this list.
 var invitationRefusals = []error{
-	ErrInvalidEmail, ErrSelfInvitation, ErrDuplicateInvitation,
-	ErrAlreadyPartnered, ErrOnePartnerLimit,
+	ErrInvalidEmail, ErrSelfInvitation, ErrDuplicateInvitation, ErrAlreadyPartnered,
 }
 
 // IsRefusal reports whether err is the module refusing an invitation on a rule
@@ -129,7 +128,24 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		Scan(&protecteeEmail); err != nil {
 		return Invitation{}, fmt.Errorf("read inviting Protectee: %w", err)
 	}
-	livePartners, err := checkInvitationAllowed(ctx, tx, command.ProtecteeID, protecteeEmail, inviteeEmail, now)
+	if err := checkInvitationAllowed(ctx, tx, command.ProtecteeID, protecteeEmail, inviteeEmail, now); err != nil {
+		return Invitation{}, err
+	}
+	if err := settleLapsedInvitation(ctx, tx, command.ProtecteeID, inviteeEmail, now); err != nil {
+		return Invitation{}, err
+	}
+	// The current Roster is both an audience and a disclosure: each Partner
+	// receives their own Action alert, and the invitee is told how many
+	// Partners already protect this Protectee without learning who they are.
+	currentPartners, err := livePartnerEmails(ctx, tx, command.ProtecteeID)
+	if err != nil {
+		return Invitation{}, err
+	}
+	inviteeUserID, err := readUserID(ctx, tx, inviteeEmail)
+	if err != nil {
+		return Invitation{}, err
+	}
+	reciprocal, err := protects(ctx, tx, command.ProtecteeID, inviteeUserID)
 	if err != nil {
 		return Invitation{}, err
 	}
@@ -166,22 +182,31 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		return Invitation{}, err
 	}
 
-	message := renderPartnerInvitation(invitationMessage{
+	// The invitee and every current Partner read different disclosures, so
+	// each gets its own envelope and no recipient ever learns the others
+	// (S3-20, S3-21).
+	messages := []preparedMessage{renderPartnerInvitation(invitationMessage{
 		ProtecteeEmail: protecteeEmail,
 		InviteeEmail:   inviteeEmail,
 		LogSharing:     command.LogSharing,
-		// The 3A exposure gate means this is always zero today. 3B lifts the
-		// gate and adds one Action alert per current Partner (S3-20).
-		PartnerCount: livePartners,
-		ReviewURL:    s.reviewURL(rawToken),
-		ExpiresAt:    expiresAt,
-	})
-	message.IdempotencyKey = idempotencyKey(message.Kind, message.To, tokenHash, 1)
-	if err := queueDelivery(ctx, tx, deliveryJob{
-		ActivityID:   activityID,
-		InvitationID: &invitationID,
-		Message:      message,
-		CreatedAt:    now,
+		PartnerCount:   len(currentPartners),
+		ReviewURL:      s.reviewURL(rawToken),
+		ExpiresAt:      expiresAt,
+	})}
+	alert := invitationAlert{
+		ProtecteeEmail: protecteeEmail,
+		InviteeEmail:   inviteeEmail,
+		LogSharing:     command.LogSharing,
+		Reciprocal:     reciprocal,
+		SentAt:         now,
+		ExpiresAt:      expiresAt,
+		ActivityURL:    s.dashboardURL(),
+	}
+	for _, partnerEmail := range currentPartners {
+		messages = append(messages, renderInvitationSentToPartner(alert, partnerEmail))
+	}
+	if err := queueInvitationMessages(ctx, tx, messages, invitationDelivery{
+		ActivityID: activityID, InvitationID: invitationID, TokenHash: tokenHash, At: now,
 	}); err != nil {
 		return Invitation{}, err
 	}
@@ -195,17 +220,19 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 	}, nil
 }
 
-// checkInvitationAllowed applies the pending-invitation, live-Partnership, and
-// temporary 3A exposure rules, and returns the Protectee's live Partner count.
-// Every check is scoped to one direction, so the reverse-direction invitation
-// that forms a Reciprocal Partnership stays open. An invitation past its
-// seven-day expiry stops counting immediately, so a Protectee is never locked
-// out of Add a Partner while waiting for the sweep that marks it expired.
-func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, protecteeEmail, inviteeEmail string, now time.Time) (int, error) {
+// checkInvitationAllowed refuses only the two invitations that would duplicate
+// a relationship the Protectee already has with this one address. Nightloch
+// places no cap on how many Partners protect a Protectee, so a second address
+// is always invitable. Every check is scoped to one direction, so the
+// reverse-direction invitation that forms a Reciprocal Partnership stays open.
+// An invitation past its seven-day expiry stops counting immediately, so a
+// Protectee is never blocked by one while waiting for the sweep that marks it
+// expired.
+func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, protecteeEmail, inviteeEmail string, now time.Time) error {
 	if inviteeEmail == protecteeEmail {
-		return 0, ErrSelfInvitation
+		return ErrSelfInvitation
 	}
-	var duplicateInvitation, duplicatePartnership, livePartners, liveInvitations int
+	var duplicateInvitation, duplicatePartnership int
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM partner_invitations
@@ -214,25 +241,19 @@ func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, 
 			(SELECT COUNT(*) FROM partnerships
 			  JOIN users ON users.id = partnerships.partner_id
 			  WHERE partnerships.protectee_id = ?1 AND partnerships.ended_at IS NULL
-			    AND users.email = ?2),
-			(SELECT COUNT(*) FROM partnerships
-			  WHERE protectee_id = ?1 AND ended_at IS NULL),
-			(SELECT COUNT(*) FROM partner_invitations
-			  WHERE protectee_id = ?1 AND state = 'pending' AND expires_at > ?3)`,
+			    AND users.email = ?2)`,
 		protecteeID, inviteeEmail, now.Unix()).
-		Scan(&duplicateInvitation, &duplicatePartnership, &livePartners, &liveInvitations)
+		Scan(&duplicateInvitation, &duplicatePartnership)
 	if err != nil {
-		return 0, fmt.Errorf("check existing Partner relationships: %w", err)
+		return fmt.Errorf("check existing Partner relationships: %w", err)
 	}
 	switch {
 	case duplicateInvitation > 0:
-		return 0, ErrDuplicateInvitation
+		return ErrDuplicateInvitation
 	case duplicatePartnership > 0:
-		return 0, ErrAlreadyPartnered
-	case livePartners+liveInvitations > 0:
-		return 0, ErrOnePartnerLimit
+		return ErrAlreadyPartnered
 	}
-	return livePartners, nil
+	return nil
 }
 
 // ProtecteeView is the authenticated Protectee's own protection state.
@@ -244,7 +265,12 @@ type ProtecteeView struct {
 	PendingInvitations []PendingInvitation
 }
 
-// RosterEntry is one live Partnership as its Protectee sees it.
+// RosterEntry is one live Partnership as every entitled viewer sees it: the
+// Protectee it protects and each of their active Partners read the same row
+// (S3-15). It carries the six facts an active Roster row must show — verified
+// email, since time, Log sharing, reciprocal state, Partner reachability, and
+// any Cooling-off deadline — and no control for it, because who may act on a
+// Partnership depends on who is reading, not on the row.
 type RosterEntry struct {
 	// PartnershipID names the one Partnership this row is, so the Protectee's
 	// Cooling-off controls act on it without guessing from the two identities.
@@ -252,6 +278,13 @@ type RosterEntry struct {
 	PartnerEmail  string
 	Since         time.Time
 	LogSharing    bool
+	// Reciprocal is true when this Partner is also protected by this
+	// Protectee, which is a second, independent Partnership.
+	Reciprocal bool
+	// Reachability is whether Nightloch's integrity messages are reaching this
+	// Partner. It is a visible warning only and never changes their powers or
+	// any lifecycle deadline (S3-58).
+	Reachability Reachability
 	// CoolingOffEndsAt is the exact deadline a requested ending will complete
 	// on, and zero when no ending is scheduled. Every entitled Roster viewer
 	// sees the same instant (S3-07).
@@ -261,13 +294,20 @@ type RosterEntry struct {
 // CoolingOffRunning reports whether this Partnership is scheduled to end.
 func (e RosterEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
 
-// PendingInvitation is one outstanding Partner invitation as its Protectee
-// sees it. The Protectee never holds the bearer token, so ID is how they
-// reach the one control they have: cancellation.
+// PendingInvitation is one outstanding Partner invitation as the Protectee who
+// sent it and each of their current Partners see it. The Protectee never holds
+// the bearer token, so ID is how they reach the one control anyone has:
+// cancellation. A Partner reading the same row holds no control at all.
 type PendingInvitation struct {
-	ID            int64
-	InviteeEmail  string
-	LogSharing    bool
+	ID int64
+	// InviterEmail is the Protectee who sent it, so a Partner reading another
+	// person's pending invitation is never left guessing who invited whom.
+	InviterEmail string
+	InviteeEmail string
+	LogSharing   bool
+	// Reciprocal is whether acceptance would also make the invitee a Protectee
+	// of this Protectee.
+	Reciprocal    bool
 	SentAt        time.Time
 	ExpiresAt     time.Time
 	DeliveryState DeliveryState
@@ -284,37 +324,60 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 	view.Partners = partners
 	view.PartnerLockActive = len(view.Partners) > 0
 
-	invitations, err := s.db.QueryContext(ctx, `
-		SELECT invitation.id, invitation.invitee_email, invitation.log_sharing,
-		       invitation.last_sent_at, invitation.expires_at,
+	pending, err := s.pendingInvitations(ctx, protecteeID)
+	if err != nil {
+		return ProtecteeView{}, err
+	}
+	view.PendingInvitations = pending
+	return view, nil
+}
+
+// pendingInvitations lists one Protectee's outstanding invitations. The
+// Protectee and each of their current Partners are entitled to the same row
+// (S3-15), so both views read it here rather than restating the projection.
+func (s *Service) pendingInvitations(ctx context.Context, protecteeID int64) ([]PendingInvitation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT invitation.id, protectee.email, invitation.invitee_email,
+		       invitation.log_sharing, invitation.last_sent_at, invitation.expires_at,
+		       EXISTS(SELECT 1 FROM partnerships reverse
+		               JOIN users invitee ON invitee.id = reverse.protectee_id
+		               WHERE invitee.email = invitation.invitee_email
+		                 AND reverse.partner_id = invitation.protectee_id
+		                 AND reverse.ended_at IS NULL),
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.invitation_id = invitation.id
 		                    AND job.recipient_email = invitation.invitee_email
 		                  ORDER BY job.id DESC LIMIT 1), ?)
 		FROM partner_invitations invitation
+		JOIN users protectee ON protectee.id = invitation.protectee_id
 		WHERE invitation.protectee_id = ? AND invitation.state = 'pending'
 		  AND invitation.expires_at > ?
-		ORDER BY invitation.created_at`, DeliveryQueued, protecteeID, s.now().UTC().Unix())
+		ORDER BY invitation.created_at, invitation.id`,
+		DeliveryQueued, protecteeID, s.now().UTC().Unix())
 	if err != nil {
-		return ProtecteeView{}, fmt.Errorf("read pending Partner invitations: %w", err)
+		return nil, fmt.Errorf("read pending Partner invitations: %w", err)
 	}
-	defer invitations.Close()
-	for invitations.Next() {
-		var pending PendingInvitation
-		var logSharing int
+	defer rows.Close()
+
+	var pending []PendingInvitation
+	for rows.Next() {
+		var invitation PendingInvitation
+		var logSharing, reciprocal int
 		var sentAt, expiresAt int64
-		if err := invitations.Scan(&pending.ID, &pending.InviteeEmail, &logSharing, &sentAt, &expiresAt, &pending.DeliveryState); err != nil {
-			return ProtecteeView{}, fmt.Errorf("read pending Partner invitation: %w", err)
+		if err := rows.Scan(&invitation.ID, &invitation.InviterEmail, &invitation.InviteeEmail,
+			&logSharing, &sentAt, &expiresAt, &reciprocal, &invitation.DeliveryState); err != nil {
+			return nil, fmt.Errorf("read pending Partner invitation: %w", err)
 		}
-		pending.LogSharing = intToBool(logSharing)
-		pending.SentAt = time.Unix(sentAt, 0).UTC()
-		pending.ExpiresAt = time.Unix(expiresAt, 0).UTC()
-		view.PendingInvitations = append(view.PendingInvitations, pending)
+		invitation.LogSharing = intToBool(logSharing)
+		invitation.Reciprocal = intToBool(reciprocal)
+		invitation.SentAt = time.Unix(sentAt, 0).UTC()
+		invitation.ExpiresAt = time.Unix(expiresAt, 0).UTC()
+		pending = append(pending, invitation)
 	}
-	if err := invitations.Err(); err != nil {
-		return ProtecteeView{}, fmt.Errorf("read pending Partner invitations: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read pending Partner invitations: %w", err)
 	}
-	return view, nil
+	return pending, nil
 }
 
 // CanLoosen answers whether actorID may loosen protecteeID's Policy. It is

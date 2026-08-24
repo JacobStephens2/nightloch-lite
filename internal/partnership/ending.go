@@ -361,10 +361,8 @@ func (s *Service) EndedPartnerships(ctx context.Context, partnerID int64) ([]End
 // queueEndingMessages queues the one ending signal, once per entitled
 // recipient. Both parties and every remaining Partner are entitled to it
 // (S3-20), each in their own envelope so the recipient list is never exposed
-// (S3-21). Today the 3A exposure gate means the remaining Roster is always
-// empty; the query is written for the Roster 3B opens up. reason selects the
-// approved variant, which is the only thing that differs between an immediate
-// end, an End now, and a completed Cooling-off.
+// (S3-21). reason selects the approved variant, which is the only thing that
+// differs between an immediate end, an End now, and a completed Cooling-off.
 func (s *Service) queueEndingMessages(ctx context.Context, tx *sql.Tx, partnership livePartnership,
 	remaining int, endedAt time.Time, reason string, activityID int64) error {
 
