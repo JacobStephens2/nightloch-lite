@@ -401,3 +401,39 @@ func (a *App) invitationReturnPath(w http.ResponseWriter, r *http.Request) strin
 	a.clearInvitationReturn(w)
 	return "/partners/invitations/" + cookie.Value
 }
+
+// resendInvitation puts a pending invitation in front of its invitee again.
+// It is one of the Protectee's two pending-invitation controls, and the only
+// one that changes nothing about the invitation: the invited address, the
+// proposed Log sharing, and the seven-day expiry stay as sent, so correcting
+// any of them is still cancel-and-reinvite.
+//
+// A refused resend re-renders the dashboard with its reason, because the
+// reason is always a limit the Protectee can wait out and the row it applies
+// to is on that page.
+func (a *App) resendInvitation(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	id, valid := pathID(r)
+	if !valid {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	_, err := a.partnerships.ResendInvitation(r.Context(), id, user.ID)
+	switch {
+	case err == nil:
+		// The dashboard is the receipt: the row now names the resend and
+		// repeats the expiry it did not move.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	case partnership.IsRefusal(err):
+		a.renderDashboard(w, r, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, partnership.ErrInvitationUnavailable):
+		// A settled invitation, or one that was never this User's to resend.
+		// Neither answer confirms the invitation exists.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	default:
+		a.internalError(w, r, err)
+	}
+}

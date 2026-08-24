@@ -35,6 +35,7 @@ var templateSources = map[string]string{
 <title>Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><form method="post" action="/sign-out"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="quiet" type="submit">Sign out</button></form></header>
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
+{{if .Refusal}}<p class="error" role="alert">{{.Refusal}}</p>{{end}}
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
 <h2>Your Partners</h2>
@@ -59,7 +60,9 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 <ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+{{if .Resends}}Resent {{utc .LastSentAt}} ({{.Resends}} time(s)). Resending does not extend the expiry above.<br>{{end}}
 <span class="muted">The invited address and the proposed Log sharing cannot be edited. To correct either, cancel this invitation and send a new one.</span>
+{{if $.Now.Before .ResendDueAt}}<span class="muted">You can resend this invitation from {{utc .ResendDueAt}}, once every 24 hours.</span>{{else}}<form method="post" action="/partners/sent-invitations/{{.ID}}/resend"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="quiet" type="submit">Resend invitation</button></form>{{end}}
 <a href="/partners/sent-invitations/{{.ID}}/cancel">Cancel invitation</a></li>{{end}}</ul>
 {{end}}
 {{if .Received}}

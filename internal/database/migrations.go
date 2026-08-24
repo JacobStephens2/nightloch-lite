@@ -126,4 +126,21 @@ var migrations = []string{
 		last_error TEXT
 	);
 	CREATE INDEX mail_delivery_jobs_due_idx ON mail_delivery_jobs(state, next_attempt_at);`,
+	// One row per accepted send or resend, which is what a rolling-window
+	// quota needs and neither the invitation's own last_sent_at nor its
+	// send_count can answer. Rows outlive the pending state deliberately: a
+	// Protectee who cancels an invitation has still spent the send.
+	`CREATE TABLE partner_invitation_sends (
+		id INTEGER PRIMARY KEY,
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		invitation_id INTEGER NOT NULL REFERENCES partner_invitations(id) ON DELETE CASCADE,
+		sent_at INTEGER NOT NULL
+	);
+	CREATE INDEX partner_invitation_sends_window_idx
+		ON partner_invitation_sends(protectee_id, sent_at);
+	-- Invitations that predate this table have sent at least once, and their
+	-- last send is the only one recorded anywhere. Counting it keeps an
+	-- upgrade from handing every Protectee a fresh window.
+	INSERT INTO partner_invitation_sends(protectee_id, invitation_id, sent_at)
+		SELECT protectee_id, id, last_sent_at FROM partner_invitations;`,
 }
