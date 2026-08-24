@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -210,6 +211,7 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 			EndedAt:        now,
 			PartnerCount:   remaining,
 			DashboardURL:   s.dashboardURL(),
+			ReceiptURL:     s.receiptURL(partnership.id),
 		}, recipient)
 		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, scope, sequence+1)
 		if err := queueDelivery(ctx, tx, deliveryJob{
@@ -367,6 +369,13 @@ func livePartnerEmails(ctx context.Context, tx *sql.Tx, protecteeID int64) ([]st
 		return nil, fmt.Errorf("read remaining Roster: %w", err)
 	}
 	return emails, nil
+}
+
+// receiptURL is where a departing Partner reads the one thing they retain.
+func (s *Service) receiptURL(partnershipID int64) string {
+	link := *s.baseURL
+	link.Path = "/partners/ended-partnerships/" + strconv.FormatInt(partnershipID, 10)
+	return link.String()
 }
 
 // partnershipScope stands in for an invitation's token hash when deriving a

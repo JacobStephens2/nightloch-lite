@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,6 +184,25 @@ func TestEndPartnershipRemovesPowersRestoresZeroStateAndQueuesBothMessages(t *te
 			}
 		}
 	}
+
+	// The closing link names what each recipient actually retains. Offering
+	// the Roster to the Partner who just lost it would be a false invitation.
+	receiptLink := fmt.Sprintf("https://lite.nightloch.app/partners/ended-partnerships/%d", partnership)
+	protecteeText, partnerText := ended["protectee@example.com"].Text, ended["partner@example.com"].Text
+	if !strings.Contains(protecteeText, "Review the Roster and Activity:\nhttps://lite.nightloch.app/") ||
+		strings.Contains(protecteeText, receiptLink) {
+		t.Fatalf("Protectee closing link = %q", protecteeText)
+	}
+	if !strings.Contains(partnerText, "You keep a read-only receipt for this ended Partnership:\n"+receiptLink) {
+		t.Fatalf("former Partner closing link = %q", partnerText)
+	}
+	if strings.Contains(partnerText, "Review the Roster and Activity") {
+		t.Fatalf("the former Partner was offered the Roster they just lost:\n%s", partnerText)
+	}
+	if !strings.Contains(ended["partner@example.com"].HTML,
+		fmt.Sprintf(`<a href="%s">You keep a read-only receipt for this ended Partnership</a>`, receiptLink)) {
+		t.Fatalf("former Partner HTML part = %q", ended["partner@example.com"].HTML)
+	}
 }
 
 func TestEndedPartnershipLeavesTheFormerPartnerOnlyTheirOwnReceipt(t *testing.T) {
@@ -318,6 +338,17 @@ func TestEndingOnePartnershipLeavesTheRosterLockedAndTellsTheRemainingPartner(t 
 	if len(recipients) != 3 || !recipients["protectee@example.com"] ||
 		!recipients["partner@example.com"] || !recipients["other@example.com"] {
 		t.Fatalf("ending recipients = %v", recipients)
+	}
+	// A Partner who is still on the Roster keeps the Roster link; only the
+	// departing Partner's copy swaps it for their receipt.
+	for _, envelope := range sender.Envelopes {
+		if envelope.To != "other@example.com" || !strings.Contains(envelope.Subject, "ended their Partnership") {
+			continue
+		}
+		if !strings.Contains(envelope.Text, "Review the Roster and Activity:") ||
+			strings.Contains(envelope.Text, "You keep a read-only receipt") {
+			t.Fatalf("remaining Partner closing link = %q", envelope.Text)
+		}
 	}
 }
 

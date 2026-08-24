@@ -236,6 +236,21 @@ func TestPartnerEndsTheirPartnershipImmediatelyWithATypedConfirmation(t *testing
 			}
 		}
 	}
+	// The former Partner's copy links the receipt they keep, not the Roster
+	// they just lost — and that link is the route this app actually serves.
+	if !strings.Contains(endings["partner@example.com"],
+		"You keep a read-only receipt for this ended Partnership:\n"+receiptURL) {
+		t.Fatalf("former Partner ending message = %q", endings["partner@example.com"])
+	}
+	if strings.Contains(endings["partner@example.com"], "Review the Roster and Activity") {
+		t.Fatalf("the former Partner was emailed a Roster link:\n%s", endings["partner@example.com"])
+	}
+	if !strings.Contains(endings["protectee@example.com"], "Review the Roster and Activity") {
+		t.Fatalf("Protectee ending message lost its Roster link:\n%s", endings["protectee@example.com"])
+	}
+	if followed := get(t, env, receiptURL, partnerSession, partnerCSRF); followed.Code != http.StatusOK {
+		t.Fatalf("the emailed receipt link answered %d", followed.Code)
+	}
 
 	// Activity records the ending exactly once, and a replay adds nothing.
 	replay := post(t, env, endURL, url.Values{
