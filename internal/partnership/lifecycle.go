@@ -154,9 +154,9 @@ type ReceivedInvitation struct {
 	ProtecteeEmail string
 	LogSharing     bool
 	// Reciprocal is whether accepting would form Reciprocal Partnerships,
-	// because this viewer already protects the Protectee who invited them.
-	// The list is scoped to the viewer's own address, so this row discloses
-	// only a relationship they are already part of.
+	// because the Protectee who sent this invitation already protects the
+	// viewer. The list is scoped to the viewer's own address, so this row
+	// discloses only a relationship they are already part of.
 	Reciprocal bool
 	SentAt     time.Time
 	ExpiresAt  time.Time
@@ -173,10 +173,7 @@ func (s *Service) ReceivedInvitations(ctx context.Context, viewerID int64) ([]Re
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT invitation.id, protectee.email, invitation.log_sharing,
 		       invitation.last_sent_at, invitation.expires_at,
-		       EXISTS(SELECT 1 FROM partnerships reverse
-		               WHERE reverse.protectee_id = invitee.id
-		                 AND reverse.partner_id = invitation.protectee_id
-		                 AND reverse.ended_at IS NULL)
+		       `+reciprocalOfInvitation+`
 		FROM partner_invitations invitation
 		JOIN users protectee ON protectee.id = invitation.protectee_id
 		JOIN users invitee ON invitee.email = invitation.invitee_email

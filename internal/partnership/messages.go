@@ -95,7 +95,7 @@ Replies to this email go directly to %[1]s.`,
 		rosterDisclosure(message),
 		message.ReviewURL,
 		utcStamp(message.ExpiresAt),
-		reciprocalDisclosure(message),
+		reciprocalInvitationDisclosure(message),
 	)
 
 	return preparedMessage{
@@ -130,12 +130,12 @@ current and future Partners in the Roster and Activity.`,
 		message.ProtecteeEmail, message.PartnerCount, message.InviteeEmail)
 }
 
-// reciprocalDisclosure names the reverse-direction consequence for an invitee
+// reciprocalInvitationDisclosure names the reverse-direction consequence for an invitee
 // the inviting Protectee already protects (S3-04). It is empty in the ordinary
 // direction, where there is no second Partnership to describe and a
 // "Reciprocal Partnerships: No" line would only invite the reader to wonder
 // what merged authority they had just avoided.
-func reciprocalDisclosure(message invitationMessage) string {
+func reciprocalInvitationDisclosure(message invitationMessage) string {
 	if !message.Reciprocal {
 		return ""
 	}
@@ -146,6 +146,23 @@ second, independent Partnership in the opposite direction, so you would be
 their Partner too. The two Partnerships do not merge: each keeps its own Log
 sharing, its own ending, and its own powers, and ending one does not end the
 other.`, message.ProtecteeEmail)
+}
+
+// reciprocalAcceptanceDisclosure names the reverse direction for a Partner who
+// has just accepted an invitation from a Protectee who already protects them
+// (S3-04). Like reciprocalInvitationDisclosure it is empty in the ordinary
+// direction: this Partner is already inside the reverse relationship, so what
+// they need is not the fact but the assurance that the two do not merge.
+func reciprocalAcceptanceDisclosure(message acceptanceMessage) string {
+	if !message.Reciprocal {
+		return ""
+	}
+	return fmt.Sprintf(`
+
+Reciprocal Partnerships: Yes. %[1]s already protects you, and
+you now protect them. These are two independent Partnerships: ending or
+changing one does not change the other, and neither one gives either of you
+authority over the other’s Partnership.`, message.ProtecteeEmail)
 }
 
 // invitationAlert is the Action alert every current Partner receives when
@@ -350,18 +367,6 @@ func renderAcceptanceToNewPartner(message acceptanceMessage) preparedMessage {
 	if message.LogSharing {
 		logSharing = "On — you can view their DNS domain log."
 	}
-	// The reverse direction is stated only when it exists. This Partner is
-	// already inside it, so naming it discloses nothing they do not have; what
-	// they need is the assurance that the two do not merge (S3-04).
-	reciprocal := ""
-	if message.Reciprocal {
-		reciprocal = fmt.Sprintf(`
-
-Reciprocal Partnerships: Yes. %[1]s already protects you, and
-you now protect them. These are two independent Partnerships: ending or
-changing one does not change the other, and neither one gives either of you
-authority over the other’s Partnership.`, message.ProtecteeEmail)
-	}
 	text := fmt.Sprintf(`You accepted the Partnership with %[1]s on %[2]s.
 
 You can now view their protection status, change their Policy, approve
@@ -380,7 +385,8 @@ You may end this Partnership immediately from Nightloch.
 
 Replies to this message go to the monitored address %[6]s.`,
 		message.ProtecteeEmail, utcStamp(message.AcceptedAt), logSharing,
-		message.PartnerCount-1, message.DashboardURL, alertsAddress, reciprocal)
+		message.PartnerCount-1, message.DashboardURL, alertsAddress,
+		reciprocalAcceptanceDisclosure(message))
 
 	return preparedMessage{
 		Kind: MessagePartnershipAcceptedPartner,

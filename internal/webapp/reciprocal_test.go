@@ -104,6 +104,8 @@ func TestReciprocalPartnershipsStayIndependentAcrossBothDirections(t *testing.T)
 	if bobProtectsAlice == aliceProtectsBob {
 		t.Fatal("the two directions resolved to one Partnership")
 	}
+	requestEndAlice, _, endAlice := coolingOffPaths(bobProtectsAlice)
+	requestEndBob, _, endBob := coolingOffPaths(aliceProtectsBob)
 
 	// Both directions active: each dashboard separates its own protection
 	// from the people it protects, marks both rows reciprocal, and offers
@@ -173,13 +175,13 @@ func TestReciprocalPartnershipsStayIndependentAcrossBothDirections(t *testing.T)
 		csrf    *http.Cookie
 	}{
 		{"Alice ending the Partnership she is the Protectee of",
-			endPath(bobProtectsAlice), aliceSession, aliceCSRF},
+			endAlice, aliceSession, aliceCSRF},
 		{"Bob requesting Cooling-off on the Partnership he is the Partner of",
-			requestEndPath(bobProtectsAlice), bobSession, bobCSRF},
+			requestEndAlice, bobSession, bobCSRF},
 		{"Bob ending the Partnership he is the Protectee of",
-			endPath(aliceProtectsBob), bobSession, bobCSRF},
+			endBob, bobSession, bobCSRF},
 		{"Alice requesting Cooling-off on the Partnership she is the Partner of",
-			requestEndPath(aliceProtectsBob), aliceSession, aliceCSRF},
+			requestEndBob, aliceSession, aliceCSRF},
 	} {
 		if recorder := get(t, env, attempt.path, attempt.session, attempt.csrf); recorder.Code != http.StatusNotFound {
 			t.Fatalf("%s = %d, want the same unavailable answer a stranger gets", attempt.name, recorder.Code)
@@ -189,7 +191,7 @@ func TestReciprocalPartnershipsStayIndependentAcrossBothDirections(t *testing.T)
 	// One direction Cooling-off: Alice schedules the ending of the
 	// Partnership that protects her. Bob's own protection is untouched.
 	beforeCoolingOff := len(env.sender.Envelopes)
-	if recorder := post(t, env, requestEndPath(bobProtectsAlice),
+	if recorder := post(t, env, requestEndAlice,
 		url.Values{"csrf_token": []string{aliceCSRF.Value}}, aliceSession, aliceCSRF); recorder.Code != http.StatusOK {
 		t.Fatalf("request-end = %d:\n%s", recorder.Code, recorder.Body.String())
 	}
@@ -220,7 +222,7 @@ func TestReciprocalPartnershipsStayIndependentAcrossBothDirections(t *testing.T)
 
 	// One direction ended: Bob agrees to end now. Alice's Partner lock
 	// releases; Bob stays locked by the Partnership Alice still holds.
-	if recorder := post(t, env, endPath(bobProtectsAlice),
+	if recorder := post(t, env, endAlice,
 		url.Values{"csrf_token": []string{bobCSRF.Value}, "confirmation": []string{"END"}},
 		bobSession, bobCSRF); recorder.Code != http.StatusOK {
 		t.Fatalf("End now = %d:\n%s", recorder.Code, recorder.Body.String())
@@ -278,14 +280,4 @@ func peopleYouProtect(t *testing.T, body string) string {
 		t.Fatalf("the dashboard has no People you protect area:\n%s", body)
 	}
 	return protecting
-}
-
-func endPath(partnershipID int64) string {
-	return "https://lite.nightloch.app/partners/partnerships/" +
-		strconv.FormatInt(partnershipID, 10) + "/end"
-}
-
-func requestEndPath(partnershipID int64) string {
-	return "https://lite.nightloch.app/partners/partnerships/" +
-		strconv.FormatInt(partnershipID, 10) + "/request-end"
 }
