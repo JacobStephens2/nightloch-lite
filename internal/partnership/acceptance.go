@@ -240,6 +240,19 @@ func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewe
 		AcceptedAt:      now,
 		DashboardURL:    s.dashboardURL(),
 	}
+	// Excluding the Partnership just created asks the question as it stood a
+	// moment ago: was the Partner lock already scheduled to deactivate? If it
+	// was, this acceptance is exactly what keeps it alive past that instant,
+	// and the alert says so rather than leaving recipients with the ending
+	// they have already been told to expect.
+	schedule, scheduled, err := readLockEndingSchedule(ctx, tx, protecteeID, partnershipID)
+	if err != nil {
+		return Acceptance{}, err
+	}
+	if scheduled && schedule.endsAt.After(now) {
+		acceptance.LockEndsAt = schedule.endsAt
+		acceptance.LockEndingPartners = schedule.partners
+	}
 	// The new Partner reads a different disclosure from everyone else, and
 	// every recipient gets their own envelope, so no recipient learns who else
 	// was told (S3-20, S3-21). The prior Partners are entitled to the same
@@ -286,19 +299,16 @@ type ProtecteeEntry struct {
 	// sharing, deadlines, and ending. Marking it in both areas is what keeps
 	// a mixed-role dashboard readable without implying merged powers (S3-44).
 	Reciprocal bool
-	// CoolingOffEndsAt is the deadline this Protectee requested for this
-	// Partnership, and zero when they have requested nothing. The Partner
-	// keeps every power until it arrives.
-	CoolingOffEndsAt time.Time
-	Roster           []RosterEntry
+	// scheduledEnding is whatever ending this Protectee has requested for this
+	// Partnership. The Partner keeps every power until its deadline arrives,
+	// and it is the same value their row on the Protectee's own Roster
+	// carries, so the two sides never disagree about what it means.
+	scheduledEnding
+	Roster []RosterEntry
 	// PendingInvitations is this Protectee's outstanding invitations. A
 	// Partner may inspect them but holds no control over them (S3-15).
 	PendingInvitations []PendingInvitation
 }
-
-// CoolingOffRunning reports whether this Protectee has asked to end this
-// Partnership, which turns the Partner's ending control into **End now**.
-func (e ProtecteeEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
 
 // ProtectingView returns the Protectees partnerID actively protects.
 func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]ProtecteeEntry, error) {
@@ -349,6 +359,15 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 		}
 		protecting[index].Roster = roster
 		protecting[index].PendingInvitations = pending
+		// The Partner's own row on that Roster already carries the horizon
+		// this Partnership's deadline sits in, so it is read from there rather
+		// than derived a second way that could disagree with it.
+		for _, entry := range roster {
+			if entry.PartnershipID == person.PartnershipID {
+				protecting[index].scheduledEnding = entry.scheduledEnding
+				break
+			}
+		}
 	}
 	return protecting, nil
 }
@@ -388,7 +407,7 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT partnerships.id, users.email, partnerships.accepted_at,
 		       partnerships.log_sharing, COALESCE(partnerships.cooling_off_ends_at, 0),
-		       `+reciprocalOfPartnership+`,
+		       `+reciprocalOfPartnership+`, `+partnersAfterDeadlineProjection+`,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.recipient_email = users.email
 		                  ORDER BY job.id DESC LIMIT 1), ?)
@@ -406,7 +425,7 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 		var logSharing, reciprocal int
 		var delivery DeliveryState
 		if err := rows.Scan(&entry.PartnershipID, &entry.PartnerEmail, &since, &logSharing,
-			&endsAt, &reciprocal, &delivery); err != nil {
+			&endsAt, &reciprocal, &entry.PartnersAfterDeadline, &delivery); err != nil {
 			return nil, fmt.Errorf("read Roster row: %w", err)
 		}
 		entry.Since = time.Unix(since, 0).UTC()
@@ -485,6 +504,7 @@ const reciprocalOfInvitation = `EXISTS(SELECT 1 FROM partnerships reverse
 // rowQueryer is satisfied by both *sql.DB and *sql.Tx.
 type rowQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 // ValidToken reports whether raw has the shape of an invitation bearer token.
