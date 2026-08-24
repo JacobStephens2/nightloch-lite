@@ -66,8 +66,14 @@ type resolvedInvitation struct {
 	logSharing     bool
 	state          InvitationState
 	tokenHash      [32]byte
+	createdAt      time.Time
 	expiresAt      time.Time
-	resolvedAt     time.Time
+	// lastSentAt is when this invitation was last put in front of its
+	// invitee, by the original send or by a resend. It is the start of the
+	// once-per-24-hours resend interval, never the start of the expiry.
+	lastSentAt time.Time
+	sendCount  int
+	resolvedAt time.Time
 }
 
 // invitationQuery is the projection every lifecycle decision reads, up to and
@@ -75,7 +81,8 @@ type resolvedInvitation struct {
 const invitationQuery = `
 	SELECT invitation.id, invitation.protectee_id, protectee.email,
 	       invitation.invitee_email, invitation.log_sharing, invitation.state,
-	       invitation.token_hash, invitation.expires_at,
+	       invitation.token_hash, invitation.created_at, invitation.expires_at,
+	       invitation.last_sent_at, invitation.send_count,
 	       COALESCE(invitation.resolved_at, 0)
 	FROM partner_invitations invitation
 	JOIN users protectee ON protectee.id = invitation.protectee_id
@@ -124,9 +131,10 @@ func scanInvitation(row *sql.Row, now time.Time) (resolvedInvitation, error) {
 	var invitation resolvedInvitation
 	var tokenHash []byte
 	var logSharing int
-	var expiresAt, resolvedAt int64
+	var createdAt, expiresAt, lastSentAt, resolvedAt int64
 	err := row.Scan(&invitation.id, &invitation.protecteeID, &invitation.protecteeEmail,
-		&invitation.inviteeEmail, &logSharing, &invitation.state, &tokenHash, &expiresAt, &resolvedAt)
+		&invitation.inviteeEmail, &logSharing, &invitation.state, &tokenHash,
+		&createdAt, &expiresAt, &lastSentAt, &invitation.sendCount, &resolvedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return resolvedInvitation{}, ErrInvitationUnavailable
 	}
@@ -134,7 +142,9 @@ func scanInvitation(row *sql.Row, now time.Time) (resolvedInvitation, error) {
 		return resolvedInvitation{}, fmt.Errorf("read Partner invitation: %w", err)
 	}
 	invitation.logSharing = intToBool(logSharing)
+	invitation.createdAt = time.Unix(createdAt, 0).UTC()
 	invitation.expiresAt = time.Unix(expiresAt, 0).UTC()
+	invitation.lastSentAt = time.Unix(lastSentAt, 0).UTC()
 	copy(invitation.tokenHash[:], tokenHash)
 	if resolvedAt != 0 {
 		invitation.resolvedAt = time.Unix(resolvedAt, 0).UTC()
@@ -158,8 +168,11 @@ type ReceivedInvitation struct {
 	// viewer. The list is scoped to the viewer's own address, so this row
 	// discloses only a relationship they are already part of.
 	Reciprocal bool
-	SentAt     time.Time
-	ExpiresAt  time.Time
+	// SentAt is when the invitation was first sent. A resend repeats it
+	// without moving either time, so the seven days between these two are
+	// always the original seven (S3-66).
+	SentAt    time.Time
+	ExpiresAt time.Time
 }
 
 // ReceivedInvitations lists the live Partner invitations addressed to the
@@ -172,7 +185,7 @@ func (s *Service) ReceivedInvitations(ctx context.Context, viewerID int64) ([]Re
 	now := s.now().UTC()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT invitation.id, protectee.email, invitation.log_sharing,
-		       invitation.last_sent_at, invitation.expires_at,
+		       invitation.created_at, invitation.expires_at,
 		       `+reciprocalOfInvitation+`
 		FROM partner_invitations invitation
 		JOIN users protectee ON protectee.id = invitation.protectee_id

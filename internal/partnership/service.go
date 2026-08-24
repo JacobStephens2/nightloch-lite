@@ -55,6 +55,7 @@ var (
 // use IsRefusal rather than restating this list.
 var invitationRefusals = []error{
 	ErrInvalidEmail, ErrSelfInvitation, ErrDuplicateInvitation, ErrAlreadyPartnered,
+	ErrPendingInvitationLimit, ErrSendQuotaExhausted, ErrResendTooSoon,
 }
 
 // IsRefusal reports whether err is the module refusing an invitation on a rule
@@ -164,6 +165,9 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 	if err != nil {
 		return Invitation{}, fmt.Errorf("read Partner invitation id: %w", err)
 	}
+	if err := countSend(ctx, tx, command.ProtecteeID, invitationID, now); err != nil {
+		return Invitation{}, err
+	}
 
 	activityID, err := appendActivity(ctx, tx, activityEntry{
 		ProtecteeID:  command.ProtecteeID,
@@ -221,14 +225,16 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 	}, nil
 }
 
-// checkInvitationAllowed refuses only the two invitations that would duplicate
-// a relationship the Protectee already has with this one address. Nightloch
-// places no cap on how many Partners protect a Protectee, so a second address
-// is always invitable. Every check is scoped to one direction, so the
-// reverse-direction invitation that forms a Reciprocal Partnership stays open.
-// An invitation past its seven-day expiry stops counting immediately, so a
-// Protectee is never blocked by one while waiting for the sweep that marks it
-// expired.
+// checkInvitationAllowed applies every rule that can refuse a new invitation,
+// in the order the Protectee can act on them: first the two that would
+// duplicate a relationship they already have with this one address, then the
+// two approved limits on outstanding and recent invitations (S3-13).
+// Nightloch places no cap on how many Partners protect a Protectee, so a
+// second address is always invitable once inside those limits. Every
+// duplication check is scoped to one direction, so the reverse-direction
+// invitation that forms a Reciprocal Partnership stays open. An invitation
+// past its seven-day expiry stops counting immediately, so a Protectee is
+// never blocked by one while waiting for the sweep that marks it expired.
 func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, protecteeEmail, inviteeEmail string, now time.Time) error {
 	if inviteeEmail == protecteeEmail {
 		return ErrSelfInvitation
@@ -254,7 +260,10 @@ func checkInvitationAllowed(ctx context.Context, tx *sql.Tx, protecteeID int64, 
 	case duplicatePartnership > 0:
 		return ErrAlreadyPartnered
 	}
-	return nil
+	if err := checkPendingInvitationLimit(ctx, tx, protecteeID, now); err != nil {
+		return err
+	}
+	return checkSendQuota(ctx, tx, protecteeID, now)
 }
 
 // ProtecteeView is the authenticated Protectee's own protection state.
@@ -305,9 +314,23 @@ type PendingInvitation struct {
 	LogSharing   bool
 	// Reciprocal is whether acceptance would also make the invitee a Protectee
 	// of this Protectee.
-	Reciprocal    bool
-	SentAt        time.Time
-	ExpiresAt     time.Time
+	Reciprocal bool
+	// SentAt is when the invitation was first sent, and ExpiresAt is seven
+	// days later. Neither moves, because a resend repeats the invitation
+	// rather than replacing it (S3-66).
+	SentAt    time.Time
+	ExpiresAt time.Time
+	// LastSentAt is the most recent send, equal to SentAt until the first
+	// resend, and Resends is how many reminders followed the original. The row
+	// shows both so a reader can see that the reminders bought no extra time.
+	LastSentAt time.Time
+	Resends    int
+	// ResendDueAt is when this invitation may next be resent, which is 24
+	// hours after LastSentAt whether or not that instant has passed.
+	ResendDueAt time.Time
+	// DeliveryState is the state of the most recent send's own delivery job,
+	// so a resend after a failure shows the reminder's progress rather than
+	// the original's outcome.
 	DeliveryState DeliveryState
 }
 
@@ -336,7 +359,8 @@ func (s *Service) ProtecteeView(ctx context.Context, protecteeID int64) (Protect
 func (s *Service) pendingInvitations(ctx context.Context, protecteeID int64) ([]PendingInvitation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT invitation.id, protectee.email, invitation.invitee_email,
-		       invitation.log_sharing, invitation.last_sent_at, invitation.expires_at,
+		       invitation.log_sharing, invitation.created_at, invitation.expires_at,
+		       invitation.last_sent_at, invitation.send_count,
 		       `+reciprocalOfInvitation+`,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.invitation_id = invitation.id
@@ -356,16 +380,20 @@ func (s *Service) pendingInvitations(ctx context.Context, protecteeID int64) ([]
 	var pending []PendingInvitation
 	for rows.Next() {
 		var invitation PendingInvitation
-		var logSharing, reciprocal int
-		var sentAt, expiresAt int64
+		var logSharing, reciprocal, sendCount int
+		var sentAt, expiresAt, lastSentAt int64
 		if err := rows.Scan(&invitation.ID, &invitation.InviterEmail, &invitation.InviteeEmail,
-			&logSharing, &sentAt, &expiresAt, &reciprocal, &invitation.DeliveryState); err != nil {
+			&logSharing, &sentAt, &expiresAt, &lastSentAt, &sendCount,
+			&reciprocal, &invitation.DeliveryState); err != nil {
 			return nil, fmt.Errorf("read pending Partner invitation: %w", err)
 		}
 		invitation.LogSharing = intToBool(logSharing)
 		invitation.Reciprocal = intToBool(reciprocal)
 		invitation.SentAt = time.Unix(sentAt, 0).UTC()
 		invitation.ExpiresAt = time.Unix(expiresAt, 0).UTC()
+		invitation.LastSentAt = time.Unix(lastSentAt, 0).UTC()
+		invitation.Resends = sendCount - 1
+		invitation.ResendDueAt = invitation.LastSentAt.Add(resendInterval)
 		pending = append(pending, invitation)
 	}
 	if err := rows.Err(); err != nil {

@@ -109,6 +109,71 @@ If you accept, your verified email will remain visible to current and future
 Partners in the Roster and Activity.
 ```
 
+### Resent invitation
+
+**Subject:** `Reminder: {{protectee_email}} invited you to be their Nightloch Partner`
+
+A resend repeats the invitation above verbatim, with the paragraphs below
+inserted before its first line and nothing else changed. It goes to the invitee
+alone: every current Partner was already told this invitation exists, and a
+reminder is not a new Action for them to observe (S3-20).
+
+```text
+This is a reminder about a Partner invitation you were already sent.
+Nothing about it has changed: the same person invited the same address on the
+same terms, and it still expires at the original time below. Being reminded
+does not give you more time to answer.
+
+The link in the earlier email no longer works. Use the link in this one.
+```
+
+The expiry line still names the original seven-day deadline; a reminder never
+moves it (S3-66). Each send mints a fresh bearer link and supersedes the
+previous one, so exactly one live link exists per invitation at any time. The
+invitee who kept only the older email can still answer from **Partner
+invitations** while signed in (S3-82).
+
+### Resend confirmation
+
+```text
+Resend this Partner invitation?
+
+Nightloch will email {{invitee_email}} the same invitation again. Nothing about
+it changes: the same address is invited on the same terms, and it still expires
+{{expires_at}}. Resending does not give {{invitee_email}} more time to answer.
+
+The link in the earlier email stops working, and the new email carries its
+place. Your current Partners are not emailed again; they were already told this
+invitation exists.
+
+You can resend an invitation once every 24 hours.
+
+[Resend invitation]  [Leave it as it is]
+```
+
+### Pending invitation row after a resend
+
+The Protectee's own row adds one line, and their current Partners read the same
+fact with the sentence that applies to them:
+
+```text
+Resent once, on {{last_sent_at}}. Resending does not extend the expiry above.
+Resent {{n}} times, most recently {{last_sent_at}}. Resending does not extend the expiry above.
+```
+
+```text
+Resent once, on {{last_sent_at}}. Resending did not extend the expiry above, and
+Nightloch did not email you again about it.
+```
+
+Before the interval has passed, the Protectee's row replaces the resend control
+with:
+
+```text
+You can resend this invitation from {{resend_due_at}}. Resending is available
+once every 24 hours.
+```
+
 ## Invitation landing page
 
 ```text
@@ -763,6 +828,10 @@ Canceling User deletion will not restore this invitation.
 - A Partnership is created only on acceptance and remains the durable relationship record through active, Cooling-off, and ended states. Re-partnering later creates a new Partnership.
 - Former parties may form a new Partnership. Its Activity-visibility window begins at the new acceptance; the old Partnership remains ended with a separate receipt, and the returning Partner cannot see the gap.
 - A pending Partner invitation is immutable. Resending does not extend its expiry. Changing its invitee or proposed Log sharing requires cancellation and a new invitation.
+- A Protectee may hold at most five pending Partner invitations, and Nightloch accepts at most ten send or resend operations per Protectee in a rolling 24-hour window. A particular invitation may be resent once every 24 hours, counted from its most recent send (S3-13). Each limit refuses in the Protectee's own words, names the remedy — cancel one, or wait — and never names or counts another party.
+- Resending is a mutation and takes one consequence-specific confirmation before any mail is queued (S3-46). It states the three things a reminder invites a Protectee to assume away: the expiry does not move, the earlier link stops working, and current Partners are not emailed again.
+- Each send and resend mints a fresh bearer link and supersedes the previous one, so exactly one live link exists per invitation. This follows from storing only the token hash and is recorded in [ADR 0003](./adr/0003-supersede-the-bearer-link-on-every-invitation-send.md); the invitation itself is still immutable (S3-66), and an invitee who kept only the older email answers from **Partner invitations** while signed in (S3-82).
+- A pending invitation row shows the original sent time, the unchanged expiry, how many reminders followed and when the last one went, and when the next resend becomes available. Resending is offered only once that instant has passed.
 - A signed-in User sees all pending Partner invitations addressed to their verified email in **Partner invitations** and may review, accept, or decline without the bearer link. The same disclosures and confirmation rules apply.
 - The dashboard separates **Your protection** from **People you protect**. A User’s own Partner-lock status remains visible even when they protect other people. Reciprocal Partnerships appear independently in both areas.
 - Reciprocal Partnerships are two independent directional Partnerships. Each keeps its own Log sharing, Cooling-off deadline, ending, Partner powers, and receipt, and every Activity entry is attributed to the Protectee and Partnership of its own direction; ending or changing one never mutates the other, and no screen or route lets a User's role in one direction act on the other direction's Partnership. The Activity *visibility window* is a read-side rule and is specified with the Activity read path, which #10 does not build.

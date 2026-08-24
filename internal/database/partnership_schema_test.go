@@ -108,3 +108,65 @@ func TestMailDeliveryJobSchemaRejectsDuplicateIdempotencyKeys(t *testing.T) {
 		t.Fatalf("distinct job: %v", err)
 	}
 }
+
+// TestSendLedgerMigrationBackfillsExistingInvitations exercises the only state
+// the backfill exists for: a deployed database that already holds invitations
+// sent before the send ledger existed. Their last send is the only one
+// recorded anywhere, so counting it is what keeps an upgrade from handing
+// every Protectee a fresh rolling window.
+func TestSendLedgerMigrationBackfillsExistingInvitations(t *testing.T) {
+	t.Parallel()
+	db, err := Open(filepath.Join(t.TempDir(), "nightloch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+
+	// Stand the database up at the schema version before the send ledger,
+	// which is where an existing deployment is when this migration arrives.
+	applyMigrations(t, db, len(migrations)-1)
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO users(id, email, created_at) VALUES (1, 'protectee@example.com', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO partner_invitations(
+		protectee_id, invitee_email, log_sharing, token_hash, created_at,
+		expires_at, last_sent_at, send_count, state)
+		VALUES (1, 'invitee@example.com', 0, randomblob(32), 100, 200, 150, 1, 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate forward: %v", err)
+	}
+	var protecteeID, sentAt int64
+	if err := db.QueryRowContext(ctx,
+		"SELECT protectee_id, sent_at FROM partner_invitation_sends").
+		Scan(&protecteeID, &sentAt); err != nil {
+		t.Fatal(err)
+	}
+	if protecteeID != 1 || sentAt != 150 {
+		t.Fatalf("backfilled send = Protectee %d at %d, want 1 at 150", protecteeID, sentAt)
+	}
+}
+
+// applyMigrations brings a fresh database up to the first count migrations,
+// recording them exactly as Migrate would, so a later Migrate resumes rather
+// than starting over.
+func applyMigrations(t *testing.T, db *sql.DB, count int) {
+	t.Helper()
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (
+		version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for index, migration := range migrations[:count] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatalf("apply migration %d: %v", index+1, err)
+		}
+		if _, err := db.Exec(
+			"INSERT INTO schema_migrations(version, applied_at) VALUES (?, unixepoch())", index+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

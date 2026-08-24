@@ -42,7 +42,11 @@ type invitationConfirmData struct {
 	Action            string
 	Back              string
 	CounterpartyEmail string
-	Version           string
+	// ExpiresAt is the invitation's own deadline, stated by the confirmations
+	// whose consequence depends on it. A resend confirmation names it because
+	// the deadline not moving is the consequence.
+	ExpiresAt time.Time
+	Version   string
 }
 
 // invitationReceiptData is the in-app receipt an initiator gets for a mutation
@@ -400,4 +404,77 @@ func (a *App) invitationReturnPath(w http.ResponseWriter, r *http.Request) strin
 	}
 	a.clearInvitationReturn(w)
 	return "/partners/invitations/" + cookie.Value
+}
+
+// confirmResendInvitation renders the Protectee's one consequence-specific
+// confirmation before they resend (S3-46). The consequences worth stating are
+// the ones a reminder makes easy to assume away: the deadline does not move,
+// the earlier link stops working, and current Partners are not emailed again.
+// It is a GET and mutates nothing (S3-28).
+func (a *App) confirmResendInvitation(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	id, valid := pathID(r)
+	if !valid {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	view, err := a.partnerships.ProtecteeView(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	pending, found := pendingInvitation(view, id)
+	if !found {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	csrf, err := a.csrfToken(w, r)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+	a.render(w, r, http.StatusOK, "invitation-resend-confirm", invitationConfirmData{
+		CSRFToken: csrf, Back: "/",
+		Action:            "/partners/sent-invitations/" + strconv.FormatInt(id, 10) + "/resend",
+		CounterpartyEmail: pending.InviteeEmail, ExpiresAt: pending.ExpiresAt, Version: a.version,
+	})
+}
+
+// resendInvitation puts a pending invitation in front of its invitee again.
+// It is one of the Protectee's two pending-invitation controls, and the only
+// one that changes nothing about the invitation: the invited address, the
+// proposed Log sharing, and the seven-day expiry stay as sent, so correcting
+// any of them is still cancel-and-reinvite.
+//
+// A refused resend re-renders the dashboard with its reason, because the
+// reason is always a limit the Protectee can wait out and the row it applies
+// to is on that page.
+func (a *App) resendInvitation(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUser(w, r)
+	if !ok {
+		return
+	}
+	id, valid := pathID(r)
+	if !valid {
+		a.renderUnavailable(w, r, http.StatusNotFound)
+		return
+	}
+	_, err := a.partnerships.ResendInvitation(r.Context(), id, user.ID)
+	switch {
+	case err == nil:
+		// The dashboard is the receipt: the row now names the resend and
+		// repeats the expiry it did not move.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	case partnership.IsRefusal(err):
+		a.renderDashboard(w, r, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, partnership.ErrInvitationUnavailable):
+		// A settled invitation, or one that was never this User's to resend.
+		// Neither answer confirms the invitation exists.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	default:
+		a.internalError(w, r, err)
+	}
 }
