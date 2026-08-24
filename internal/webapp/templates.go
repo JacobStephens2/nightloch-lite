@@ -68,12 +68,15 @@ Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Part
 <ul class="rows">{{range .Received}}<li><strong>{{.ProtecteeEmail}}</strong> invited you to be their Partner.<br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log access.{{else}}Off — you will not receive domain-log access.{{end}}<br>
+{{if .Reciprocal}}<span class="warn-inline">Reciprocal Partnerships if you accept: Yes.</span> {{.ProtecteeEmail}} already protects you; accepting adds a second, independent Partnership in the opposite direction. The two do not merge.<br>{{end}}
 <a href="/partners/received-invitations/{{.ID}}">Review this invitation</a></li>{{end}}</ul>
 {{end}}
 {{if .Protecting}}
 <h2>People you protect</h2>
+<p class="lede">This area is separate from Your protection above. Protecting someone else never changes your own Partner lock, and a Partnership listed here is independent of any Partnership listed there.</p>
 <p class="warn"><strong>Every Partner can act independently. Only add someone you trust.</strong> Each Partner below acts on their own; you cannot veto, remove, or escalate over another Partner.</p>
 <ul class="rows">{{range .Protecting}}<li><strong>{{.ProtecteeEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On — you can view their DNS domain log.{{else}}Off — you cannot view their DNS domain log.{{end}}<br>
+Reciprocal: {{if .Reciprocal}}Yes — {{.ProtecteeEmail}} is also one of your own Partners, listed under Your protection above. That is a separate Partnership with its own Log sharing, ending, and deadline; nothing you do here changes it.{{else}}No{{end}}<br>
 <strong>Their Roster</strong>
 <ul class="rows">{{range .Roster}}<li>{{.PartnerEmail}} — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal: {{if .Reciprocal}}Yes{{else}}No{{end}}. {{if .Reachability.Warning}}<span class="warn-inline">{{.Reachability.Label}}.</span>{{else}}{{.Reachability.Label}}.{{end}}{{if .CoolingOffRunning}} <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span>{{end}}</li>{{end}}</ul>
 {{if .PendingInvitations}}
@@ -115,6 +118,11 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <p>{{.Review.OtherPartnerCount}} other Partner(s) currently protect {{.Review.ProtecteeEmail}}. They have been told this invitation was sent to your email. If you accept, you will see their verified emails and they will continue to see yours.</p>
 {{else}}
 <p>0 other Partners currently protect {{.Review.ProtecteeEmail}}. If you accept, your verified email will remain visible to current and future Partners in the Roster and Activity.</p>
+{{end}}
+{{if .Review.Reciprocal}}
+<h2>Reciprocal Partnerships</h2>
+<p>{{.Review.ProtecteeEmail}} already protects you as your Partner. Accepting creates a second, independent Partnership in the opposite direction, so you would be their Partner too.</p>
+<p>The two Partnerships do not merge: each keeps its own Log sharing, its own ending, and its own powers, and ending one does not end the other.</p>
 {{end}}
 <h2>Log sharing</h2>
 <p>{{if .Review.LogSharing}}On — you will receive domain-log access after acceptance.{{else}}Off — you will not receive domain-log access.{{end}} {{.Review.ProtecteeEmail}} can turn Log sharing off at any time; Nightloch will tell you when they do.</p>

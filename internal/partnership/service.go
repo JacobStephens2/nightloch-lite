@@ -145,7 +145,7 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 	if err != nil {
 		return Invitation{}, err
 	}
-	reciprocal, err := protects(ctx, tx, command.ProtecteeID, inviteeUserID)
+	reciprocal, err := reciprocalWith(ctx, tx, command.ProtecteeID, inviteeUserID)
 	if err != nil {
 		return Invitation{}, err
 	}
@@ -190,6 +190,7 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		InviteeEmail:   inviteeEmail,
 		LogSharing:     command.LogSharing,
 		PartnerCount:   len(currentPartners),
+		Reciprocal:     reciprocal,
 		ReviewURL:      s.reviewURL(rawToken),
 		ExpiresAt:      expiresAt,
 	})}
@@ -339,11 +340,7 @@ func (s *Service) pendingInvitations(ctx context.Context, protecteeID int64) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT invitation.id, protectee.email, invitation.invitee_email,
 		       invitation.log_sharing, invitation.last_sent_at, invitation.expires_at,
-		       EXISTS(SELECT 1 FROM partnerships reverse
-		               JOIN users invitee ON invitee.id = reverse.protectee_id
-		               WHERE invitee.email = invitation.invitee_email
-		                 AND reverse.partner_id = invitation.protectee_id
-		                 AND reverse.ended_at IS NULL),
+		       `+reciprocalOfInvitation+`,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.invitation_id = invitation.id
 		                    AND job.recipient_email = invitation.invitee_email
