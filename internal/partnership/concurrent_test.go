@@ -300,6 +300,68 @@ func TestAcceptanceBeforeAFinalDeadlineSaysThePartnerLockSurvivesIt(t *testing.T
 	}
 }
 
+func TestAcceptanceDuringConcurrentCoolingOffNamesTheDeadlineTheLockOutlives(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	fixture := twoPartnerships(t, service, db)
+	third := createUser(t, db, "third@example.com")
+
+	// Every Partnership is scheduled to end, so the Partner lock has a
+	// scheduled ending of its own even though no single Partnership is yet
+	// the Protectee's last one.
+	startEnding(t, service, fixture.firstID, fixture.protectee)
+	later := testClock.Add(time.Hour)
+	at(service, later)
+	last := startEnding(t, service, fixture.secondID, fixture.protectee)
+
+	pending := invite(t, service, fixture.protectee, "third@example.com", false)
+	since := lastJobID(t, service)
+	acceptFor(t, service, pending, third)
+
+	// The last deadline is the one the lock hangs on, so it is the one the
+	// alert names — not the earlier countdown, which changes nothing.
+	surviving := "The Partner lock will remain active after second@example.com’s\n" +
+		"Partnership is scheduled to end on " + utcStamp(last.EndsAt) + "."
+	alerts := queuedBodies(t, service, MessagePartnershipAcceptedExisting, since)
+	if len(alerts) != 3 {
+		t.Fatalf("acceptance alert recipients = %v", keysOf(alerts))
+	}
+	for recipient, body := range alerts {
+		if !strings.Contains(body, surviving) {
+			t.Fatalf("acceptance alert to %s did not name the deadline the lock outlives:\n%s",
+				recipient, body)
+		}
+	}
+}
+
+func TestAcceptanceInsideOneHorizonNamesThatHorizonRatherThanOnePartner(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	fixture := twoPartnerships(t, service, db)
+	third := createUser(t, db, "third@example.com")
+
+	// Both countdowns were started inside one horizon and end together, so
+	// neither Partner is "the final active Partner" and naming one would be
+	// false. The shared deadline carries the sentence instead.
+	startEnding(t, service, fixture.firstID, fixture.protectee)
+	shared := startEnding(t, service, fixture.secondID, fixture.protectee)
+
+	pending := invite(t, service, fixture.protectee, "third@example.com", false)
+	since := lastJobID(t, service)
+	acceptFor(t, service, pending, third)
+
+	surviving := "The Partner lock will remain active after the 2 Partnerships\n" +
+		"scheduled to end on " + utcStamp(shared.EndsAt) + "."
+	for recipient, body := range queuedBodies(t, service, MessagePartnershipAcceptedExisting, since) {
+		if !strings.Contains(body, surviving) {
+			t.Fatalf("acceptance alert to %s did not name the shared horizon:\n%s", recipient, body)
+		}
+		if strings.Contains(body, "first@example.com’s\nPartnership is scheduled") {
+			t.Fatalf("acceptance alert to %s named one of two tied Partnerships:\n%s", recipient, body)
+		}
+	}
+}
+
 func TestAnOrdinaryAcceptanceSaysNothingAboutASurvivingPartnerLock(t *testing.T) {
 	t.Parallel()
 	service, db := newTestService(t)

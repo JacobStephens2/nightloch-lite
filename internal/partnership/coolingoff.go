@@ -170,8 +170,11 @@ func (s *Service) StartCoolingOff(ctx context.Context, command CoolingOffCommand
 			OccurredAt:    now,
 			EffectiveAt:   &endsAt,
 			Details: map[string]any{
-				"log_sharing":       partnership.logSharing,
-				"partner_count":     remaining,
+				"log_sharing": partnership.logSharing,
+				// Both counts describe the same instant the ending does, so a
+				// reader of this entry cannot be told that one Partner remains
+				// and that the request is final at the same time.
+				"partner_count":     surviving,
 				"final_partnership": request.FinalPartnership(),
 				"cooling_off_hours": int(coolingOffDuration / time.Hour),
 			},
@@ -467,17 +470,9 @@ func (s *Service) completeCoolingOff(ctx context.Context, partnershipID int64) (
 func (s *Service) announceFinalCoolingOff(ctx context.Context, tx *sql.Tx,
 	ended livePartnership, at time.Time) error {
 
-	final, running, err := readFinalCoolingOff(ctx, tx, ended.protecteeID, ended.id)
-	if err != nil || !running {
+	final, transitioned, err := readNewlyFinalCoolingOff(ctx, tx, ended, at)
+	if err != nil || !transitioned {
 		return err
-	}
-	// A deadline that has already arrived announces nothing: the sweep that
-	// settled this ending is about to settle that one too, and telling anybody
-	// a Partnership "remains scheduled to end" at a past instant would be
-	// false. This is the equal-deadline case, and it resolves the same way
-	// every other race here does — the ending that commits wins.
-	if !final.coolingOffEndsAt.After(at) {
-		return nil
 	}
 
 	activityID, err := appendActivity(ctx, tx, activityEntry{
@@ -527,13 +522,20 @@ func (s *Service) announceFinalCoolingOff(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-// readFinalCoolingOff resolves the Partnership that is both the Protectee's
-// only remaining active one — ignoring excluding, which is the Partnership the
-// caller has just ended — and already scheduled to end. Anything else, one
-// survivor with no Cooling-off or several survivors, is not a final-Partnership
-// transition and reports false.
-func readFinalCoolingOff(ctx context.Context, queryer rowQueryer, protecteeID, excluding int64) (livePartnership, bool, error) {
-	survivors, err := countPartnersAfterEnding(ctx, queryer, protecteeID, excluding)
+// readNewlyFinalCoolingOff resolves the Partnership the ending just left as
+// the Protectee's final active one, when that Partnership is already scheduled
+// to end and its deadline is still ahead. Anything else — several survivors,
+// one survivor with no Cooling-off, or a deadline that has already arrived —
+// is not a transition anyone can be told about, and reports false.
+//
+// The last of those is the equal-deadline case: the sweep settling this ending
+// is about to settle that one too, so calling it "scheduled to end" at a past
+// instant would be false. It resolves the way every other race in this package
+// does — the ending that commits wins.
+func readNewlyFinalCoolingOff(ctx context.Context, queryer rowQueryer,
+	ended livePartnership, at time.Time) (livePartnership, bool, error) {
+
+	survivors, err := countPartnersAfterEnding(ctx, queryer, ended.protecteeID, ended.id)
 	if err != nil {
 		return livePartnership{}, false, err
 	}
@@ -542,14 +544,69 @@ func readFinalCoolingOff(ctx context.Context, queryer rowQueryer, protecteeID, e
 	}
 	final, err := scanLivePartnership(queryer.QueryRowContext(ctx, livePartnershipProjection+
 		`partnership.protectee_id = ? AND partnership.id <> ?
-		 AND partnership.cooling_off_ends_at IS NOT NULL`, protecteeID, excluding))
+		 AND partnership.cooling_off_ends_at IS NOT NULL`, ended.protecteeID, ended.id))
 	if errors.Is(err, ErrPartnershipUnavailable) {
 		return livePartnership{}, false, nil
 	}
 	if err != nil {
 		return livePartnership{}, false, err
 	}
-	return final, true, nil
+	return final, final.coolingOffEndsAt.After(at), nil
+}
+
+// lockEndingSchedule is the instant a Protectee's Partner lock is currently
+// scheduled to deactivate, and the Partnerships that end at it. There is one
+// only when every live Partnership is already in Cooling-off: a Partnership
+// with no scheduled ending outlasts every deadline, so the lock has no
+// scheduled end at all. Several Partnerships share the instant when their
+// countdowns were started inside one horizon.
+type lockEndingSchedule struct {
+	endsAt   time.Time
+	partners []string
+}
+
+// readLockEndingSchedule answers, for the Roster as it stands with excluding
+// left out, when the Partner lock is scheduled to deactivate. It is the
+// question behind the acceptance disclosure: a new Partner arriving before
+// that instant is exactly what keeps the lock alive past it, and the people
+// who were told the deadline would end the lock are entitled to hear so.
+func readLockEndingSchedule(ctx context.Context, queryer rowQueryer,
+	protecteeID, excluding int64) (lockEndingSchedule, bool, error) {
+
+	var live, unscheduled, latest int64
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(*) - COUNT(cooling_off_ends_at),
+		       COALESCE(MAX(cooling_off_ends_at), 0)
+		FROM partnerships
+		WHERE protectee_id = ? AND id <> ? AND ended_at IS NULL`,
+		protecteeID, excluding).Scan(&live, &unscheduled, &latest); err != nil {
+		return lockEndingSchedule{}, false, fmt.Errorf("read scheduled Partner-lock ending: %w", err)
+	}
+	if live == 0 || unscheduled > 0 {
+		return lockEndingSchedule{}, false, nil
+	}
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT users.email FROM partnerships
+		JOIN users ON users.id = partnerships.partner_id
+		WHERE partnerships.protectee_id = ? AND partnerships.id <> ?
+		  AND partnerships.ended_at IS NULL AND partnerships.cooling_off_ends_at = ?
+		ORDER BY partnerships.accepted_at, partnerships.id`, protecteeID, excluding, latest)
+	if err != nil {
+		return lockEndingSchedule{}, false, fmt.Errorf("read scheduled Partner-lock ending: %w", err)
+	}
+	defer rows.Close()
+	schedule := lockEndingSchedule{endsAt: time.Unix(latest, 0).UTC()}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return lockEndingSchedule{}, false, fmt.Errorf("read scheduled Partner-lock ending: %w", err)
+		}
+		schedule.partners = append(schedule.partners, email)
+	}
+	if err := rows.Err(); err != nil {
+		return lockEndingSchedule{}, false, fmt.Errorf("read scheduled Partner-lock ending: %w", err)
+	}
+	return schedule, true, nil
 }
 
 // coolingOffRequestActivityID finds the Protectee's most recent Cooling-off
