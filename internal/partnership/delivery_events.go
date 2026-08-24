@@ -24,11 +24,23 @@ const (
 type DeliveryEventType string
 
 const (
-	EventSent       DeliveryEventType = "email.sent"
-	EventDelivered  DeliveryEventType = "email.delivered"
-	EventDelayed    DeliveryEventType = "email.delivery_delayed"
+	EventSent      DeliveryEventType = "email.sent"
+	EventDelivered DeliveryEventType = "email.delivered"
+	// EventDelayed is Resend's temporary-issue event and the only one that
+	// says a message is still on its way.
+	EventDelayed DeliveryEventType = "email.delivery_delayed"
+	// EventBounced is a mail server permanently rejecting the message, and
+	// EventComplained is a delivered message the recipient marked as spam.
+	// Both mean Nightloch cannot reach that Partner (S3-47).
 	EventBounced    DeliveryEventType = "email.bounced"
 	EventComplained DeliveryEventType = "email.complained"
+	// EventFailed is a send that errored outright, and EventSuppressed is
+	// Resend refusing to send at all — an address it already knows bounced or
+	// complained. Neither message exists anywhere, so both are as final as a
+	// bounce: pretending they were merely delayed would promise a retry that
+	// is never coming.
+	EventFailed     DeliveryEventType = "email.failed"
+	EventSuppressed DeliveryEventType = "email.suppressed"
 )
 
 // ErrUnknownDeliveryEvent rejects an event kind this module does not act on.
@@ -64,9 +76,12 @@ func (e DeliveryEvent) state() (DeliveryState, error) {
 		return DeliveryDelivered, nil
 	case EventDelayed:
 		return DeliveryDelayed, nil
-	case EventComplained:
+	case EventComplained, EventFailed, EventSuppressed:
 		return DeliveryFailed, nil
 	case EventBounced:
+		// Resend raises email.bounced only for a permanent rejection and has
+		// email.delivery_delayed for the temporary case, so a bounce is
+		// terminal unless its own type says otherwise.
 		if e.Permanent {
 			return DeliveryFailed, nil
 		}
