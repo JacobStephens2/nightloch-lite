@@ -99,7 +99,9 @@ func (s *Service) RequestMagicLink(ctx context.Context, rawEmail, ip, humanToken
 		ReplyTo:        signInReplyTo,
 		IdempotencyKey: "nightloch-magic-" + hex.EncodeToString(linkDigest[:]),
 	}
-	if err := s.sender.Send(ctx, envelope); err != nil {
+	// Sign-in links are single-use and short-lived, so this path keeps no
+	// provider message id: there is no Partner reachability to report on it.
+	if _, err := s.sender.Send(ctx, envelope); err != nil {
 		// The user receives a generic response, but a failed delivery must not
 		// leave a live bearer token behind.
 		_ = s.store.InvalidateMagicLink(ctx, tokenHash, now)

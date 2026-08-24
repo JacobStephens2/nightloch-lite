@@ -18,6 +18,7 @@ import (
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
@@ -36,31 +37,37 @@ type authService interface {
 
 // Options are the dependencies and public settings for the web app.
 type Options struct {
-	Auth          authService
-	DB            *sql.DB
-	Logger        *slog.Logger
-	Partnerships  *partnership.Service
-	TurnstileSite string
-	Version       string
+	Auth         authService
+	DB           *sql.DB
+	Logger       *slog.Logger
+	Partnerships *partnership.Service
+	// DeliveryWebhookSecret authenticates the provider's delivery callbacks.
+	// Without it Nightloch could only guess at Partner reachability from its
+	// own send attempts, so it is required rather than optional.
+	DeliveryWebhookSecret string
+	TurnstileSite         string
+	Version               string
 }
 
 // App is an http.Handler with explicit dependencies for integration testing.
 type App struct {
-	auth          authService
-	db            *sql.DB
-	logger        *slog.Logger
-	partnerships  *partnership.Service
-	turnstileSite string
-	version       string
-	now           func() time.Time
-	random        io.Reader
-	templates     map[string]*template.Template
-	handler       http.Handler
+	auth             authService
+	db               *sql.DB
+	logger           *slog.Logger
+	partnerships     *partnership.Service
+	deliveryVerifier mailmessage.WebhookVerifier
+	turnstileSite    string
+	version          string
+	now              func() time.Time
+	random           io.Reader
+	templates        map[string]*template.Template
+	handler          http.Handler
 }
 
 func New(options Options) (*App, error) {
-	if options.Auth == nil || options.DB == nil || options.Partnerships == nil || options.TurnstileSite == "" {
-		return nil, errors.New("webapp requires Auth, DB, Partnerships, and TurnstileSite")
+	if options.Auth == nil || options.DB == nil || options.Partnerships == nil ||
+		options.TurnstileSite == "" || options.DeliveryWebhookSecret == "" {
+		return nil, errors.New("webapp requires Auth, DB, Partnerships, TurnstileSite, and DeliveryWebhookSecret")
 	}
 	if options.Logger == nil {
 		options.Logger = slog.Default()
@@ -70,15 +77,16 @@ func New(options Options) (*App, error) {
 		return nil, err
 	}
 	app := &App{
-		auth:          options.Auth,
-		db:            options.DB,
-		logger:        options.Logger,
-		partnerships:  options.Partnerships,
-		turnstileSite: options.TurnstileSite,
-		version:       options.Version,
-		now:           time.Now,
-		random:        rand.Reader,
-		templates:     templates,
+		auth:             options.Auth,
+		db:               options.DB,
+		logger:           options.Logger,
+		partnerships:     options.Partnerships,
+		deliveryVerifier: mailmessage.WebhookVerifier{Secret: options.DeliveryWebhookSecret},
+		turnstileSite:    options.TurnstileSite,
+		version:          options.Version,
+		now:              time.Now,
+		random:           rand.Reader,
+		templates:        templates,
 	}
 
 	mux := http.NewServeMux()
@@ -117,6 +125,11 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/resend", app.resendInvitation)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
+	// The provider's delivery callbacks are the only unauthenticated POST.
+	// They carry no session and no CSRF token; the signature over the body is
+	// what authorizes them, so they bypass the CSRF check by path (see
+	// verifyCSRF) rather than by having a token to present.
+	mux.HandleFunc("POST "+deliveryWebhookPath, app.deliveryWebhook)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)

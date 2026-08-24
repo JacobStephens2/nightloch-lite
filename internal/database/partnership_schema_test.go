@@ -125,7 +125,7 @@ func TestSendLedgerMigrationBackfillsExistingInvitations(t *testing.T) {
 
 	// Stand the database up at the schema version before the send ledger,
 	// which is where an existing deployment is when this migration arrives.
-	applyMigrations(t, db, len(migrations)-1)
+	applyMigrations(t, db, sendLedgerMigration-1)
 	if _, err := db.ExecContext(ctx,
 		"INSERT INTO users(id, email, created_at) VALUES (1, 'protectee@example.com', 1)"); err != nil {
 		t.Fatal(err)
@@ -168,5 +168,53 @@ func applyMigrations(t *testing.T, db *sql.DB, count int) {
 			"INSERT INTO schema_migrations(version, applied_at) VALUES (?, unixepoch())", index+1); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestDeliveryEventMigrationLeavesExistingJobsCorrelatable exercises the
+// upgrade an existing deployment takes: jobs sent before delivery events
+// existed have no provider message id, and many of them must coexist. A
+// UNIQUE index that counted NULLs as equal would refuse the second one.
+func TestDeliveryEventMigrationLeavesExistingJobsCorrelatable(t *testing.T) {
+	t.Parallel()
+	db, err := Open(filepath.Join(t.TempDir(), "nightloch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+
+	applyMigrations(t, db, deliveryEventMigration-1)
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO users(id, email, created_at) VALUES (1, 'protectee@example.com', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	insertJob := `INSERT INTO mail_delivery_jobs(
+		message_kind, recipient_email, subject, body_text, body_html, reply_to,
+		idempotency_key, state, attempts, next_attempt_at, created_at)
+		VALUES ('partner_invitation', ?, 's', 't', 'h', 'r', ?, 'sent', 1, 1, 1)`
+	for _, recipient := range []string{"one@example.com", "two@example.com"} {
+		if _, err := db.ExecContext(ctx, insertJob, recipient, "key-"+recipient); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate forward: %v", err)
+	}
+	var uncorrelatable int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE provider_message_id IS NULL").
+		Scan(&uncorrelatable); err != nil {
+		t.Fatal(err)
+	}
+	if uncorrelatable != 2 {
+		t.Fatalf("jobs without a provider message id = %d, want 2", uncorrelatable)
+	}
+	// Two jobs must never share one provider message: an event names exactly
+	// one recipient's message or none at all.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE mail_delivery_jobs SET provider_message_id = 'shared'"); err == nil {
+		t.Fatal("the schema allowed two jobs to share a provider message id")
 	}
 }

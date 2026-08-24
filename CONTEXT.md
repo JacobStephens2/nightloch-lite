@@ -41,8 +41,12 @@ The restraint active while a Protectee has at least one active Partnership: the 
 _Avoid_: Hard mode, locked account, partner mode
 
 **Partner reachability**:
-Nightloch’s known ability to deliver Action alerts to a Partner’s verified email. It describes mail delivery, not whether the Partner is online or attentive.
+Nightloch’s known ability to deliver Action alerts to a Partner’s verified email. It describes mail delivery, not whether the Partner is online or attentive. It is derived from Delivery events and is a visible warning only: an unreachable Partner keeps every power, and no lifecycle deadline pauses.
 _Avoid_: Online status, Partner availability, email health (alone)
+
+**Delivery event**:
+One report from the mail provider about a message Nightloch already handed over — sent, delivered, delayed, bounced, or complained. It reports on exactly one recipient’s message, arrives asynchronously and possibly out of order, and changes only Partner reachability and Delivery state.
+_Avoid_: Webhook (in product language), email status, bounce report
 
 **Device**:
 An enrolled tunnel identity for a Protectee (keys, address, and enrollment lifecycle)—not the human and not the Partnership.

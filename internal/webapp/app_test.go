@@ -54,7 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	partnerships := partnership.NewService(db, baseURL)
 	app, err := New(Options{
 		Auth: authService, DB: db, Partnerships: partnerships,
-		TurnstileSite: "site-key", Version: "test",
+		TurnstileSite: "site-key", DeliveryWebhookSecret: testWebhookSecret, Version: "test",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {

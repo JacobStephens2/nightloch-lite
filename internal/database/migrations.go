@@ -1,5 +1,15 @@
 package database
 
+// sendLedgerMigration and deliveryEventMigration are the schema versions that
+// introduced the invitation send ledger and the provider delivery-event
+// tables. Tests that stand a database up at the version before one of them
+// name it here rather than counting from the end of the list, which moves
+// every time a migration is appended.
+const (
+	sendLedgerMigration    = 3
+	deliveryEventMigration = 4
+)
+
 var migrations = []string{
 	`CREATE TABLE users (
 		id INTEGER PRIMARY KEY,
@@ -143,4 +153,40 @@ var migrations = []string{
 	-- upgrade from handing every Protectee a fresh window.
 	INSERT INTO partner_invitation_sends(protectee_id, invitation_id, sent_at)
 		SELECT protectee_id, id, last_sent_at FROM partner_invitations;`,
+	// Provider delivery events are what makes reachability honest: a send
+	// Resend accepted can still bounce hours later. Correlating one takes the
+	// provider's own message id, and processing one safely takes a record of
+	// which events have already been applied, because a provider retries a
+	// callback it did not see acknowledged.
+	`ALTER TABLE mail_delivery_jobs ADD COLUMN provider_message_id TEXT;
+	-- Two jobs cannot share a provider message, so a callback names exactly
+	-- one recipient's message. NULL stays free: an unsent job has no id, and a
+	-- provider response Nightloch could not parse never gets one.
+	CREATE UNIQUE INDEX mail_delivery_jobs_provider_idx
+		ON mail_delivery_jobs(provider_message_id) WHERE provider_message_id IS NOT NULL;
+	-- last_event_at is the provider's own timestamp for the newest event
+	-- already applied to this job, so events that arrive out of order cannot
+	-- let a stale delivery overwrite a later bounce.
+	ALTER TABLE mail_delivery_jobs ADD COLUMN last_event_at INTEGER;
+	CREATE INDEX mail_delivery_jobs_recipient_idx
+		ON mail_delivery_jobs(recipient_email, id);
+
+	CREATE TABLE mail_delivery_events (
+		id INTEGER PRIMARY KEY,
+		-- The provider's own event id. UNIQUE is the idempotency: a redelivered
+		-- callback is recognised before it can change any state twice.
+		provider_event_id TEXT NOT NULL UNIQUE,
+		provider_message_id TEXT NOT NULL,
+		-- NULL when the event names a message this control plane never queued,
+		-- such as a sign-in link. The event is still recorded, and still
+		-- changes no Partnership state.
+		job_id INTEGER REFERENCES mail_delivery_jobs(id) ON DELETE CASCADE,
+		event_type TEXT NOT NULL,
+		-- occurred_at is the provider's clock; received_at is Nightloch's.
+		occurred_at INTEGER NOT NULL,
+		received_at INTEGER NOT NULL,
+		applied INTEGER NOT NULL CHECK(applied IN (0, 1))
+	);
+	CREATE INDEX mail_delivery_events_job_idx
+		ON mail_delivery_events(job_id, occurred_at);`,
 }

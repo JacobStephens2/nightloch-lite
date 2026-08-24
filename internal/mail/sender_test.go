@@ -29,9 +29,13 @@ func TestRecordingSenderCapturesRecipientSpecificEnvelopes(t *testing.T) {
 			IdempotencyKey: "partnership/two/partner-two",
 		},
 	}
-	for _, envelope := range want {
-		if err := recorder.Send(context.Background(), envelope); err != nil {
+	for sequence, envelope := range want {
+		receipt, err := recorder.Send(context.Background(), envelope)
+		if err != nil {
 			t.Fatalf("Send: %v", err)
+		}
+		if receipt.ProviderMessageID != RecordedMessageID(sequence+1) {
+			t.Fatalf("provider message id = %q", receipt.ProviderMessageID)
 		}
 	}
 	if !reflect.DeepEqual(recorder.Envelopes, want) {
@@ -40,7 +44,11 @@ func TestRecordingSenderCapturesRecipientSpecificEnvelopes(t *testing.T) {
 
 	sendError := errors.New("mail unavailable")
 	recorder.SendError = sendError
-	if err := recorder.Send(context.Background(), want[0]); !errors.Is(err, sendError) {
+	receipt, err := recorder.Send(context.Background(), want[0])
+	if !errors.Is(err, sendError) {
 		t.Fatalf("Send error = %v, want %v", err, sendError)
+	}
+	if receipt.ProviderMessageID != "" {
+		t.Fatalf("a refused envelope reported provider message id %q", receipt.ProviderMessageID)
 	}
 }

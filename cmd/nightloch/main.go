@@ -135,6 +135,7 @@ func runServe() error {
 	app, err := webapp.New(webapp.Options{
 		Auth: authService, DB: db, Logger: logger, Partnerships: partnerships,
 		TurnstileSite: settings.TurnstileSite, Version: version,
+		DeliveryWebhookSecret: settings.ResendWebhookSecret,
 	})
 	if err != nil {
 		return err
