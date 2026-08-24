@@ -250,6 +250,9 @@ func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewe
 // you protect**, including that Protectee's full Roster. Both become visible
 // only once the Partnership exists (S3-06, S3-15).
 type ProtecteeEntry struct {
+	// PartnershipID names the one Partnership this row is, so the Partner's
+	// own ending control acts on it without guessing from the two identities.
+	PartnershipID  int64
 	ProtecteeID    int64
 	ProtecteeEmail string
 	Since          time.Time
@@ -263,7 +266,8 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT partnerships.protectee_id, users.email, partnerships.accepted_at, partnerships.log_sharing
+		SELECT partnerships.id, partnerships.protectee_id, users.email,
+		       partnerships.accepted_at, partnerships.log_sharing
 		FROM partnerships JOIN users ON users.id = partnerships.protectee_id
 		WHERE partnerships.partner_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at`, partnerID)
@@ -277,7 +281,7 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 		var person ProtecteeEntry
 		var since int64
 		var logSharing int
-		if err := rows.Scan(&person.ProtecteeID, &person.ProtecteeEmail, &since, &logSharing); err != nil {
+		if err := rows.Scan(&person.PartnershipID, &person.ProtecteeID, &person.ProtecteeEmail, &since, &logSharing); err != nil {
 			return nil, fmt.Errorf("read protected Protectee: %w", err)
 		}
 		person.Since = time.Unix(since, 0).UTC()

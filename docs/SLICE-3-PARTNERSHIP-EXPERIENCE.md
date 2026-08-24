@@ -1,6 +1,6 @@
 # Slice 3 Partnership experience
 
-**Status:** Experience grill complete; shared understanding confirmed 2026-08-23; canonical copy approved through Q86  
+**Status:** Experience grill complete; shared understanding confirmed 2026-08-23; canonical copy approved through Q86, with the ending body's closing link amended 2026-08-23 (see [Recipient-specific link](#recipient-specific-link))  
 **Language:** [CONTEXT.md](../CONTEXT.md)  
 **Decisions:** [DECISIONS.md](../DECISIONS.md), S3-01 onward  
 **Privacy boundary:** [ADR 0001](./adr/0001-bound-partner-activity-by-partnership-lifetime.md)  
@@ -501,12 +501,32 @@ their own Policy.}}
 
 {{Otherwise: The Partner lock remains active.}}
 
-Review the Roster and Activity:
-{{protectee_url}}
+{{recipient_specific_link}}
 
 This is an integrity message from Nightloch. Replies go to the monitored
 address alerts@nightloch.app.
 ```
+
+### Recipient-specific link
+
+**Amended 2026-08-23 (implementing #7).** The ending body previously closed
+with `Review the Roster and Activity: {{protectee_url}}` for every recipient.
+That line is false for the one recipient who has just lost Roster and ongoing
+Activity access, so the closing link now names what each recipient actually
+retains. Nothing else about the common body changed.
+
+```text
+Protectee and every remaining Partner:
+Review the Roster and Activity:
+{{protectee_url}}
+
+The Partner whose Partnership ended:
+You keep a read-only receipt for this ended Partnership:
+{{receipt_url}}
+```
+
+The former Partner's receipt is the only authorized destination they retain
+(S3-16), so it is the only one their copy of the message offers.
 
 ### Event-specific sentences
 

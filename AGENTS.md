@@ -51,7 +51,7 @@ CONTEXT.md              # glossary
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human `tofu apply` |
 | 2 Magic-link sign-in | **Code in repo**; live demo pending origin |
 | 9 Continuous deploy | **Code in repo**; live demo pending origin |
-| 3 Partner graph + Activity | **3A in progress** — `internal/partnership/` owns the invitation lifecycle (send, review, accept, decline, cancel, expire), Partnerships, Activity, authorization, and durable mail jobs |
+| 3 Partner graph + Activity | **3A in progress** — `internal/partnership/` owns the invitation lifecycle (send, review, accept, decline, cancel, expire), Partnerships and their immediate Partner-initiated ending, Activity, authorization, and durable mail jobs |
 | 4+ WG, AGH, Devices, Policy, … | Not started — follow plan |
 
 ## Commands
