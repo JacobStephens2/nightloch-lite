@@ -417,6 +417,58 @@ func TestConcurrentSendsConsumeTheRollingQuotaExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestConcurrentResendsOfOneInvitationSendOnce is the idempotency this
+// operation actually has to hold: a Protectee who submits the same resend
+// twice — a double click, a retried request — causes one email, not two. The
+// compare-and-set in recordSend is what makes the loser stand down.
+func TestConcurrentResendsOfOneInvitationSendOnce(t *testing.T) {
+	t.Parallel()
+	service, db, advance := newTimedService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	sent := invite(t, service, protectee, "invitee@example.com", false)
+	advance(resendInterval)
+
+	const attempts = 4
+	var group sync.WaitGroup
+	results := make([]error, attempts)
+	for index := range attempts {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, results[index] = service.ResendInvitation(context.Background(), sent.ID, protectee)
+		}()
+	}
+	group.Wait()
+
+	accepted := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrResendTooSoon), errors.Is(err, ErrInvitationUnavailable):
+			// Whichever guard the loser reached first; neither sends.
+		default:
+			t.Fatalf("concurrent resend failed: %v", err)
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("%d concurrent resends were accepted, want exactly 1", accepted)
+	}
+
+	var reminders, sendCount, sends int
+	row := db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM mail_delivery_jobs WHERE message_kind = ?),
+		(SELECT send_count FROM partner_invitations WHERE id = ?),
+		(SELECT COUNT(*) FROM partner_invitation_sends WHERE protectee_id = ?)`,
+		MessagePartnerInvitationResent, sent.ID, protectee)
+	if err := row.Scan(&reminders, &sendCount, &sends); err != nil {
+		t.Fatal(err)
+	}
+	if reminders != 1 || sendCount != 2 || sends != 2 {
+		t.Fatalf("reminders=%d send_count=%d recorded sends=%d, want 1/2/2", reminders, sendCount, sends)
+	}
+}
+
 // raceInvitations sends count distinct invitations at once and reports how
 // many were accepted alongside every refusal.
 func raceInvitations(t *testing.T, service *Service, protecteeID int64, count int) (int, []error) {

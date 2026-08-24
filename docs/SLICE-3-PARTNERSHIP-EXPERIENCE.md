@@ -133,6 +133,47 @@ previous one, so exactly one live link exists per invitation at any time. The
 invitee who kept only the older email can still answer from **Partner
 invitations** while signed in (S3-82).
 
+### Resend confirmation
+
+```text
+Resend this Partner invitation?
+
+Nightloch will email {{invitee_email}} the same invitation again. Nothing about
+it changes: the same address is invited on the same terms, and it still expires
+{{expires_at}}. Resending does not give {{invitee_email}} more time to answer.
+
+The link in the earlier email stops working, and the new email carries its
+place. Your current Partners are not emailed again; they were already told this
+invitation exists.
+
+You can resend an invitation once every 24 hours.
+
+[Resend invitation]  [Leave it as it is]
+```
+
+### Pending invitation row after a resend
+
+The Protectee's own row adds one line, and their current Partners read the same
+fact with the sentence that applies to them:
+
+```text
+Resent once, on {{last_sent_at}}. Resending does not extend the expiry above.
+Resent {{n}} times, most recently {{last_sent_at}}. Resending does not extend the expiry above.
+```
+
+```text
+Resent once, on {{last_sent_at}}. Resending did not extend the expiry above, and
+Nightloch did not email you again about it.
+```
+
+Before the interval has passed, the Protectee's row replaces the resend control
+with:
+
+```text
+You can resend this invitation from {{resend_due_at}}. Resending is available
+once every 24 hours.
+```
+
 ## Invitation landing page
 
 ```text
@@ -788,6 +829,8 @@ Canceling User deletion will not restore this invitation.
 - Former parties may form a new Partnership. Its Activity-visibility window begins at the new acceptance; the old Partnership remains ended with a separate receipt, and the returning Partner cannot see the gap.
 - A pending Partner invitation is immutable. Resending does not extend its expiry. Changing its invitee or proposed Log sharing requires cancellation and a new invitation.
 - A Protectee may hold at most five pending Partner invitations, and Nightloch accepts at most ten send or resend operations per Protectee in a rolling 24-hour window. A particular invitation may be resent once every 24 hours, counted from its most recent send (S3-13). Each limit refuses in the Protectee's own words, names the remedy — cancel one, or wait — and never names or counts another party.
+- Resending is a mutation and takes one consequence-specific confirmation before any mail is queued (S3-46). It states the three things a reminder invites a Protectee to assume away: the expiry does not move, the earlier link stops working, and current Partners are not emailed again.
+- Each send and resend mints a fresh bearer link and supersedes the previous one, so exactly one live link exists per invitation. This follows from storing only the token hash and is recorded in [ADR 0003](./adr/0003-supersede-the-bearer-link-on-every-invitation-send.md); the invitation itself is still immutable (S3-66), and an invitee who kept only the older email answers from **Partner invitations** while signed in (S3-82).
 - A pending invitation row shows the original sent time, the unchanged expiry, how many reminders followed and when the last one went, and when the next resend becomes available. Resending is offered only once that instant has passed.
 - A signed-in User sees all pending Partner invitations addressed to their verified email in **Partner invitations** and may review, accept, or decline without the bearer link. The same disclosures and confirmation rules apply.
 - The dashboard separates **Your protection** from **People you protect**. A User’s own Partner-lock status remains visible even when they protect other people. Reciprocal Partnerships appear independently in both areas.
