@@ -26,11 +26,23 @@ const (
 	// the Protectee's act (S3-18).
 	ActionPartnershipEndedAfterCoolingOff = "partnership_ended_after_cooling_off"
 
+	// ActionCoolingOffBecameFinal is Nightloch's own record that a Roster
+	// change left an already-running Cooling-off as the last thing holding the
+	// Partner lock up. Like a completion its actor is NULL: nobody asked for
+	// this transition, it is a consequence of somebody else's ending (S3-18).
+	ActionCoolingOffBecameFinal = "partnership_cooling_off_became_final"
+
 	// MessageCoolingOffStarted and MessageCoolingOffCanceled are the two
 	// Cooling-off signals. Both go to the affected Partner and every other
 	// current Partner, never to the Protectee who initiated them (S3-20).
 	MessageCoolingOffStarted  = "partnership_cooling_off_started"
 	MessageCoolingOffCanceled = "partnership_cooling_off_canceled"
+
+	// MessageCoolingOffBecameFinal is the separate alert for that transition.
+	// Unlike the other two Cooling-off signals it does go to the Protectee:
+	// they did not cause it, and it is their own Partner lock that will
+	// deactivate at a deadline they can no longer be assumed to remember.
+	MessageCoolingOffBecameFinal = "partnership_cooling_off_became_final"
 
 	// EndReasonPartnerAgreedNow is the stored cause when the affected Partner
 	// waives a running Cooling-off, and EndReasonCoolingOffCompleted is the
@@ -58,25 +70,31 @@ type CoolingOffCommand struct {
 
 // CoolingOff is one Partnership's scheduled ending, or — from CoolingOffPreview
 // — the same facts as they would stand if the Protectee confirmed now.
-// RemainingPartners is the Protectee's active-Partner count once this
-// Partnership is gone, so the final-Partnership consequence can be stated
-// before the request as well as after it (S3-43).
+// PartnersAfterDeadline is the Protectee's Partner count once EndsAt arrives,
+// so the final-Partnership consequence can be stated before the request as
+// well as after it (S3-43).
 type CoolingOff struct {
-	PartnershipID     int64
-	ProtecteeEmail    string
-	PartnerEmail      string
-	Since             time.Time
-	LogSharing        bool
-	RemainingPartners int
-	RequestedAt       time.Time
-	EndsAt            time.Time
+	PartnershipID  int64
+	ProtecteeEmail string
+	PartnerEmail   string
+	Since          time.Time
+	LogSharing     bool
+	// PartnersAfterDeadline counts the Partnerships that outlive this
+	// deadline, not merely the other Partnerships that exist today: countdowns
+	// run concurrently, so one already scheduled to end at or before EndsAt is
+	// gone by then too.
+	PartnersAfterDeadline int
+	RequestedAt           time.Time
+	EndsAt                time.Time
 	// CanceledAt is set only on the receipt CancelCoolingOff returns.
 	CanceledAt time.Time
 }
 
 // FinalPartnership reports whether this Partnership's ending will deactivate
-// the Protectee's Partner lock and restore self-loosening.
-func (c CoolingOff) FinalPartnership() bool { return c.RemainingPartners == 0 }
+// the Protectee's Partner lock and restore self-loosening. It is a dynamic
+// answer: the same request stops being final when someone else accepts, and
+// becomes final when the Partnerships outlasting it end first.
+func (c CoolingOff) FinalPartnership() bool { return c.PartnersAfterDeadline == 0 }
 
 // Running reports whether an ending is actually scheduled. It is false for the
 // preview of an unscheduled Partnership, whose EndsAt is the deadline a
@@ -92,18 +110,21 @@ func (s *Service) CoolingOffPreview(ctx context.Context, partnershipID, protecte
 	if err != nil {
 		return CoolingOff{}, err
 	}
-	remaining, err := countPartnersAfterEnding(ctx, s.db, partnership.protecteeID, partnership.id)
-	if err != nil {
-		return CoolingOff{}, err
-	}
-	preview := newCoolingOff(partnership, remaining)
 	// A Cooling-off already running keeps its own request time and deadline.
 	// An unscheduled Partnership previews the deadline a request would set,
 	// and keeps a zero RequestedAt, so no screen can mistake the proposal for
 	// something Nightloch has already committed to.
-	if !preview.Running() {
-		preview.EndsAt = now.Add(coolingOffDuration)
+	deadline := partnership.coolingOffEndsAt
+	if deadline.IsZero() {
+		deadline = now.Add(coolingOffDuration)
 	}
+	surviving, err := countPartnersAfterDeadline(ctx, s.db,
+		partnership.protecteeID, partnership.id, deadline)
+	if err != nil {
+		return CoolingOff{}, err
+	}
+	preview := newCoolingOff(partnership, surviving)
+	preview.EndsAt = deadline
 	return preview, nil
 }
 
@@ -129,7 +150,15 @@ func (s *Service) StartCoolingOff(ctx context.Context, command CoolingOffCommand
 			return CoolingOff{}, err
 		}
 
-		request := newCoolingOff(partnership, remaining)
+		// The deadline is committed above, so the surviving count is read with
+		// this Partnership's own ending already in place: the answer is the
+		// horizon the Protectee is told about, not a serial delay per Partner.
+		surviving, err := countPartnersAfterDeadline(ctx, tx,
+			partnership.protecteeID, partnership.id, endsAt)
+		if err != nil {
+			return CoolingOff{}, err
+		}
+		request := newCoolingOff(partnership, surviving)
 		request.RequestedAt, request.EndsAt = now, endsAt
 		activityID, err := appendActivity(ctx, tx, activityEntry{
 			ProtecteeID:   partnership.protecteeID,
@@ -413,10 +442,114 @@ func (s *Service) completeCoolingOff(ctx context.Context, partnershipID int64) (
 		EndReasonCoolingOffCompleted, activityID); err != nil {
 		return false, err
 	}
+	// A completion changes the Roster exactly as any other ending does, so a
+	// Cooling-off it leaves behind can become final here too — including when
+	// the Protectee scheduled every Partnership inside one horizon.
+	if err := s.announceFinalCoolingOff(ctx, tx, partnership, endedAt); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit Cooling-off completion: %w", err)
 	}
 	return true, nil
+}
+
+// announceFinalCoolingOff records and announces the one Roster change a
+// scheduled ending cannot announce for itself: another Partnership ending has
+// left an already-running Cooling-off as the final active Partnership, so that
+// unchanged deadline is now the instant the Protectee's Partner lock
+// deactivates. The countdown is not restarted, extended, or otherwise touched;
+// only the consequence changed.
+//
+// It is called from every path that ends a Partnership, after that ending's
+// own messages, so the recipients read what happened before they read what it
+// leaves behind.
+func (s *Service) announceFinalCoolingOff(ctx context.Context, tx *sql.Tx,
+	ended livePartnership, at time.Time) error {
+
+	final, running, err := readFinalCoolingOff(ctx, tx, ended.protecteeID, ended.id)
+	if err != nil || !running {
+		return err
+	}
+	// A deadline that has already arrived announces nothing: the sweep that
+	// settled this ending is about to settle that one too, and telling anybody
+	// a Partnership "remains scheduled to end" at a past instant would be
+	// false. This is the equal-deadline case, and it resolves the same way
+	// every other race here does — the ending that commits wins.
+	if !final.coolingOffEndsAt.After(at) {
+		return nil
+	}
+
+	activityID, err := appendActivity(ctx, tx, activityEntry{
+		ProtecteeID:   final.protecteeID,
+		Action:        ActionCoolingOffBecameFinal,
+		TargetEmail:   final.partnerEmail,
+		PartnershipID: &final.id,
+		OccurredAt:    at,
+		EffectiveAt:   &final.coolingOffEndsAt,
+		Details: map[string]any{
+			"ended_partner":       ended.partnerEmail,
+			"requested_at":        final.coolingOffRequestedAt.Unix(),
+			"log_sharing":         final.logSharing,
+			"partner_count":       1,
+			"partner_lock_active": true,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// The Protectee and every current Partner are entitled to it; after this
+	// ending the current Roster is the final Partner alone. The Partner who
+	// just left is not on it, and their own ending message already told them
+	// everything they retain (S3-16, S3-20).
+	message := finalCoolingOffMessage{
+		ProtecteeEmail:    final.protecteeEmail,
+		FinalPartnerEmail: final.partnerEmail,
+		EndedPartnerEmail: ended.partnerEmail,
+		RosterChangedAt:   at,
+		EndsAt:            final.coolingOffEndsAt,
+		DashboardURL:      s.dashboardURL(),
+	}
+	scope := partnershipScope(final.id, at)
+	for sequence, recipient := range []string{final.protecteeEmail, final.partnerEmail} {
+		envelope := renderCoolingOffBecameFinal(message, recipient)
+		envelope.IdempotencyKey = idempotencyKey(envelope.Kind, envelope.To, scope, sequence+1)
+		if err := queueDelivery(ctx, tx, deliveryJob{
+			ActivityID:    activityID,
+			PartnershipID: &final.id,
+			Message:       envelope,
+			CreatedAt:     at,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readFinalCoolingOff resolves the Partnership that is both the Protectee's
+// only remaining active one — ignoring excluding, which is the Partnership the
+// caller has just ended — and already scheduled to end. Anything else, one
+// survivor with no Cooling-off or several survivors, is not a final-Partnership
+// transition and reports false.
+func readFinalCoolingOff(ctx context.Context, queryer rowQueryer, protecteeID, excluding int64) (livePartnership, bool, error) {
+	survivors, err := countPartnersAfterEnding(ctx, queryer, protecteeID, excluding)
+	if err != nil {
+		return livePartnership{}, false, err
+	}
+	if survivors != 1 {
+		return livePartnership{}, false, nil
+	}
+	final, err := scanLivePartnership(queryer.QueryRowContext(ctx, livePartnershipProjection+
+		`partnership.protectee_id = ? AND partnership.id <> ?
+		 AND partnership.cooling_off_ends_at IS NOT NULL`, protecteeID, excluding))
+	if errors.Is(err, ErrPartnershipUnavailable) {
+		return livePartnership{}, false, nil
+	}
+	if err != nil {
+		return livePartnership{}, false, err
+	}
+	return final, true, nil
 }
 
 // coolingOffRequestActivityID finds the Protectee's most recent Cooling-off
@@ -437,12 +570,13 @@ func coolingOffRequestActivityID(ctx context.Context, queryer rowQueryer, partne
 }
 
 // newCoolingOff describes one Partnership's scheduled ending, using whatever
-// deadline the row already carries.
-func newCoolingOff(partnership livePartnership, remainingAfter int) CoolingOff {
+// deadline the row already carries. surviving is the Partner count that
+// outlives that deadline.
+func newCoolingOff(partnership livePartnership, surviving int) CoolingOff {
 	return CoolingOff{
 		PartnershipID: partnership.id, ProtecteeEmail: partnership.protecteeEmail,
 		PartnerEmail: partnership.partnerEmail, Since: partnership.since,
-		LogSharing: partnership.logSharing, RemainingPartners: remainingAfter,
+		LogSharing: partnership.logSharing, PartnersAfterDeadline: surviving,
 		RequestedAt: partnership.coolingOffRequestedAt, EndsAt: partnership.coolingOffEndsAt,
 	}
 }
