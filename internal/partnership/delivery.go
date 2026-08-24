@@ -29,14 +29,50 @@ type DeliveryState string
 
 const (
 	DeliveryQueued DeliveryState = "queued"
-	// DeliveryDelayed marks a retryable failure that is still being retried.
+	// DeliveryDelayed marks a retryable failure that is still being retried,
+	// whether Nightloch's own send attempt failed or the provider reported a
+	// delay or a transient bounce.
 	DeliveryDelayed DeliveryState = "delayed"
-	DeliverySent    DeliveryState = "sent"
-	// DeliveryDelivered and hard-bounce handling arrive with the provider
-	// webhooks in 3B; the vocabulary is fixed here so no migration is needed.
+	// DeliverySent is accepted by the provider; DeliveryDelivered is the
+	// provider reporting that it reached the mailbox.
+	DeliverySent      DeliveryState = "sent"
 	DeliveryDelivered DeliveryState = "delivered"
-	DeliveryFailed    DeliveryState = "failed"
+	// DeliveryFailed is over and unsuccessful: a hard bounce, a complaint, or
+	// exhausted retries.
+	DeliveryFailed DeliveryState = "failed"
 )
+
+// deliveryMeaning is everything one delivery state means, in one place. Three
+// derivations hang off a delivery state — the product wording, the Roster
+// warning, and how conclusive it is when two provider events tie on the same
+// second — and a state that appeared in only two of three switches would read
+// correctly on one screen and wrongly on another.
+type deliveryMeaning struct {
+	// label is the approved product wording (S3-47).
+	label string
+	// reachability is what this state makes a Roster row say.
+	reachability Reachability
+	// precedence ranks how conclusive this state is. It is the only ordering
+	// available when two provider events share a timestamp.
+	precedence int
+}
+
+// deliveryMeanings is keyed by state; a state missing from it reads as queued,
+// which claims nothing.
+var deliveryMeanings = map[DeliveryState]deliveryMeaning{
+	DeliveryQueued:    {label: "Queued", reachability: ReachabilityOK, precedence: 0},
+	DeliverySent:      {label: "Sent", reachability: ReachabilityOK, precedence: 1},
+	DeliveryDelivered: {label: "Delivered", reachability: ReachabilityOK, precedence: 2},
+	DeliveryDelayed:   {label: "Delivery delayed", reachability: ReachabilityDelayed, precedence: 3},
+	DeliveryFailed:    {label: "Invitation not delivered", reachability: ReachabilityUnreachable, precedence: 4},
+}
+
+func (s DeliveryState) meaning() deliveryMeaning {
+	if meaning, known := deliveryMeanings[s]; known {
+		return meaning
+	}
+	return deliveryMeanings[DeliveryQueued]
+}
 
 // Failed reports whether this delivery is over and unsuccessful, which is the
 // one delivery state with a remedy: an invitation is immutable, so a Protectee
@@ -44,20 +80,7 @@ const (
 func (s DeliveryState) Failed() bool { return s == DeliveryFailed }
 
 // Label is the approved product wording for this state (S3-47).
-func (s DeliveryState) Label() string {
-	switch s {
-	case DeliverySent:
-		return "Sent"
-	case DeliveryDelivered:
-		return "Delivered"
-	case DeliveryDelayed:
-		return "Delivery delayed"
-	case DeliveryFailed:
-		return "Invitation not delivered"
-	default:
-		return "Queued"
-	}
-}
+func (s DeliveryState) Label() string { return s.meaning().label }
 
 // Reachability is what an active Roster row says about Nightloch's ability to
 // reach one Partner by email. It is derived from that Partner's most recent
@@ -90,16 +113,7 @@ func (r Reachability) Label() string {
 
 // reachabilityOf folds one delivery job's state into what the Roster shows. A
 // queued job is not yet evidence of anything, so only an actual failure warns.
-func reachabilityOf(state DeliveryState) Reachability {
-	switch state {
-	case DeliveryDelayed:
-		return ReachabilityDelayed
-	case DeliveryFailed:
-		return ReachabilityUnreachable
-	default:
-		return ReachabilityOK
-	}
-}
+func reachabilityOf(state DeliveryState) Reachability { return state.meaning().reachability }
 
 // deliveryJob is one prepared message queued for exactly one recipient, in the
 // same transaction as the mutation it reports (ADR 0002).

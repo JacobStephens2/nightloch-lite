@@ -106,7 +106,7 @@ func (s *Service) RecordDeliveryEvent(ctx context.Context, event DeliveryEvent) 
 		return err
 	}
 	applied := found && job.supersededBy(event.OccurredAt.UTC(), state)
-	if err := recordEventReceipt(ctx, tx, event, job.id, found, applied, now); err != nil {
+	if err := recordEventReceipt(ctx, tx, event, sql.NullInt64{Int64: job.id, Valid: found}, applied, now); err != nil {
 		// A duplicate is the provider doing exactly what it promises. It is
 		// not a failure, and the first copy already did the work.
 		if errors.Is(err, errDuplicateDeliveryEvent) {
@@ -159,26 +159,9 @@ func (j eventJob) supersededBy(at time.Time, state DeliveryState) bool {
 	case at.After(j.lastEventAt):
 		return true
 	case at.Equal(j.lastEventAt):
-		return deliveryPrecedence(state) >= deliveryPrecedence(j.state)
+		return state.meaning().precedence >= j.state.meaning().precedence
 	default:
 		return false
-	}
-}
-
-// deliveryPrecedence ranks delivery states by how conclusive they are, which
-// is the only ordering available when two events share a timestamp.
-func deliveryPrecedence(state DeliveryState) int {
-	switch state {
-	case DeliverySent:
-		return 1
-	case DeliveryDelivered:
-		return 2
-	case DeliveryDelayed:
-		return 3
-	case DeliveryFailed:
-		return 4
-	default:
-		return 0
 	}
 }
 
@@ -208,17 +191,13 @@ var errDuplicateDeliveryEvent = errors.New("delivery event already recorded")
 // barrier: two concurrent copies of one callback race here rather than both
 // reaching the job. The row is kept even when it changed nothing, so an
 // operator can tell an ignored event from one that never arrived.
-func recordEventReceipt(ctx context.Context, tx *sql.Tx, event DeliveryEvent, jobID int64, found, applied bool, now time.Time) error {
-	var job any
-	if found {
-		job = jobID
-	}
+func recordEventReceipt(ctx context.Context, tx *sql.Tx, event DeliveryEvent, jobID sql.NullInt64, applied bool, now time.Time) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO mail_delivery_events(
 			provider_event_id, provider_message_id, job_id, event_type,
 			occurred_at, received_at, applied)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		event.ProviderEventID, event.ProviderMessageID, job, event.Type,
+		event.ProviderEventID, event.ProviderMessageID, nullableID(jobID), event.Type,
 		event.OccurredAt.UTC().Unix(), now.Unix(), boolToInt(applied))
 	if err != nil {
 		var already int
