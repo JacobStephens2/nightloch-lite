@@ -41,6 +41,7 @@ var templateSources = map[string]string{
 {{if .CoolingOffRunning}}
 <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partner power. They may also agree to end it sooner.<br>
+{{if eq (len $.View.Partners) 1}}At that deadline your Partner lock becomes inactive and you will be able to loosen your own Policy.{{else}}Your Partner lock stays active afterwards, because your other Partners remain.{{end}}<br>
 <a href="/partners/partnerships/{{.PartnershipID}}/cancel-end">Cancel the ending request</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/request-end">Request to end this Partnership</a>
@@ -75,6 +76,7 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 {{if .CoolingOffRunning}}
 <span class="warn-inline">{{.ProtecteeEmail}} requested to end this Partnership. It is scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}} may cancel the request.<br>
+{{if eq (len .Roster) 1}}At that deadline {{.ProtecteeEmail}}&rsquo;s Partner lock becomes inactive and they will be able to loosen their own Policy.{{else}}{{.ProtecteeEmail}}&rsquo;s Partner lock stays active afterwards, because their other Partners remain.{{end}}<br>
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End now</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a>
@@ -245,14 +247,20 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Partnership unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
 <body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That Partnership is unavailable</h1>
-<p class="lede">Nightloch cannot show this Partnership. Only the Partner on a Partnership can end it or read its receipt.</p>
+<p class="lede">Nightloch cannot show this Partnership. Only the two people on a Partnership reach its controls: the Protectee may request or cancel an ending, and the Partner may end it and read the receipt they keep.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
 	"cooling-off-confirm": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Request to end a Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
-<main class="dashboard"><section><h1>Request to end this Partnership?</h1>
+<main class="dashboard"><section>
+{{if not .Request.Running}}
+<h1>Request to end this Partnership?</h1>
 <p class="lede">Your Partnership with {{.Request.PartnerEmail}} does not end straight away. Nightloch schedules it to end on {{utc .Request.EndsAt}}, 72 hours from now, and that deadline does not move.</p>
+{{else}}
+<h1>This Partnership is already scheduled to end</h1>
+<p class="lede">You requested this ending on {{utc .Request.RequestedAt}}. Your Partnership with {{.Request.PartnerEmail}} is scheduled to end on {{utc .Request.EndsAt}} — {{countdown .Request.EndsAt .Now}}. That deadline does not move, and requesting again would not shorten it.</p>
+{{end}}
 <p class="lede">Until then nothing changes: the Partnership stays active, your Policy stays enforced, and {{.Request.PartnerEmail}} keeps every Partner power{{if .Request.LogSharing}}, including access to your DNS domain log{{end}}. Nightloch will tell them, and they may agree to end it sooner. You can cancel the request at any point before the deadline.</p>
 {{if .Request.FinalPartnership}}
 <p class="warn">{{.Request.PartnerEmail}} is your final active Partner. At {{utc .Request.EndsAt}} your Partner lock becomes inactive and you will be able to loosen your own Policy.</p>
@@ -261,9 +269,14 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 {{end}}
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 <div class="actions">
+{{if not .Request.Running}}
 <form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">Request to end this Partnership</button></form>
 <a class="quiet-link" href="{{.Back}}">Keep this Partnership</a>
+{{else}}
+<a class="button-link" href="/partners/partnerships/{{.Request.PartnershipID}}/cancel-end">Cancel the ending request</a>
+<a class="quiet-link" href="{{.Back}}">Your protection</a>
+{{end}}
 </div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"cooling-off-cancel-confirm": `<!doctype html>
@@ -271,18 +284,20 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <title>Cancel a Partnership ending request · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
 <main class="dashboard"><section><h1>Cancel this ending request?</h1>
-{{if .Request.EndsAt.IsZero}}
-<p class="lede">Your Partnership with {{.Request.PartnerEmail}} has no scheduled ending, so there is nothing to cancel.</p>
+{{if not .Request.Running}}
+<p class="lede">Your Partnership with {{.Request.PartnerEmail}} has no scheduled ending, so there is nothing to cancel. It remains active with the same Partner powers it has always had.</p>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<div class="actions"><a class="button-link" href="{{.Back}}">Your protection</a></div>
 {{else}}
 <p class="lede">Your Partnership with {{.Request.PartnerEmail}} is scheduled to end on {{utc .Request.EndsAt}} — {{countdown .Request.EndsAt .Now}}. Cancelling removes that scheduled ending; the Partnership simply stays active, as it has been throughout.</p>
 <p class="lede">Nightloch will tell {{.Request.PartnerEmail}} that you canceled. You may request an ending again later, and a new request starts a fresh 72 hours.</p>
-{{end}}
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 <div class="actions">
 <form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">Cancel the ending request</button></form>
 <a class="quiet-link" href="{{.Back}}">Leave the ending scheduled</a>
 </div>
+{{end}}
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"cooling-off-receipt": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

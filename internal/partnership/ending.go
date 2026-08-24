@@ -97,42 +97,57 @@ type livePartnership struct {
 // partnershipRole is which side of a Partnership a caller is claiming to be.
 // Authorization is the query itself: the wrong side simply matches no row, so
 // a Protectee, another Partner, or a stranger cannot act on — or probe for — a
-// Partnership that is not theirs.
+// Partnership that is not theirs. Every role scopes the read to one User, so
+// no value of this type can widen it.
 type partnershipRole string
 
 const (
 	byPartner   partnershipRole = "partnership.partner_id = ?"
 	byProtectee partnershipRole = "partnership.protectee_id = ?"
-	// byAnyone belongs to Nightloch's own due-transition runner, which acts
-	// for no User at all. No request path may use it.
-	byAnyone partnershipRole = "? IS NOT NULL"
 )
 
+// livePartnershipQuery projects one live Partnership with both identities and
+// whatever Cooling-off it carries, up to and including the WHERE keyword; each
+// caller appends its own predicate.
+const livePartnershipQuery = `
+	SELECT partnership.id, partnership.protectee_id, protectee.email, partner.email,
+	       partnership.log_sharing, partnership.accepted_at,
+	       COALESCE(partnership.cooling_off_requested_at, 0),
+	       COALESCE(partnership.cooling_off_ends_at, 0)
+	FROM partnerships partnership
+	JOIN users protectee ON protectee.id = partnership.protectee_id
+	JOIN users partner ON partner.id = partnership.partner_id
+	WHERE partnership.ended_at IS NULL AND partnership.id = ? AND `
+
 // readLivePartnership resolves the live Partnership the given side holds, or
-// ErrPartnershipUnavailable.
+// ErrPartnershipUnavailable. Every request path reads through here, so a
+// caller always has to name which side of the relationship they are.
 func readLivePartnership(ctx context.Context, queryer rowQueryer, role partnershipRole, partnershipID, userID int64) (livePartnership, error) {
-	if partnershipID <= 0 || (role != byAnyone && userID <= 0) {
+	if partnershipID <= 0 || userID <= 0 {
 		return livePartnership{}, ErrPartnershipUnavailable
 	}
-	var scope any = userID
-	if role == byAnyone {
-		scope = 1
+	return scanLivePartnership(queryer.QueryRowContext(ctx,
+		livePartnershipQuery+string(role), partnershipID, userID))
+}
+
+// readDuePartnership resolves one live Partnership for Nightloch's own
+// due-transition runner, which acts for no User and so scopes to neither side.
+// It is a separate function rather than a third role precisely so that no
+// request path can reach an unauthorized read by passing a role value.
+func readDuePartnership(ctx context.Context, queryer rowQueryer, partnershipID int64) (livePartnership, error) {
+	if partnershipID <= 0 {
+		return livePartnership{}, ErrPartnershipUnavailable
 	}
+	return scanLivePartnership(queryer.QueryRowContext(ctx,
+		livePartnershipQuery+"partnership.cooling_off_ends_at IS NOT NULL", partnershipID))
+}
+
+func scanLivePartnership(row *sql.Row) (livePartnership, error) {
 	var partnership livePartnership
 	var logSharing int
 	var acceptedAt, requestedAt, endsAt int64
-	err := queryer.QueryRowContext(ctx, `
-		SELECT partnership.id, partnership.protectee_id, protectee.email, partner.email,
-		       partnership.log_sharing, partnership.accepted_at,
-		       COALESCE(partnership.cooling_off_requested_at, 0),
-		       COALESCE(partnership.cooling_off_ends_at, 0)
-		FROM partnerships partnership
-		JOIN users protectee ON protectee.id = partnership.protectee_id
-		JOIN users partner ON partner.id = partnership.partner_id
-		WHERE partnership.id = ? AND partnership.ended_at IS NULL AND `+string(role),
-		partnershipID, scope).
-		Scan(&partnership.id, &partnership.protecteeID, &partnership.protecteeEmail,
-			&partnership.partnerEmail, &logSharing, &acceptedAt, &requestedAt, &endsAt)
+	err := row.Scan(&partnership.id, &partnership.protecteeID, &partnership.protecteeEmail,
+		&partnership.partnerEmail, &logSharing, &acceptedAt, &requestedAt, &endsAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return livePartnership{}, ErrPartnershipUnavailable
 	}
@@ -434,6 +449,28 @@ func livePartnerEmails(ctx context.Context, tx *sql.Tx, protecteeID int64) ([]st
 		return nil, fmt.Errorf("read remaining Roster: %w", err)
 	}
 	return emails, nil
+}
+
+// requireOneRow turns a guarded UPDATE that changed nothing into the caller's
+// own refusal, which is how every first-commit-wins race in this package is
+// settled.
+func requireOneRow(result sql.Result, lost error) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read affected rows: %w", err)
+	}
+	if affected != 1 {
+		return lost
+	}
+	return nil
+}
+
+// partnershipURL is where the affected Partner reviews a Cooling-off request
+// and, if they agree, ends it now.
+func (s *Service) partnershipURL(partnershipID int64) string {
+	link := *s.baseURL
+	link.Path = "/partners/partnerships/" + strconv.FormatInt(partnershipID, 10) + "/end"
+	return link.String()
 }
 
 // receiptURL is where a departing Partner reads the one thing they retain.
