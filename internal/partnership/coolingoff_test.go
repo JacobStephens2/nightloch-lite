@@ -503,3 +503,52 @@ func TestConcurrentCoolingOffOutcomesCommitExactlyOnce(t *testing.T) {
 		t.Fatalf("ended=%d endings=%d cancellations=%d, want exactly one outcome", ended, endings, cancellations)
 	}
 }
+
+func TestOneUnsettleablePartnershipDoesNotStarveTheOtherDeadlines(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee, _, first := firstPartnership(t, service, db, false)
+	other := createUser(t, db, "other@example.com")
+	second := addPartnership(t, db, protectee, other)
+
+	// Both Partnerships are due, and the earlier one cannot be settled: its
+	// Activity write will fail against a Protectee row that no longer exists.
+	for offset, id := range map[int]int64{0: first, 1: second} {
+		deadline := testClock.Add(-time.Duration(2-offset) * time.Hour)
+		if _, err := db.Exec(`UPDATE partnerships
+			SET cooling_off_requested_at = ?, cooling_off_ends_at = ? WHERE id = ?`,
+			deadline.Add(-coolingOffDuration).Unix(), deadline.Unix(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Make the earlier Partnership unsettleable: its completion will try to
+	// queue a delivery job whose idempotency key is already taken, which fails
+	// inside the transaction and rolls the whole ending back.
+	blocked := idempotencyKey(MessagePartnershipEnded, "protectee@example.com",
+		partnershipScope(first, testClock.Add(-2*time.Hour)), 1)
+	if _, err := db.Exec(`INSERT INTO mail_delivery_jobs(
+		message_kind, recipient_email, subject, body_text, body_html, reply_to,
+		idempotency_key, state, attempts, next_attempt_at, created_at)
+		VALUES (?, ?, '', '', '', '', ?, 'sent', 1, 0, 0)`,
+		MessagePartnershipEnded, "protectee@example.com", blocked); err != nil {
+		t.Fatal(err)
+	}
+
+	// The failing row is scanned first, so aborting the batch would starve the
+	// later deadline on this sweep and on every sweep after it.
+	ended, err := service.CompleteDueCoolingOff(context.Background(), 10)
+	if err == nil {
+		t.Fatal("an unsettleable Partnership was reported as a clean sweep")
+	}
+	if ended != 1 {
+		t.Fatalf("CompleteDueCoolingOff settled %d Partnerships, want the one it could", ended)
+	}
+	var endedReason string
+	if err := db.QueryRow("SELECT COALESCE(ended_reason, '') FROM partnerships WHERE id = ?",
+		second).Scan(&endedReason); err != nil {
+		t.Fatal(err)
+	}
+	if endedReason != EndReasonCoolingOffCompleted {
+		t.Fatalf("the later deadline was starved: ended_reason = %q", endedReason)
+	}
+}

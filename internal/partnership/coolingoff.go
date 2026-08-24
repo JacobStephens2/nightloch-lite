@@ -78,11 +78,10 @@ type CoolingOff struct {
 // the Protectee's Partner lock and restore self-loosening.
 func (c CoolingOff) FinalPartnership() bool { return c.RemainingPartners == 0 }
 
-// Remaining is how long is left before the deadline, floored at zero so a
-// countdown never runs backwards past the moment the runner is due.
-func (c CoolingOff) Remaining(now time.Time) time.Duration {
-	return max(c.EndsAt.Sub(now.UTC()), 0)
-}
+// Running reports whether an ending is actually scheduled. It is false for the
+// preview of an unscheduled Partnership, whose EndsAt is the deadline a
+// request would set rather than one Nightloch has committed to.
+func (c CoolingOff) Running() bool { return !c.RequestedAt.IsZero() }
 
 // CoolingOffPreview is the read behind the Protectee's confirmation screen: the
 // exact deadline the request would set and the consequences it would carry,
@@ -98,10 +97,12 @@ func (s *Service) CoolingOffPreview(ctx context.Context, partnershipID, protecte
 		return CoolingOff{}, err
 	}
 	preview := newCoolingOff(partnership, remaining)
-	// A Cooling-off already running keeps its own deadline; only an
-	// unscheduled Partnership previews a fresh one from this instant.
-	if preview.EndsAt.IsZero() {
-		preview.RequestedAt, preview.EndsAt = now, now.Add(coolingOffDuration)
+	// A Cooling-off already running keeps its own request time and deadline.
+	// An unscheduled Partnership previews the deadline a request would set,
+	// and keeps a zero RequestedAt, so no screen can mistake the proposal for
+	// something Nightloch has already committed to.
+	if !preview.Running() {
+		preview.EndsAt = now.Add(coolingOffDuration)
 	}
 	return preview, nil
 }
@@ -329,17 +330,23 @@ func (s *Service) CompleteDueCoolingOff(ctx context.Context, limit int) (int, er
 		return 0, fmt.Errorf("read due Cooling-off Partnerships: %w", err)
 	}
 
+	// One Partnership that cannot be settled must not starve the rest: the
+	// scan is ordered by deadline, so aborting the batch would re-select the
+	// same failing row first on every later sweep and no other deadline would
+	// ever complete. Each failure is reported and the sweep moves on.
 	ended := 0
+	var failures []error
 	for _, id := range due {
 		settled, err := s.completeCoolingOff(ctx, id)
 		if err != nil {
-			return ended, err
+			failures = append(failures, fmt.Errorf("Partnership %d: %w", id, err))
+			continue
 		}
 		if settled {
 			ended++
 		}
 	}
-	return ended, nil
+	return ended, errors.Join(failures...)
 }
 
 // completeCoolingOff ends one Partnership at its own deadline. A cancellation,
@@ -352,15 +359,12 @@ func (s *Service) completeCoolingOff(ctx context.Context, partnershipID int64) (
 	}
 	defer tx.Rollback()
 
-	partnership, err := readLivePartnership(ctx, tx, byAnyone, partnershipID, 0)
+	partnership, err := readDuePartnership(ctx, tx, partnershipID)
 	if errors.Is(err, ErrPartnershipUnavailable) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
-	}
-	if partnership.coolingOffEndsAt.IsZero() {
-		return false, nil
 	}
 	endedAt := partnership.coolingOffEndsAt
 
@@ -442,25 +446,4 @@ func newCoolingOff(partnership livePartnership, remainingAfter int) CoolingOff {
 		LogSharing: partnership.logSharing, RemainingPartners: remainingAfter,
 		RequestedAt: partnership.coolingOffRequestedAt, EndsAt: partnership.coolingOffEndsAt,
 	}
-}
-
-// requireOneRow turns a guarded UPDATE that changed nothing into the caller's
-// own refusal, which is how every first-commit-wins race is settled here.
-func requireOneRow(result sql.Result, lost error) error {
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read affected rows: %w", err)
-	}
-	if affected != 1 {
-		return lost
-	}
-	return nil
-}
-
-// partnershipURL is where the affected Partner reviews a Cooling-off request
-// and, if they agree, ends it now.
-func (s *Service) partnershipURL(partnershipID int64) string {
-	link := *s.baseURL
-	link.Path = fmt.Sprintf("/partners/partnerships/%d/end", partnershipID)
-	return link.String()
 }

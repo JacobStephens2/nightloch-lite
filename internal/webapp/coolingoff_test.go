@@ -103,10 +103,16 @@ func TestProtecteeRunsCoolingOffToItsDeadlineEndToEnd(t *testing.T) {
 		session, csrf *http.Cookie
 		wants         []string
 	}{
+		// Every entitled Roster viewer reads the same deadline, the same
+		// countdown, and the same final-Partnership consequence (S3-07, S3-43).
 		{"the Protectee", protecteeSession, protecteeCSRF,
-			[]string{"Partner lock is active.", "Scheduled to end", stamp, "remaining", "Cancel the ending request"}},
+			[]string{"Partner lock is active.", "Scheduled to end", stamp, "remaining",
+				"At that deadline your Partner lock becomes inactive",
+				"loosen your own Policy", "Cancel the ending request"}},
 		{"the affected Partner", partnerSession, partnerCSRF,
-			[]string{"requested to end this Partnership", stamp, "remaining", "you keep every Partner power", "End now"}},
+			[]string{"requested to end this Partnership", stamp, "remaining",
+				"you keep every Partner power",
+				"Partner lock becomes inactive", "loosen their own Policy", "End now"}},
 	} {
 		body := get(t, env, "https://lite.nightloch.app/", viewer.session, viewer.csrf).Body.String()
 		mustContain(t, body, viewer.wants...)
@@ -121,7 +127,15 @@ func TestProtecteeRunsCoolingOffToItsDeadlineEndToEnd(t *testing.T) {
 	if repeat.Code != http.StatusConflict {
 		t.Fatalf("a second ending request = %d", repeat.Code)
 	}
-	mustContain(t, repeat.Body.String(), "already scheduled to end")
+	// The losing request must not repeat the fresh-request copy, nor offer a
+	// control that would only lose again.
+	mustContain(t, repeat.Body.String(), "already scheduled to end",
+		"That deadline does not move, and requesting again would not shorten it.")
+	for _, false_ := range []string{"72 hours from now", ">Request to end this Partnership</button>"} {
+		if strings.Contains(repeat.Body.String(), false_) {
+			t.Fatalf("the losing request still showed %q:\n%s", false_, repeat.Body.String())
+		}
+	}
 	var unchanged int64
 	if err := env.db.QueryRow("SELECT cooling_off_ends_at FROM partnerships WHERE id = ?",
 		partnershipID).Scan(&unchanged); err != nil {
@@ -268,7 +282,11 @@ func TestProtecteeCancelsTheirEndingRequestAndThePartnershipCarriesOn(t *testing
 	if repeat.Code != http.StatusConflict {
 		t.Fatalf("a second cancellation = %d", repeat.Code)
 	}
-	mustContain(t, repeat.Body.String(), "no scheduled ending to cancel")
+	mustContain(t, repeat.Body.String(), "no scheduled ending to cancel",
+		"there is nothing to cancel")
+	if strings.Contains(repeat.Body.String(), ">Cancel the ending request</button>") {
+		t.Fatalf("the losing cancellation still offered the control:\n%s", repeat.Body.String())
+	}
 
 	// The Roster is back to offering the request, and the Partner's row no
 	// longer claims an ending is coming.

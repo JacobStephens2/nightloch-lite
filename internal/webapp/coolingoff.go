@@ -1,6 +1,7 @@
 package webapp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,63 +34,42 @@ type coolingOffReceiptData struct {
 	Version  string
 }
 
-// confirmRequestEnd renders the consequence-specific confirmation before a
-// Protectee schedules their own Partnership to end. It is a GET and mutates
-// nothing. Only the Protectee on that Partnership resolves it; the Partner,
-// another Partner, and a stranger all land on the same unavailable answer.
+// coolingOffControl is one of the two mutations a Protectee holds over their
+// own Partnership. It names the route segment, the confirmation screen, and
+// the refusal that means this control arrived second, so the two handlers
+// below differ only by which one they are given.
+type coolingOffControl struct {
+	path     string
+	template string
+	lostRace error
+}
+
+var (
+	requestEndControl = coolingOffControl{
+		path: "request-end", template: "cooling-off-confirm",
+		lostRace: partnership.ErrCoolingOffRunning,
+	}
+	cancelEndControl = coolingOffControl{
+		path: "cancel-end", template: "cooling-off-cancel-confirm",
+		lostRace: partnership.ErrCoolingOffNotRunning,
+	}
+)
+
+// confirmRequestEnd and confirmCancelEnd render the consequence-specific
+// confirmation before a Protectee schedules — or unschedules — their own
+// Partnership's ending. Both are GETs and mutate nothing (S3-28). Only the
+// Protectee on that Partnership resolves either; the Partner, another Partner,
+// and a stranger all land on the same unavailable answer.
 func (a *App) confirmRequestEnd(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.currentUser(w, r)
-	if !ok {
-		return
-	}
-	id, valid := pathID(r)
-	if !valid {
-		a.renderPartnershipUnavailable(w, r)
-		return
-	}
-	request, err := a.partnerships.CoolingOffPreview(r.Context(), id, user.ID)
-	if errors.Is(err, partnership.ErrPartnershipUnavailable) {
-		a.renderPartnershipUnavailable(w, r)
-		return
-	}
-	if err != nil {
-		a.internalError(w, r, err)
-		return
-	}
-	a.renderCoolingOffConfirmation(w, r, http.StatusOK, "cooling-off-confirm", request, "")
+	a.confirmCoolingOff(w, r, requestEndControl)
 }
 
-// requestEnd starts Cooling-off. A request that lost its race to an earlier
-// one shows the same screen the winner produced, because that is the state
-// that actually holds.
-func (a *App) requestEnd(w http.ResponseWriter, r *http.Request) {
-	user, ok := a.currentUser(w, r)
-	if !ok {
-		return
-	}
-	id, valid := pathID(r)
-	if !valid {
-		a.renderPartnershipUnavailable(w, r)
-		return
-	}
-	request, err := a.partnerships.StartCoolingOff(r.Context(), partnership.CoolingOffCommand{
-		PartnershipID: id, ProtecteeID: user.ID,
-	})
-	switch {
-	case err == nil:
-		a.renderCoolingOffReceipt(w, r, http.StatusOK, request, false)
-	case errors.Is(err, partnership.ErrCoolingOffRunning):
-		a.renderCoolingOffLostRace(w, r, id, user.ID, false)
-	case errors.Is(err, partnership.ErrPartnershipUnavailable):
-		a.renderPartnershipUnavailable(w, r)
-	default:
-		a.internalError(w, r, err)
-	}
-}
-
-// confirmCancelEnd renders the confirmation before a Protectee withdraws their
-// own ending request.
+// confirmCancelEnd is the same read behind the cancelling control.
 func (a *App) confirmCancelEnd(w http.ResponseWriter, r *http.Request) {
+	a.confirmCoolingOff(w, r, cancelEndControl)
+}
+
+func (a *App) confirmCoolingOff(w http.ResponseWriter, r *http.Request, control coolingOffControl) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
@@ -108,13 +88,25 @@ func (a *App) confirmCancelEnd(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	a.renderCoolingOffConfirmation(w, r, http.StatusOK, "cooling-off-cancel-confirm", request, "")
+	a.renderCoolingOffConfirmation(w, r, http.StatusOK, control, request, "")
 }
 
-// cancelEnd withdraws the ending request. A cancellation that arrives after
-// the deadline completed, or after the Partner agreed to end now, finds
-// nothing to cancel and says so on the screen that reports the real state.
+// requestEnd starts Cooling-off, and cancelEnd withdraws it. Either may arrive
+// second — behind an earlier submission of the same control, behind the
+// Partner's End now, or behind the deadline itself — and then it commits
+// nothing and shows the state that actually won.
+func (a *App) requestEnd(w http.ResponseWriter, r *http.Request) {
+	a.commitCoolingOff(w, r, requestEndControl, a.partnerships.StartCoolingOff)
+}
+
+// cancelEnd withdraws the Protectee's own ending request.
 func (a *App) cancelEnd(w http.ResponseWriter, r *http.Request) {
+	a.commitCoolingOff(w, r, cancelEndControl, a.partnerships.CancelCoolingOff)
+}
+
+func (a *App) commitCoolingOff(w http.ResponseWriter, r *http.Request, control coolingOffControl,
+	mutate func(context.Context, partnership.CoolingOffCommand) (partnership.CoolingOff, error)) {
+
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
@@ -124,14 +116,14 @@ func (a *App) cancelEnd(w http.ResponseWriter, r *http.Request) {
 		a.renderPartnershipUnavailable(w, r)
 		return
 	}
-	cancellation, err := a.partnerships.CancelCoolingOff(r.Context(), partnership.CoolingOffCommand{
+	result, err := mutate(r.Context(), partnership.CoolingOffCommand{
 		PartnershipID: id, ProtecteeID: user.ID,
 	})
 	switch {
 	case err == nil:
-		a.renderCoolingOffReceipt(w, r, http.StatusOK, cancellation, true)
-	case errors.Is(err, partnership.ErrCoolingOffNotRunning):
-		a.renderCoolingOffLostRace(w, r, id, user.ID, true)
+		a.renderCoolingOffReceipt(w, r, result, control == cancelEndControl)
+	case errors.Is(err, control.lostRace):
+		a.renderCoolingOffLostRace(w, r, control, id, user.ID)
 	case errors.Is(err, partnership.ErrPartnershipUnavailable):
 		a.renderPartnershipUnavailable(w, r)
 	default:
@@ -139,11 +131,13 @@ func (a *App) cancelEnd(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// renderCoolingOffLostRace answers a control that arrived second. The
-// Partnership may still be live under someone else's outcome, or it may have
-// ended entirely; either way the Protectee sees the state that won rather than
-// a refusal about the one that did not.
-func (a *App) renderCoolingOffLostRace(w http.ResponseWriter, r *http.Request, partnershipID, protecteeID int64, canceling bool) {
+// renderCoolingOffLostRace answers a control that arrived second. It re-reads
+// the Partnership and renders the same confirmation screen over the state that
+// won, which states what is actually scheduled and — because that state is not
+// one this control can act on — offers no submit button to repeat.
+func (a *App) renderCoolingOffLostRace(w http.ResponseWriter, r *http.Request,
+	control coolingOffControl, partnershipID, protecteeID int64) {
+
 	request, err := a.partnerships.CoolingOffPreview(r.Context(), partnershipID, protecteeID)
 	if errors.Is(err, partnership.ErrPartnershipUnavailable) {
 		// The Partnership ended while this control was in flight. The
@@ -155,37 +149,28 @@ func (a *App) renderCoolingOffLostRace(w http.ResponseWriter, r *http.Request, p
 		a.internalError(w, r, err)
 		return
 	}
-	refusal := partnership.ErrCoolingOffRunning.Error()
-	template := "cooling-off-confirm"
-	if canceling {
-		refusal, template = partnership.ErrCoolingOffNotRunning.Error(), "cooling-off-cancel-confirm"
-	}
-	a.renderCoolingOffConfirmation(w, r, http.StatusConflict, template, request, refusal)
+	a.renderCoolingOffConfirmation(w, r, http.StatusConflict, control, request, control.lostRace.Error())
 }
 
 func (a *App) renderCoolingOffConfirmation(w http.ResponseWriter, r *http.Request, status int,
-	name string, request partnership.CoolingOff, refusal string) {
+	control coolingOffControl, request partnership.CoolingOff, refusal string) {
 
 	csrf, err := a.csrfToken(w, r)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
 	}
-	action := "request-end"
-	if name == "cooling-off-cancel-confirm" {
-		action = "cancel-end"
-	}
-	a.render(w, r, status, name, coolingOffData{
+	a.render(w, r, status, control.template, coolingOffData{
 		CSRFToken: csrf,
-		Action:    fmt.Sprintf("/partners/partnerships/%d/%s", request.PartnershipID, action),
+		Action:    fmt.Sprintf("/partners/partnerships/%d/%s", request.PartnershipID, control.path),
 		Back:      "/", Error: refusal, Request: request, Now: a.now().UTC(), Version: a.version,
 	})
 }
 
-func (a *App) renderCoolingOffReceipt(w http.ResponseWriter, r *http.Request, status int,
+func (a *App) renderCoolingOffReceipt(w http.ResponseWriter, r *http.Request,
 	request partnership.CoolingOff, canceled bool) {
 
-	a.render(w, r, status, "cooling-off-receipt", coolingOffReceiptData{
+	a.render(w, r, http.StatusOK, "cooling-off-receipt", coolingOffReceiptData{
 		Request: request, Canceled: canceled, Now: a.now().UTC(), Version: a.version,
 	})
 }
