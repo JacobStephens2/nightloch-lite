@@ -290,10 +290,24 @@ type RosterEntry struct {
 	// on, and zero when no ending is scheduled. Every entitled Roster viewer
 	// sees the same instant (S3-07).
 	CoolingOffEndsAt time.Time
+	// PartnersAfterDeadline is how many Partners still protect the Protectee
+	// once this row's deadline arrives. Concurrent countdowns share one
+	// horizon, so this is not "every other Partner": a Partnership already
+	// scheduled to end at or before this deadline is not there afterwards
+	// either. A row with no scheduled ending simply counts the others.
+	PartnersAfterDeadline int
 }
 
 // CoolingOffRunning reports whether this Partnership is scheduled to end.
 func (e RosterEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
+
+// EndsPartnerLock reports whether this row's scheduled ending is the one that
+// deactivates the Protectee's Partner lock and restores self-loosening. It is
+// the dynamic final-Partnership question: an ending that is not final today
+// becomes final when the Partnerships outlasting it end first.
+func (e RosterEntry) EndsPartnerLock() bool {
+	return e.CoolingOffRunning() && e.PartnersAfterDeadline == 0
+}
 
 // PendingInvitation is one outstanding Partner invitation as the Protectee who
 // sent it and each of their current Partners see it. The Protectee never holds

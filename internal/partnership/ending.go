@@ -106,10 +106,10 @@ const (
 	byProtectee partnershipRole = "partnership.protectee_id = ?"
 )
 
-// livePartnershipQuery projects one live Partnership with both identities and
-// whatever Cooling-off it carries, up to and including the WHERE keyword; each
-// caller appends its own predicate.
-const livePartnershipQuery = `
+// livePartnershipProjection projects one live Partnership with both identities
+// and whatever Cooling-off it carries, up to and including the WHERE keyword;
+// each caller appends its own predicate.
+const livePartnershipProjection = `
 	SELECT partnership.id, partnership.protectee_id, protectee.email, partner.email,
 	       partnership.log_sharing, partnership.accepted_at,
 	       COALESCE(partnership.cooling_off_requested_at, 0),
@@ -117,7 +117,11 @@ const livePartnershipQuery = `
 	FROM partnerships partnership
 	JOIN users protectee ON protectee.id = partnership.protectee_id
 	JOIN users partner ON partner.id = partnership.partner_id
-	WHERE partnership.ended_at IS NULL AND partnership.id = ? AND `
+	WHERE partnership.ended_at IS NULL AND `
+
+// livePartnershipQuery names one Partnership by id, which is how every caller
+// acting on a single relationship reaches it.
+const livePartnershipQuery = livePartnershipProjection + `partnership.id = ? AND `
 
 // readLivePartnership resolves the live Partnership the given side holds, or
 // ErrPartnershipUnavailable. Every request path reads through here, so a
@@ -249,6 +253,12 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 	}
 
 	if err := s.queueEndingMessages(ctx, tx, partnership, remaining, now, reason, activityID); err != nil {
+		return PartnershipEnding{}, err
+	}
+	// This ending may have left a Cooling-off elsewhere on the Roster holding
+	// the Partner lock up on its own, which is its own transition with its own
+	// Activity entry and alert.
+	if err := s.announceFinalCoolingOff(ctx, tx, partnership, now); err != nil {
 		return PartnershipEnding{}, err
 	}
 
@@ -422,6 +432,37 @@ func countPartnersAfterEnding(ctx context.Context, queryer rowQueryer, protectee
 		return 0, fmt.Errorf("read active Partner count: %w", err)
 	}
 	return partners, nil
+}
+
+// countPartnersAfterDeadline is how many Partners still protect this Protectee
+// once deadline arrives: every other live Partnership except those already
+// scheduled to end at or before it. Concurrent Cooling-off is what makes this
+// different from the plain Partner count — several countdowns share one
+// 72-hour horizon rather than running in series — so it, and not
+// countPartnersAfterEnding, is what a scheduled ending's consequences are
+// stated in. A zero deadline means "no ending is scheduled", and every other
+// Partnership survives it.
+func countPartnersAfterDeadline(ctx context.Context, queryer rowQueryer,
+	protecteeID, partnershipID int64, deadline time.Time) (int, error) {
+
+	var partners int
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM partnerships
+		WHERE protectee_id = ? AND id <> ? AND ended_at IS NULL
+		  AND (cooling_off_ends_at IS NULL OR cooling_off_ends_at > ?)`,
+		protecteeID, partnershipID, deadlineUnix(deadline)).Scan(&partners); err != nil {
+		return 0, fmt.Errorf("read Partner count after a scheduled ending: %w", err)
+	}
+	return partners, nil
+}
+
+// deadlineUnix is the stored form of a Cooling-off deadline, with the zero
+// time — no scheduled ending — stored as 0 rather than as a 1754 timestamp.
+func deadlineUnix(deadline time.Time) int64 {
+	if deadline.IsZero() {
+		return 0
+	}
+	return deadline.Unix()
 }
 
 // livePartnerEmails is the remaining Roster entitled to an ending signal.

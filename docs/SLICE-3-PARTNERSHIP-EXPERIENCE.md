@@ -503,6 +503,25 @@ The Partner lock will remain active after {{final_partner_email}}’s
 Partnership is scheduled to end on {{ends_at_utc}}.
 ```
 
+**Amended 2026-08-24 (implementing #11).** Three points this section left open,
+resolved as follows. Nothing about the approved copy changed.
+
+- **Recipients.** The final-Partnership alert goes to the Protectee and the
+  final Partner — who together are "the Protectee and every current Partner"
+  once the ending that caused the transition has left the Roster. The Partner
+  who just departed is not told: they already received that ending's own alert,
+  and the Roster it describes is no longer theirs to see (S3-16).
+- **The acceptance sentence** is appended to the alert that already states the
+  Partner-lock consequence — the one the Protectee and their prior Partners
+  read. It is added only when a running Cooling-off was the final Partnership
+  immediately before the acceptance, because that is the only case where a
+  reader has been told a deadline would deactivate the lock. The new Partner's
+  own confirmation does not discuss the lock and is unchanged.
+- **Equal deadlines.** When concurrent countdowns share one instant, the ending
+  that commits first does not announce the other as a future final Partnership:
+  the deadline it would name has already arrived, and the same sweep settles it.
+  Each ending still produces its own Activity entry and ending alert.
+
 ## Partnership ended
 
 ### Subjects
