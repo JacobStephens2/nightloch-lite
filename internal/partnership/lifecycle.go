@@ -21,6 +21,10 @@ const (
 	// sends nothing at all (S3-20).
 	MessageInvitationDeclined = "partner_invitation_declined"
 	MessageInvitationCanceled = "partner_invitation_canceled"
+	// MessageInvitationCanceledPartner is the separate cancellation alert each
+	// current Partner receives. They were told the invitation was sent, so
+	// they are told it ended (S3-20).
+	MessageInvitationCanceledPartner = "partner_invitation_canceled_partner"
 )
 
 // InvitationState is the lifecycle state of one Partner invitation. Only
@@ -249,9 +253,9 @@ func (s *Service) DeclineInvitation(ctx context.Context, ref InvitationRef, view
 		InviteeEmail:   invitation.inviteeEmail,
 		ResolvedAt:     now,
 	})
-	message.IdempotencyKey = idempotencyKey(message.Kind, message.To, invitation.tokenHash, 1)
-	if err := queueDelivery(ctx, tx, deliveryJob{
-		ActivityID: activityID, InvitationID: &invitation.id, Message: message, CreatedAt: now,
+	if err := queueInvitationMessages(ctx, tx, []preparedMessage{message}, invitationDelivery{
+		ActivityID: activityID, InvitationID: invitation.id,
+		TokenHash: invitation.tokenHash, At: now,
 	}); err != nil {
 		return Decline{}, err
 	}
@@ -317,16 +321,31 @@ func (s *Service) CancelInvitation(ctx context.Context, invitationID, protecteeI
 		return Cancellation{}, err
 	}
 
-	// The invitee is the only recipient today. 3B lifts the one-Partner gate
-	// and adds the same signal separately to each current Partner (S3-20).
-	message := renderInvitationCanceled(terminalMessage{
+	// The invitee loses a link; every current Partner loses a signal they were
+	// already told about. Each reads their own body in their own envelope
+	// (S3-20, S3-21).
+	terminal := terminalMessage{
 		ProtecteeEmail: invitation.protecteeEmail,
 		InviteeEmail:   invitation.inviteeEmail,
 		ResolvedAt:     now,
-	})
-	message.IdempotencyKey = idempotencyKey(message.Kind, message.To, invitation.tokenHash, 1)
-	if err := queueDelivery(ctx, tx, deliveryJob{
-		ActivityID: activityID, InvitationID: &invitation.id, Message: message, CreatedAt: now,
+	}
+	messages := []preparedMessage{renderInvitationCanceled(terminal)}
+	currentPartners, err := livePartnerEmails(ctx, tx, invitation.protecteeID)
+	if err != nil {
+		return Cancellation{}, err
+	}
+	alert := cancellationAlert{
+		ProtecteeEmail: invitation.protecteeEmail,
+		InviteeEmail:   invitation.inviteeEmail,
+		CanceledAt:     now,
+		ActivityURL:    s.dashboardURL(),
+	}
+	for _, partnerEmail := range currentPartners {
+		messages = append(messages, renderInvitationCanceledToPartner(alert, partnerEmail))
+	}
+	if err := queueInvitationMessages(ctx, tx, messages, invitationDelivery{
+		ActivityID: activityID, InvitationID: invitation.id,
+		TokenHash: invitation.tokenHash, At: now,
 	}); err != nil {
 		return Cancellation{}, err
 	}
@@ -395,8 +414,21 @@ func (s *Service) expireInvitation(ctx context.Context, invitationID int64, now 
 	if err != nil {
 		return false, err
 	}
-	// Someone may have accepted, declined, or canceled between the scan and
-	// this transaction. First commit wins, so the sweep simply stands down.
+	settled, err := recordExpiry(ctx, tx, invitation)
+	if err != nil || !settled {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit Partner invitation expiry: %w", err)
+	}
+	return true, nil
+}
+
+// recordExpiry settles one lapsed invitation inside an open transaction and
+// reports whether it was this caller that settled it. Someone may have
+// accepted, declined, or canceled between reading the row and getting here;
+// first commit wins, so a caller that arrives second simply stands down.
+func recordExpiry(ctx context.Context, tx *sql.Tx, invitation resolvedInvitation) (bool, error) {
 	if err := resolveState(ctx, tx, invitation, InvitationExpired, invitation.expiresAt, nil); err != nil {
 		if errors.Is(err, ErrInvitationUnavailable) {
 			return false, nil
@@ -417,10 +449,32 @@ func (s *Service) expireInvitation(ctx context.Context, invitationID int64, now 
 	}); err != nil {
 		return false, err
 	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit Partner invitation expiry: %w", err)
-	}
 	return true, nil
+}
+
+// settleLapsedInvitation records the expiry of a still-stored-pending
+// invitation to the same address before a replacement is inserted. A reader
+// already treats a lapsed invitation as expired, and the pending-invitation
+// index enforces one row per address, so the sweep's own work is done inline
+// rather than making the Protectee wait for the next sweep to reinvite.
+func settleLapsedInvitation(ctx context.Context, tx *sql.Tx, protecteeID int64, inviteeEmail string, now time.Time) error {
+	var invitationID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT id FROM partner_invitations
+		WHERE protectee_id = ? AND invitee_email = ? AND state = 'pending' AND expires_at <= ?`,
+		protecteeID, inviteeEmail, now.Unix()).Scan(&invitationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read lapsed Partner invitation: %w", err)
+	}
+	invitation, err := resolveInvitationByID(ctx, tx, invitationID, now)
+	if err != nil {
+		return err
+	}
+	_, err = recordExpiry(ctx, tx, invitation)
+	return err
 }
 
 // resolveState is the single first-commit-wins gate every terminal outcome

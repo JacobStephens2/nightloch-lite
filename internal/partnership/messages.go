@@ -124,6 +124,64 @@ current and future Partners in the Roster and Activity.`,
 		message.ProtecteeEmail, message.PartnerCount, message.InviteeEmail)
 }
 
+// invitationAlert is the Action alert every current Partner receives when
+// their Protectee invites someone else. It states what acceptance would grant
+// and that the reader cannot act on it, and it never names another recipient.
+type invitationAlert struct {
+	ProtecteeEmail string
+	InviteeEmail   string
+	LogSharing     bool
+	// Reciprocal is whether accepting would also make the invitee a Protectee
+	// of this Protectee, which is a consequence a current Partner is entitled
+	// to see before it happens.
+	Reciprocal  bool
+	SentAt      time.Time
+	ExpiresAt   time.Time
+	ActivityURL string
+}
+
+// renderInvitationSentToPartner produces the approved invitation-sent Action
+// alert for one current Partner. Every current Partner reads the same body in
+// their own envelope, so the recipient list is never exposed (S3-21).
+func renderInvitationSentToPartner(message invitationAlert, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s sent a Partner invitation to %[2]s on
+%[3]s.
+
+No Partner powers have been granted yet. If accepted, %[2]s will
+be able to loosen %[1]s’s Policy, revoke their Devices, and
+exercise the other Partner powers shown in Nightloch.
+
+Log sharing after acceptance: %[4]s
+Reciprocal Partnerships if accepted: %[5]s
+Invitation expires: %[6]s
+
+You can observe this invitation in Activity, but you cannot accept, cancel,
+or decline it for either person.
+
+Review Activity:
+%[7]s
+
+If this invitation is unexpected, contact %[1]s directly.
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[8]s.`,
+		message.ProtecteeEmail, message.InviteeEmail, utcStamp(message.SentAt),
+		onOff(message.LogSharing), yesNo(message.Reciprocal), utcStamp(message.ExpiresAt),
+		message.ActivityURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessagePartnerInvitationSent,
+		Envelope: mailmessage.Envelope{
+			To: recipient,
+			Subject: fmt.Sprintf("[Nightloch] %s invited %s as a Partner",
+				message.ProtecteeEmail, message.InviteeEmail),
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
 // textToHTML mirrors the canonical plain text as HTML so the two parts cannot
 // drift apart in meaning. Bare URL lines become descriptive links; the plain
 // text keeps the full URL. Nothing loads remotely, so there is no tracking.
@@ -216,9 +274,11 @@ type acceptanceMessage struct {
 	DashboardURL string
 }
 
-// renderAcceptanceToProtectee produces the approved acceptance alert for the
-// Protectee. In 3B the same body goes separately to each prior Partner.
-func renderAcceptanceToProtectee(message acceptanceMessage) preparedMessage {
+// renderAcceptanceToProtecteeAndPriorPartners produces the approved acceptance
+// alert for everyone who already had a relationship with this Protectee. They
+// all read the same body, each in their own envelope, so no recipient learns
+// who else was told (S3-20, S3-21).
+func renderAcceptanceToProtecteeAndPriorPartners(message acceptanceMessage, recipient string) preparedMessage {
 	lock := "The Partner lock remains active."
 	if message.PartnerCount == 1 {
 		lock = "The Partner lock is now active."
@@ -246,9 +306,9 @@ address %[9]s.`,
 		lock, message.DashboardURL, alertsAddress)
 
 	return preparedMessage{
-		Kind: MessagePartnershipAcceptedProtectee,
+		Kind: MessagePartnershipAcceptedExisting,
 		Envelope: mailmessage.Envelope{
-			To: message.ProtecteeEmail,
+			To: recipient,
 			Subject: fmt.Sprintf("[Nightloch] %s now protects %s",
 				message.NewPartnerEmail, message.ProtecteeEmail),
 			Text:    text,
@@ -342,7 +402,8 @@ No Partnership was created. You may send a new invitation later.`,
 }
 
 // renderInvitationCanceled produces the approved cancellation alert for the
-// invitee. In 3B the current-Partner variant goes separately to each Partner.
+// invitee, who loses a link rather than a relationship and so is told nothing
+// about the Roster.
 func renderInvitationCanceled(message terminalMessage) preparedMessage {
 	text := fmt.Sprintf(`%[1]s canceled the Partner invitation sent to you on
 %[2]s.
@@ -562,6 +623,48 @@ address %[5]s.`,
 		Envelope: mailmessage.Envelope{
 			To:      recipient,
 			Subject: "[Nightloch] " + message.ProtecteeEmail + " canceled a Partnership ending request",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// cancellationAlert is the Action alert every current Partner receives when a
+// pending invitation they were told about is withdrawn. Like invitationAlert
+// it carries its own Activity destination, because a current Partner is sent
+// to the chronology rather than to a link that no longer works.
+type cancellationAlert struct {
+	ProtecteeEmail string
+	InviteeEmail   string
+	CanceledAt     time.Time
+	ActivityURL    string
+}
+
+// renderInvitationCanceledToPartner produces the approved cancellation alert
+// for one current Partner. They were told the invitation was sent (S3-20), so
+// they are told it ended; the body carries the integrity footer their alerts
+// always use, and never another recipient's address.
+func renderInvitationCanceledToPartner(message cancellationAlert, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s canceled the pending Partner invitation to
+%[2]s on %[3]s.
+
+No Partnership was created and no Partner powers were granted.
+
+Review Activity:
+%[4]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[5]s.`,
+		message.ProtecteeEmail, message.InviteeEmail, utcStamp(message.CanceledAt),
+		message.ActivityURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessageInvitationCanceledPartner,
+		Envelope: mailmessage.Envelope{
+			To: recipient,
+			Subject: fmt.Sprintf("[Nightloch] %s canceled the invitation to %s",
+				message.ProtecteeEmail, message.InviteeEmail),
 			Text:    text,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,
