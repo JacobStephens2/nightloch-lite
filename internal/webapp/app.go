@@ -113,6 +113,8 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("GET /partners/partnerships/{id}/cancel-end", app.confirmCancelEnd)
 	mux.HandleFunc("POST /partners/partnerships/{id}/cancel-end", app.cancelEnd)
 	mux.HandleFunc("GET /partners/ended-partnerships/{id}", app.partnershipReceipt)
+	mux.HandleFunc("GET /partners/sent-invitations/{id}/resend", app.confirmResendInvitation)
+	mux.HandleFunc("POST /partners/sent-invitations/{id}/resend", app.resendInvitation)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
 	mux.HandleFunc("GET /health", app.health)
@@ -152,8 +154,13 @@ type dashboardData struct {
 	// no longer hold. They carry no Roster and no later Activity.
 	Ended []partnership.EndedPartnership
 	// Now anchors every Cooling-off countdown on the page to one instant, so
-	// two rows of the same Roster cannot disagree about how long is left.
+	// two rows of the same Roster cannot disagree about how long is left, and
+	// it is what decides whether a pending invitation is due to be resent.
 	Now time.Time
+	// Refusal is the reason a dashboard control was declined, shown above the
+	// state it failed to change. It is always a partnership.IsRefusal message,
+	// which is safe for this viewer to read.
+	Refusal string
 }
 
 // invitePageData carries the Add a Partner form, including a rejected
@@ -166,6 +173,14 @@ type invitePageData struct {
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
+	a.renderDashboard(w, r, http.StatusOK, "")
+}
+
+// renderDashboard builds the signed-in User's whole dashboard. A control that
+// was refused renders the same page with its reason, so the Protectee reads
+// the refusal beside the unchanged state it applies to rather than on a screen
+// of its own.
+func (a *App) renderDashboard(w http.ResponseWriter, r *http.Request, status int, refusal string) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
@@ -195,9 +210,10 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, err)
 		return
 	}
-	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
+	a.render(w, r, status, "dashboard", dashboardData{
 		CSRFToken: csrf, User: user, Version: a.version, View: view,
-		Received: received, Protecting: protecting, Ended: ended, Now: a.now().UTC(),
+		Received: received, Protecting: protecting, Ended: ended,
+		Now: a.now().UTC(), Refusal: refusal,
 	})
 }
 

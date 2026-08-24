@@ -47,6 +47,11 @@ type invitationMessage struct {
 	Reciprocal bool
 	ReviewURL  string
 	ExpiresAt  time.Time
+	// Resent marks this as a reminder about an invitation the invitee has
+	// already been sent once. Everything below it is identical, which is the
+	// claim the reminder has to make credible: nothing changed, including how
+	// long is left.
+	Resent bool
 }
 
 // renderPartnerInvitation produces the approved Partner invitation from
@@ -57,7 +62,7 @@ func renderPartnerInvitation(message invitationMessage) preparedMessage {
 		logSharing = "Log sharing: On — you will receive domain-log access after acceptance."
 	}
 
-	text := fmt.Sprintf(`%[1]s invited you to become their Partner in Nightloch.
+	text := fmt.Sprintf(`%[7]s%[1]s invited you to become their Partner in Nightloch.
 
 Nightloch is partner-locked DNS protection. It can block domains on a
 Protectee’s enrolled Devices. While a Protectee has active Partners, they
@@ -96,18 +101,43 @@ Replies to this email go directly to %[1]s.`,
 		message.ReviewURL,
 		utcStamp(message.ExpiresAt),
 		reciprocalInvitationDisclosure(message),
+		resendPreamble(message),
 	)
 
+	kind, subject := MessagePartnerInvitation,
+		message.ProtecteeEmail+" invited you to be their Nightloch Partner"
+	if message.Resent {
+		kind = MessagePartnerInvitationResent
+		subject = "Reminder: " + subject
+	}
 	return preparedMessage{
-		Kind: MessagePartnerInvitation,
+		Kind: kind,
 		Envelope: mailmessage.Envelope{
 			To:      message.InviteeEmail,
-			Subject: message.ProtecteeEmail + " invited you to be their Nightloch Partner",
+			Subject: subject,
 			Text:    text,
 			HTML:    textToHTML(text),
 			ReplyTo: message.ProtecteeEmail,
 		},
 	}
+}
+
+// resendPreamble opens a reminder by saying what a second copy of the same
+// email otherwise leaves ambiguous: this is not a new invitation, the deadline
+// did not move, and the earlier link has been superseded by this one. It is
+// empty for an original send, which needs none of that.
+func resendPreamble(message invitationMessage) string {
+	if !message.Resent {
+		return ""
+	}
+	return `This is a reminder about a Partner invitation you were already sent.
+Nothing about it has changed: the same person invited the same address on the
+same terms, and it still expires at the original time below. Being reminded
+does not give you more time to answer.
+
+The link in the earlier email no longer works. Use the link in this one.
+
+`
 }
 
 // rosterDisclosure states how visible the invitee becomes. With no current

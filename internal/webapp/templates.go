@@ -35,6 +35,7 @@ var templateSources = map[string]string{
 <title>Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><form method="post" action="/sign-out"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="quiet" type="submit">Sign out</button></form></header>
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
+{{if .Refusal}}<p class="error" role="alert">{{.Refusal}}</p>{{end}}
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
 <h2>Your Partners</h2>
@@ -59,7 +60,9 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 <ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+{{if .Resends}}{{if eq .Resends 1}}Resent once, on {{utc .LastSentAt}}.{{else}}Resent {{.Resends}} times, most recently {{utc .LastSentAt}}.{{end}} Resending does not extend the expiry above.<br>{{end}}
 <span class="muted">The invited address and the proposed Log sharing cannot be edited. To correct either, cancel this invitation and send a new one.</span>
+{{if $.Now.Before .ResendDueAt}}<span class="muted">You can resend this invitation from {{utc .ResendDueAt}}. Resending is available once every 24 hours.</span>{{else}}<a href="/partners/sent-invitations/{{.ID}}/resend">Resend invitation</a>{{end}}
 <a href="/partners/sent-invitations/{{.ID}}/cancel">Cancel invitation</a></li>{{end}}</ul>
 {{end}}
 {{if .Received}}
@@ -83,6 +86,7 @@ Reciprocal: {{if .Reciprocal}}Yes — {{.ProtecteeEmail}} is also one of your ow
 <strong>Invitations {{.ProtecteeEmail}} sent</strong>
 <ul class="rows">{{range .PendingInvitations}}<li>{{.InviteeEmail}} — Invited by {{.InviterEmail}}. Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
 Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+{{if .Resends}}{{if eq .Resends 1}}Resent once, on {{utc .LastSentAt}}.{{else}}Resent {{.Resends}} times, most recently {{utc .LastSentAt}}.{{end}} Resending did not extend the expiry above, and Nightloch did not email you again about it.<br>{{end}}
 <span class="muted">You can observe this invitation, but you cannot accept, cancel, or decline it. Accepting grants full Partner powers immediately.</span></li>{{end}}</ul>
 {{end}}
 {{if .CoolingOffRunning}}
@@ -168,6 +172,20 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">Cancel invitation</button></form>
 <a class="quiet-link" href="{{.Back}}">Keep the invitation</a>
+</div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"invitation-resend-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resend Partner invitation · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Resend this Partner invitation?</h1>
+<p class="lede">Nightloch will email {{.CounterpartyEmail}} the same invitation again. Nothing about it changes: the same address is invited on the same terms, and it still expires {{utc .ExpiresAt}}. Resending does not give {{.CounterpartyEmail}} more time to answer.</p>
+<p class="lede">The link in the earlier email stops working, and the new email carries its place. Your current Partners are not emailed again; they were already told this invitation exists.</p>
+<p class="lede">You can resend an invitation once every 24 hours.</p>
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Resend invitation</button></form>
+<a class="quiet-link" href="{{.Back}}">Leave it as it is</a>
 </div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-declined-receipt": `<!doctype html>
