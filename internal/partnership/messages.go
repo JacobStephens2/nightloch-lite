@@ -313,12 +313,13 @@ type acceptanceMessage struct {
 	PartnerCount int
 	AcceptedAt   time.Time
 	DashboardURL string
-	// FinalCoolingOffPartner and FinalCoolingOffEndsAt name the Partnership
-	// that was the final one until this acceptance. They are set only then,
-	// because that is the only case where a reader would otherwise expect the
-	// Partner lock to deactivate at a deadline they already know about.
-	FinalCoolingOffPartner string
-	FinalCoolingOffEndsAt  time.Time
+	// LockEndsAt and LockEndingPartners are the instant the Protectee's Partner
+	// lock was scheduled to deactivate before this acceptance, and the
+	// Partnerships ending at it. They are set only when such an instant
+	// existed, because that is the only case where a reader would otherwise
+	// expect a deadline they already know about to end the lock.
+	LockEndsAt         time.Time
+	LockEndingPartners []string
 }
 
 // renderAcceptanceToProtecteeAndPriorPartners produces the approved acceptance
@@ -330,13 +331,11 @@ func renderAcceptanceToProtecteeAndPriorPartners(message acceptanceMessage, reci
 	if message.PartnerCount == 1 {
 		lock = "The Partner lock is now active."
 	}
-	// The acceptance overtook a scheduled ending that would have deactivated
-	// the lock. Saying so is the whole point: these readers were told that
-	// deadline was final, and it no longer is (S3-43).
-	if message.FinalCoolingOffPartner != "" {
-		lock += fmt.Sprintf("\n\nThe Partner lock will remain active after %s’s\n"+
-			"Partnership is scheduled to end on %s.",
-			message.FinalCoolingOffPartner, utcStamp(message.FinalCoolingOffEndsAt))
+	// The acceptance overtook the ending that would have deactivated the lock.
+	// Saying so is the whole point: these readers were told that deadline
+	// would end it, and it no longer does (S3-43).
+	if surviving := survivingLockDisclosure(message); surviving != "" {
+		lock += "\n\n" + surviving
 	}
 	text := fmt.Sprintf(`%[1]s accepted %[2]s’s Partner invitation on
 %[3]s.
@@ -370,6 +369,26 @@ address %[9]s.`,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,
 		},
+	}
+}
+
+// survivingLockDisclosure states that the Partner lock outlives the ending it
+// was scheduled to deactivate at. The approved sentence names the one final
+// Partner; when several countdowns share that instant — the concurrent horizon
+// a Protectee gets by scheduling every Partnership at once — naming one of
+// them would be false, so the deadline itself carries the sentence instead.
+func survivingLockDisclosure(message acceptanceMessage) string {
+	switch len(message.LockEndingPartners) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("The Partner lock will remain active after %s’s\n"+
+			"Partnership is scheduled to end on %s.",
+			message.LockEndingPartners[0], utcStamp(message.LockEndsAt))
+	default:
+		return fmt.Sprintf("The Partner lock will remain active after the %d Partnerships\n"+
+			"scheduled to end on %s.",
+			len(message.LockEndingPartners), utcStamp(message.LockEndsAt))
 	}
 }
 

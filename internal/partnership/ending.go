@@ -434,26 +434,71 @@ func countPartnersAfterEnding(ctx context.Context, queryer rowQueryer, protectee
 	return partners, nil
 }
 
-// countPartnersAfterDeadline is how many Partners still protect this Protectee
-// once deadline arrives: every other live Partnership except those already
-// scheduled to end at or before it. Concurrent Cooling-off is what makes this
-// different from the plain Partner count — several countdowns share one
-// 72-hour horizon rather than running in series — so it, and not
+// partnersAfterDeadlineBody counts the Partnerships that outlast one
+// Partnership's scheduled ending: every other live Partnership except those
+// already scheduled to end at or before it. Concurrent Cooling-off is what
+// makes this different from the plain Partner count — several countdowns share
+// one 72-hour horizon rather than running in series — so it, and not
 // countPartnersAfterEnding, is what a scheduled ending's consequences are
 // stated in. A zero deadline means "no ending is scheduled", and every other
-// Partnership survives it.
+// Partnership outlasts it.
+//
+// The question is asked two ways — correlated to a Roster row, and against a
+// deadline a caller names — so the condition itself is written once here and
+// both forms are derived from it.
+const partnersAfterDeadlineBody = `COUNT(*) FROM partnerships later
+	WHERE later.protectee_id = %[1]s AND later.id <> %[2]s AND later.ended_at IS NULL
+	  AND (later.cooling_off_ends_at IS NULL OR later.cooling_off_ends_at > %[3]s)`
+
+// partnersAfterDeadlineProjection correlates the count to a Partnership row
+// aliased `partnerships`, using that row's own deadline.
+var partnersAfterDeadlineProjection = "(SELECT " + fmt.Sprintf(partnersAfterDeadlineBody,
+	"partnerships.protectee_id", "partnerships.id",
+	"COALESCE(partnerships.cooling_off_ends_at, 0)") + ")"
+
+// partnersAfterDeadlineQuery asks the same question about a Protectee, a
+// Partnership, and a deadline the caller supplies — including one no
+// Partnership carries yet, which is how a Cooling-off preview states the
+// consequences of a request nobody has made.
+var partnersAfterDeadlineQuery = "SELECT " + fmt.Sprintf(partnersAfterDeadlineBody, "?", "?", "?")
+
 func countPartnersAfterDeadline(ctx context.Context, queryer rowQueryer,
 	protecteeID, partnershipID int64, deadline time.Time) (int, error) {
 
 	var partners int
-	if err := queryer.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM partnerships
-		WHERE protectee_id = ? AND id <> ? AND ended_at IS NULL
-		  AND (cooling_off_ends_at IS NULL OR cooling_off_ends_at > ?)`,
+	if err := queryer.QueryRowContext(ctx, partnersAfterDeadlineQuery,
 		protecteeID, partnershipID, deadlineUnix(deadline)).Scan(&partners); err != nil {
 		return 0, fmt.Errorf("read Partner count after a scheduled ending: %w", err)
 	}
 	return partners, nil
+}
+
+// scheduledEnding is one Partnership's Cooling-off as every view of it carries
+// it: the deadline itself and the horizon it sits in. The Protectee's Roster
+// row and their Partner's own row both embed it, so the two sides cannot
+// disagree about what a countdown means (S3-07, S3-15).
+type scheduledEnding struct {
+	// CoolingOffEndsAt is the exact deadline a requested ending will complete
+	// on, and zero when no ending is scheduled.
+	CoolingOffEndsAt time.Time
+	// PartnersAfterDeadline is how many Partners still protect the Protectee
+	// once that deadline arrives. Concurrent countdowns share one horizon, so
+	// this is not "every other Partner": a Partnership already scheduled to
+	// end at or before this deadline is not there afterwards either. A
+	// Partnership with no scheduled ending simply counts the others.
+	PartnersAfterDeadline int
+}
+
+// CoolingOffRunning reports whether this Partnership is scheduled to end.
+func (e scheduledEnding) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
+
+// EndsPartnerLock reports whether this scheduled ending is the one that
+// deactivates the Protectee's Partner lock and restores self-loosening. It is
+// the dynamic final-Partnership question: an ending that is not final today
+// becomes final when the Partnerships outlasting it end first, and stops being
+// final when a new Partner accepts.
+func (e scheduledEnding) EndsPartnerLock() bool {
+	return e.CoolingOffRunning() && e.PartnersAfterDeadline == 0
 }
 
 // deadlineUnix is the stored form of a Cooling-off deadline, with the zero
