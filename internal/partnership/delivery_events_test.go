@@ -510,3 +510,49 @@ func TestDeliveryEventSurvivesRestartAndStaysIdempotent(t *testing.T) {
 		t.Fatalf("Activity holds %d failure entries after a restarted retry", entries)
 	}
 }
+
+// A send that errored outright and one Resend refused to send at all are both
+// as final as a bounce: no message exists, and nothing is retrying.
+func TestFailedAndSuppressedSendsRenderThePartnerUnreachable(t *testing.T) {
+	t.Parallel()
+	for name, kind := range map[string]DeliveryEventType{
+		"failed send":     EventFailed,
+		"suppressed send": EventSuppressed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			service, protectee, _ := dispatchedPartnership(t)
+			if err := service.RecordDeliveryEvent(context.Background(), DeliveryEvent{
+				ProviderEventID:   "evt_" + string(kind),
+				ProviderMessageID: deliveredMessageID(t, service, "partner@example.com"),
+				Type:              kind,
+				OccurredAt:        testClock.Add(time.Minute),
+			}); err != nil {
+				t.Fatalf("RecordDeliveryEvent: %v", err)
+			}
+			if got := partnerReachability(t, service, protectee); got != ReachabilityUnreachable {
+				t.Fatalf("%s reads as %q", name, got.Label())
+			}
+		})
+	}
+}
+
+// An undetermined bounce must not read as "Delivery delayed": the job is over
+// and nothing is retrying it, so that wording would promise a retry that is
+// never coming.
+func TestUndeterminedBounceIsTerminalRatherThanDelayed(t *testing.T) {
+	t.Parallel()
+	service, protectee, _ := dispatchedPartnership(t)
+
+	if err := service.RecordDeliveryEvent(context.Background(), DeliveryEvent{
+		ProviderEventID:   "evt_undetermined",
+		ProviderMessageID: deliveredMessageID(t, service, "partner@example.com"),
+		Type:              EventBounced, Permanent: true,
+		OccurredAt: testClock.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := partnerReachability(t, service, protectee); got != ReachabilityUnreachable {
+		t.Fatalf("undetermined bounce reads as %q", got.Label())
+	}
+}

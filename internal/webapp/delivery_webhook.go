@@ -19,10 +19,13 @@ const (
 	// maxWebhookBytes bounds an unauthenticated request body. The signature is
 	// computed over the body, so the read has to happen before the check.
 	maxWebhookBytes = 64 << 10
-	// transientBounce is the only bounce Resend reports as still worth
-	// retrying. Anything else — permanent, undetermined, or unstated — renders
-	// the warning, because a visible warning that turns out to be premature
-	// costs a Protectee nothing: it changes no power and no deadline (S3-58).
+	// transientBounce is the only bounce type that leaves a message still on
+	// its way. Resend raises email.bounced for a permanent rejection and has a
+	// separate email.delivery_delayed for the temporary case, so anything
+	// else — permanent, undetermined, or unstated — is terminal. Calling an
+	// undetermined bounce "delayed" would promise a retry that is never
+	// coming; the warning it raises instead changes no power and no deadline
+	// (S3-58).
 	transientBounce = "Transient"
 )
 

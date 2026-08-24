@@ -18,7 +18,7 @@ Slice 2 is code-complete. This runbook turns it into the live two-browser demo a
 
 1. Verify `nightloch.app` in Resend before using the locked sender `Nightloch <alerts@nightloch.app>`. The From mailbox must remain monitored.
 2. Create a Cloudflare Turnstile widget for `lite.nightloch.app`.
-3. Add a Resend webhook pointing at `https://lite.nightloch.app/webhooks/resend`, subscribed to `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, and `email.complained`. Copy its signing secret (`whsec_…`) into `RESEND_WEBHOOK_SECRET`. The endpoint is the one route with no session and no CSRF token: the Svix signature over the request body is what authorizes it, and an unsigned callback is refused with `401` and changes nothing.
+3. Add a Resend webhook pointing at `https://lite.nightloch.app/webhooks/resend`, subscribed to `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`, and `email.suppressed`. The last two are as final as a bounce — no message exists — so leaving them unsubscribed would let a Roster keep reading **Reachable** for an address Resend is refusing outright. Copy its signing secret (`whsec_…`) into `RESEND_WEBHOOK_SECRET`. The endpoint is the one route with no session and no CSRF token: the Svix signature over the request body is what authorizes it, and an unsigned callback is refused with `401` and changes nothing.
 4. Put the Resend API key, the Resend webhook signing secret, the Turnstile secret, and the Turnstile site key into `/etc/nightloch/nightloch.env`. Start from [`deploy/nightloch.env.example`](../../deploy/nightloch.env.example), but never commit the filled file.
 
 Use a root-owned file:
