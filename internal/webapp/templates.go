@@ -37,7 +37,14 @@ var templateSources = map[string]string{
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
-<h2>Your Partners</h2><ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}.</li>{{end}}</ul>
+<h2>Your Partners</h2><ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}.<br>
+{{if .CoolingOffRunning}}
+<span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
+Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partner power. They may also agree to end it sooner.<br>
+<a href="/partners/partnerships/{{.PartnershipID}}/cancel-end">Cancel the ending request</a>
+{{else}}
+<a href="/partners/partnerships/{{.PartnershipID}}/request-end">Request to end this Partnership</a>
+{{end}}</li>{{end}}</ul>
 <p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this Partnership ends.</p>
 {{else}}
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
@@ -65,7 +72,13 @@ Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log 
 <h2>People you protect</h2>
 <ul class="rows">{{range .Protecting}}<li><strong>{{.ProtecteeEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On — you can view their DNS domain log.{{else}}Off — you cannot view their DNS domain log.{{end}}<br>
 Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.PartnerEmail}}{{end}}<br>
-<a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a></li>{{end}}</ul>
+{{if .CoolingOffRunning}}
+<span class="warn-inline">{{.ProtecteeEmail}} requested to end this Partnership. It is scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
+Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}} may cancel the request.<br>
+<a href="/partners/partnerships/{{.PartnershipID}}/end">End now</a>
+{{else}}
+<a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a>
+{{end}}</li>{{end}}</ul>
 {{end}}
 {{if .Ended}}
 <h2>Partnerships you ended</h2>
@@ -189,8 +202,12 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>End Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
-<main class="dashboard"><section><h1>End this Partnership now?</h1>
+<main class="dashboard"><section>{{if .Ending.CoolingOffRunning}}<h1>End this Partnership now?</h1>
+<p class="lede">{{.Ending.ProtecteeEmail}} requested to end this Partnership, which is scheduled to end {{utc .Ending.CoolingOffEndsAt}}. You are not required to agree: if you do nothing, the Partnership stays active with all your Partner powers until that deadline, and {{.Ending.ProtecteeEmail}} may cancel the request before then.</p>
+<p class="lede">Choosing <strong>End now</strong> waives the remaining time. It takes effect immediately and cannot be undone. You have protected them since {{utc .Ending.Since}}.</p>
+{{else}}<h1>End this Partnership now?</h1>
 <p class="lede">Ending your Partnership with {{.Ending.ProtecteeEmail}} takes effect immediately and cannot be undone. You have protected them since {{utc .Ending.Since}}.</p>
+{{end}}
 <p class="lede">You will no longer be able to change their Policy, approve Allowlist entries, revoke their Devices, or view their Roster and ongoing Activity{{if .Ending.LogSharing}}, and you will lose access to their DNS domain log{{end}}.</p>
 {{if .Ending.PartnerLockActive}}
 <p class="warn">{{.Ending.ProtecteeEmail}} will still have {{.Ending.RemainingPartners}} active Partner(s), so their Partner lock remains active.</p>
@@ -202,8 +219,8 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <label for="confirmation">Type END to confirm</label>
 <input id="confirmation" name="confirmation" type="text" autocomplete="off" required maxlength="16" value="">
-<div class="actions"><button type="submit">End Partnership now</button>
-<a class="quiet-link" href="{{.Back}}">Keep this Partnership</a></div></form>
+<div class="actions"><button type="submit">{{if .Ending.CoolingOffRunning}}End now{{else}}End Partnership now{{end}}</button>
+<a class="quiet-link" href="{{.Back}}">{{if .Ending.CoolingOffRunning}}Let the Cooling-off run{{else}}Keep this Partnership{{end}}</a></div></form>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"partnership-receipt": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -211,7 +228,7 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
 <main class="dashboard"><section><h1>Ended Partnership</h1>
 {{if .JustEnded}}
-<p class="lede">You ended your Partnership with {{.Receipt.ProtecteeEmail}} on {{utc .Receipt.EndedAt}}. Nightloch has told them and their remaining Partners.</p>
+<p class="lede">{{if .Receipt.AgreedToEndNow}}You agreed to end your Partnership with {{.Receipt.ProtecteeEmail}} now, on {{utc .Receipt.EndedAt}}.{{else}}You ended your Partnership with {{.Receipt.ProtecteeEmail}} on {{utc .Receipt.EndedAt}}.{{end}} Nightloch has told them and their remaining Partners.</p>
 {{else}}
 <p class="lede">Your Partnership with {{.Receipt.ProtecteeEmail}} ended on {{utc .Receipt.EndedAt}}.</p>
 {{end}}
@@ -220,7 +237,7 @@ Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.
 Partner since: {{utc .Receipt.Since}}<br>
 Ended: {{utc .Receipt.EndedAt}}<br>
 Log sharing while active: {{if .Receipt.LogSharing}}On{{else}}Off{{end}}<br>
-How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
+How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else if .Receipt.AgreedToEndNow}}You agreed to end the Partnership immediately after {{.Receipt.ProtecteeEmail}} requested Cooling-off.{{else if .Receipt.EndedAfterCoolingOff}}Nightloch ended the Partnership after the Cooling-off {{.Receipt.ProtecteeEmail}} requested completed.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
 <p class="lede">You keep only this read-only receipt, and it covers only this ended Partnership. It shows nothing about {{.Receipt.ProtecteeEmail}}&rsquo;s remaining Partners or anything that happened afterwards. To protect them again, ask them to send a new Partner invitation.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
@@ -230,6 +247,64 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That Partnership is unavailable</h1>
 <p class="lede">Nightloch cannot show this Partnership. Only the Partner on a Partnership can end it or read its receipt.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
+	"cooling-off-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Request to end a Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Request to end this Partnership?</h1>
+<p class="lede">Your Partnership with {{.Request.PartnerEmail}} does not end straight away. Nightloch schedules it to end on {{utc .Request.EndsAt}}, 72 hours from now, and that deadline does not move.</p>
+<p class="lede">Until then nothing changes: the Partnership stays active, your Policy stays enforced, and {{.Request.PartnerEmail}} keeps every Partner power{{if .Request.LogSharing}}, including access to your DNS domain log{{end}}. Nightloch will tell them, and they may agree to end it sooner. You can cancel the request at any point before the deadline.</p>
+{{if .Request.FinalPartnership}}
+<p class="warn">{{.Request.PartnerEmail}} is your final active Partner. At {{utc .Request.EndsAt}} your Partner lock becomes inactive and you will be able to loosen your own Policy.</p>
+{{else}}
+<p class="warn">You will still have {{.Request.RemainingPartners}} other active Partner(s) after {{utc .Request.EndsAt}}, so your Partner lock remains active.</p>
+{{end}}
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Request to end this Partnership</button></form>
+<a class="quiet-link" href="{{.Back}}">Keep this Partnership</a>
+</div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"cooling-off-cancel-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cancel a Partnership ending request · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Cancel this ending request?</h1>
+{{if .Request.EndsAt.IsZero}}
+<p class="lede">Your Partnership with {{.Request.PartnerEmail}} has no scheduled ending, so there is nothing to cancel.</p>
+{{else}}
+<p class="lede">Your Partnership with {{.Request.PartnerEmail}} is scheduled to end on {{utc .Request.EndsAt}} — {{countdown .Request.EndsAt .Now}}. Cancelling removes that scheduled ending; the Partnership simply stays active, as it has been throughout.</p>
+<p class="lede">Nightloch will tell {{.Request.PartnerEmail}} that you canceled. You may request an ending again later, and a new request starts a fresh 72 hours.</p>
+{{end}}
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Cancel the ending request</button></form>
+<a class="quiet-link" href="{{.Back}}">Leave the ending scheduled</a>
+</div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"cooling-off-receipt": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Partnership ending request · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section>
+{{if .Canceled}}
+<h1>Ending request canceled</h1>
+<p class="lede">You canceled the request to end your Partnership with {{.Request.PartnerEmail}} on {{utc .Request.CanceledAt}}. No ending is scheduled, and the Partnership remains active with the same Partner powers it has always had.</p>
+<p class="lede">Nightloch has told {{.Request.PartnerEmail}}. You may request an ending again later; a new request starts a fresh 72 hours.</p>
+{{else}}
+<h1>Ending requested</h1>
+<p class="lede">Your Partnership with {{.Request.PartnerEmail}} is scheduled to end on {{utc .Request.EndsAt}} — {{countdown .Request.EndsAt .Now}}. That deadline does not move.</p>
+<p class="lede">Until then the Partnership stays active and {{.Request.PartnerEmail}} keeps every Partner power. Nightloch has told them; they may agree to end it sooner, and you may cancel the request at any point before the deadline.</p>
+{{if .Request.FinalPartnership}}
+<p class="warn">{{.Request.PartnerEmail}} is your final active Partner. At {{utc .Request.EndsAt}} your Partner lock becomes inactive and you will be able to loosen your own Policy.</p>
+{{else}}
+<p class="warn">You will still have {{.Request.RemainingPartners}} other active Partner(s) afterwards, so your Partner lock remains active.</p>
+{{end}}
+{{end}}
+<p><a class="button-link" href="/">Go to Nightloch</a></p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invite": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Add a Partner · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
@@ -255,6 +330,36 @@ var templateFuncs = template.FuncMap{
 		return template.HTML(fmt.Sprintf(`<time datetime="%s" data-utc>%s UTC</time>`,
 			utc.Format(time.RFC3339), utc.Format("2006-01-02 15:04")))
 	},
+	"countdown": countdown,
+}
+
+// countdown states how long is left before a Cooling-off deadline. The exact
+// instant is always rendered beside it, so this is the readable half of the
+// same fact rather than the fact itself (S3-07). It is rendered by the server
+// from one instant per page, so every row of a Roster agrees.
+func countdown(deadline, now time.Time) string {
+	remaining := deadline.UTC().Sub(now.UTC())
+	if remaining <= 0 {
+		return "ending now"
+	}
+	switch days, hours := int(remaining.Hours())/24, int(remaining.Hours())%24; {
+	case days > 0:
+		return fmt.Sprintf("%s and %s remaining", plural(days, "day"), plural(hours, "hour"))
+	case hours > 0:
+		return fmt.Sprintf("%s and %s remaining", plural(hours, "hour"),
+			plural(int(remaining.Minutes())%60, "minute"))
+	case int(remaining.Minutes()) > 0:
+		return plural(int(remaining.Minutes()), "minute") + " remaining"
+	default:
+		return "less than a minute remaining"
+	}
+}
+
+func plural(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 func parseTemplates() (map[string]*template.Template, error) {
@@ -278,4 +383,4 @@ for (const element of document.querySelectorAll("time[data-utc]")) {
 }
 `
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn-inline{color:var(--accent);font-weight:700}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`

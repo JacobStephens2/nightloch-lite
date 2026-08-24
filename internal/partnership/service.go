@@ -246,10 +246,20 @@ type ProtecteeView struct {
 
 // RosterEntry is one live Partnership as its Protectee sees it.
 type RosterEntry struct {
-	PartnerEmail string
-	Since        time.Time
-	LogSharing   bool
+	// PartnershipID names the one Partnership this row is, so the Protectee's
+	// Cooling-off controls act on it without guessing from the two identities.
+	PartnershipID int64
+	PartnerEmail  string
+	Since         time.Time
+	LogSharing    bool
+	// CoolingOffEndsAt is the exact deadline a requested ending will complete
+	// on, and zero when no ending is scheduled. Every entitled Roster viewer
+	// sees the same instant (S3-07).
+	CoolingOffEndsAt time.Time
 }
+
+// CoolingOffRunning reports whether this Partnership is scheduled to end.
+func (e RosterEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
 
 // PendingInvitation is one outstanding Partner invitation as its Protectee
 // sees it. The Protectee never holds the bearer token, so ID is how they
