@@ -369,6 +369,9 @@ type endingMessage struct {
 	ProtecteeEmail string
 	PartnerEmail   string
 	EndedAt        time.Time
+	// EndedReason selects the approved subject and opening sentence. The rest
+	// of the body is identical for all three causes.
+	EndedReason string
 	// PartnerCount is the Protectee's active Partners after the ending.
 	PartnerCount int
 	DashboardURL string
@@ -384,6 +387,7 @@ type endingMessage struct {
 // keeps a receipt instead of the Roster. The zero-Partner consequence is
 // always stated, because it changes who may loosen the Policy.
 func renderPartnershipEnded(message endingMessage, recipient string) preparedMessage {
+	subject, opening := endingVariant(message)
 	lock := "The Partner lock remains active."
 	if message.PartnerCount == 0 {
 		lock = fmt.Sprintf("The Partner lock is now inactive. %s can loosen their own Policy.",
@@ -397,7 +401,7 @@ func renderPartnershipEnded(message endingMessage, recipient string) preparedMes
 	if recipient == message.PartnerEmail {
 		closing = "You keep a read-only receipt for this ended Partnership:\n" + message.ReceiptURL
 	}
-	text := fmt.Sprintf(`%[1]s ended the Partnership immediately.
+	text := fmt.Sprintf(`%[8]s
 
 The Partnership ended on %[3]s.
 
@@ -415,14 +419,149 @@ Partnership.
 This is an integrity message from Nightloch. Replies go to the monitored
 address %[7]s.`,
 		message.PartnerEmail, message.ProtecteeEmail, utcStamp(message.EndedAt),
-		message.PartnerCount, lock, closing, alertsAddress)
+		message.PartnerCount, lock, closing, alertsAddress, opening)
 
 	return preparedMessage{
 		Kind: MessagePartnershipEnded,
 		Envelope: mailmessage.Envelope{
-			To: recipient,
-			Subject: fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
+			To:      recipient,
+			Subject: subject,
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// endingVariant is the approved subject and opening sentence for how this
+// Partnership ended. A completed Cooling-off names Nightloch as the actor and
+// the Protectee as the requester, because the execution was not their act
+// (S3-18); the other two name the Partner who acted.
+func endingVariant(message endingMessage) (subject, opening string) {
+	switch message.EndedReason {
+	case EndReasonPartnerAgreedNow:
+		return fmt.Sprintf("[Nightloch] %s agreed to end their Partnership with %s now",
 				message.PartnerEmail, message.ProtecteeEmail),
+			fmt.Sprintf("%s agreed to end the Partnership immediately after\n%s requested Cooling-off.",
+				message.PartnerEmail, message.ProtecteeEmail)
+	case EndReasonCoolingOffCompleted:
+		return fmt.Sprintf("[Nightloch] A Partnership for %s ended after Cooling-off",
+				message.ProtecteeEmail),
+			fmt.Sprintf("Nightloch ended the Partnership after the Cooling-off requested by\n%s completed.",
+				message.ProtecteeEmail)
+	default:
+		return fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
+				message.PartnerEmail, message.ProtecteeEmail),
+			message.PartnerEmail + " ended the Partnership immediately."
+	}
+}
+
+// coolingOffMessage carries the two parties, the instant the Protectee acted,
+// the deadline where one applies, and both destinations the approved
+// Cooling-off copy closes with.
+type coolingOffMessage struct {
+	ProtecteeEmail string
+	PartnerEmail   string
+	At             time.Time
+	EndsAt         time.Time
+	// PartnerCount is the Protectee's active Partners once this Partnership
+	// ends, which is what makes the request final or not.
+	PartnerCount int
+	DashboardURL string
+	// PartnershipURL is where the affected Partner reviews the request and, if
+	// they agree, ends it now.
+	PartnershipURL string
+}
+
+// renderCoolingOffStarted produces the approved Cooling-off start alert. The
+// affected Partner reads that they keep every power and may agree to end
+// sooner; every other current Partner reads that they may watch the countdown
+// but cannot touch it. The Protectee initiated the request and gets an in-app
+// receipt instead of mail (S3-20).
+func renderCoolingOffStarted(message coolingOffMessage, recipient string) preparedMessage {
+	if recipient != message.PartnerEmail {
+		text := fmt.Sprintf(`%[1]s requested to end their Partnership with
+%[2]s on %[3]s.
+
+It is scheduled to end on %[4]s.
+
+Until then, %[2]s remains an active Partner with all
+Partner powers. You can observe the countdown, but you cannot cancel it or
+end another Partner’s Partnership.
+
+Review the Roster and Activity:
+%[5]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[6]s.`,
+			message.ProtecteeEmail, message.PartnerEmail, utcStamp(message.At),
+			utcStamp(message.EndsAt), message.DashboardURL, alertsAddress)
+
+		return preparedMessage{
+			Kind: MessageCoolingOffStarted,
+			Envelope: mailmessage.Envelope{
+				To:      recipient,
+				Subject: "[Nightloch] " + message.ProtecteeEmail + " requested to end a Partnership",
+				Text:    text,
+				HTML:    textToHTML(text),
+				ReplyTo: alertsAddress,
+			},
+		}
+	}
+
+	text := fmt.Sprintf(`%[1]s requested to end your Partnership on
+%[2]s.
+
+It is scheduled to end on %[3]s.
+
+Until then, the Partnership remains active and you retain all Partner powers.
+%[1]s may cancel the request. If you agree to end sooner, you
+may choose “End now” in Nightloch.
+
+Review the request:
+%[4]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[5]s.`,
+		message.ProtecteeEmail, utcStamp(message.At), utcStamp(message.EndsAt),
+		message.PartnershipURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessageCoolingOffStarted,
+		Envelope: mailmessage.Envelope{
+			To:      recipient,
+			Subject: "[Nightloch] " + message.ProtecteeEmail + " requested to end your Partnership",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// renderCoolingOffCanceled produces the approved cancellation alert. The
+// retained Partner and every other current Partner read the same body, each in
+// their own envelope, because nothing about the relationship changed and there
+// is nothing recipient-specific left to say.
+func renderCoolingOffCanceled(message coolingOffMessage, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s canceled the request to end their Partnership with
+%[2]s on %[3]s.
+
+The Partnership remains active. No end is scheduled, and
+%[2]s retains the same Partner powers.
+
+Review the Roster and Activity:
+%[4]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[5]s.`,
+		message.ProtecteeEmail, message.PartnerEmail, utcStamp(message.At),
+		message.DashboardURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessageCoolingOffCanceled,
+		Envelope: mailmessage.Envelope{
+			To:      recipient,
+			Subject: "[Nightloch] " + message.ProtecteeEmail + " canceled a Partnership ending request",
 			Text:    text,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,

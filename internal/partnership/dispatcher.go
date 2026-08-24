@@ -14,10 +14,10 @@ const (
 )
 
 // Dispatcher runs the Partnership module's due background work in the
-// single-process control plane: the invitation-expiry sweep and the durable
-// mail queue. It owns no relationship rules; it only asks the module what is
-// due. Both kinds of work live in SQLite, so a restart resumes whatever the
-// previous process had not finished.
+// single-process control plane: the invitation-expiry sweep, the Cooling-off
+// completion runner, and the durable mail queue. It owns no relationship
+// rules; it only asks the module what is due. Every kind of work lives in
+// SQLite, so a restart resumes whatever the previous process had not finished.
 type Dispatcher struct {
 	Service  *Service
 	Sender   mailmessage.Sender
@@ -49,6 +49,12 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		// down stops being answerable before anything else is attempted.
 		if expired, err := d.Service.ExpireDueInvitations(ctx, batch); err != nil {
 			logger.Error("partner invitation expiry failed", "expired", expired, "error", err)
+		}
+		// Cooling-off completes before mail goes out, so a deadline that
+		// passed while nothing was running lands as an ending rather than
+		// sitting behind a queue of older alerts.
+		if ended, err := d.Service.CompleteDueCoolingOff(ctx, batch); err != nil {
+			logger.Error("Cooling-off completion failed", "ended", ended, "error", err)
 		}
 		if sent, err := d.Service.DispatchDue(ctx, d.Sender, batch); err != nil {
 			logger.Error("partnership mail delivery failed", "sent", sent, "error", err)

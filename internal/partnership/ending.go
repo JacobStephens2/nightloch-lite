@@ -65,42 +65,89 @@ type PartnershipEnding struct {
 	LogSharing        bool
 	RemainingPartners int
 	EndedAt           time.Time
+	// CoolingOffEndsAt is the deadline the Protectee already requested, and
+	// zero when they have requested nothing. It turns the Partner's immediate
+	// ending into the **End now** the Protectee asked them to consider (S3-08).
+	CoolingOffEndsAt time.Time
 }
 
 // PartnerLockActive reports the Protectee's lock state after this ending.
 func (e PartnershipEnding) PartnerLockActive() bool { return e.RemainingPartners > 0 }
 
-// livePartnership is one active Partnership with both parties' identities.
+// CoolingOffRunning reports whether this ending resolves a Cooling-off the
+// Protectee already requested rather than starting from an unscheduled
+// Partnership.
+func (e PartnershipEnding) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
+
+// livePartnership is one active Partnership with both parties' identities and
+// whatever Cooling-off it currently carries. A scheduled ending is an ordinary
+// attribute of a live Partnership: nothing about the relationship's powers
+// changes until the deadline actually arrives.
 type livePartnership struct {
-	id             int64
-	protecteeID    int64
-	protecteeEmail string
-	partnerEmail   string
-	logSharing     bool
-	since          time.Time
+	id                    int64
+	protecteeID           int64
+	protecteeEmail        string
+	partnerEmail          string
+	logSharing            bool
+	since                 time.Time
+	coolingOffRequestedAt time.Time
+	coolingOffEndsAt      time.Time
 }
 
-// readLivePartnership resolves the live Partnership partnerID holds, or
-// ErrPartnershipUnavailable. Authorization is the query: a Protectee, another
-// Partner, or a stranger simply matches no row, so none of them can end or
-// edit a Partnership that is not theirs.
-func readLivePartnership(ctx context.Context, queryer rowQueryer, partnershipID, partnerID int64) (livePartnership, error) {
-	if partnershipID <= 0 || partnerID <= 0 {
+// partnershipRole is which side of a Partnership a caller is claiming to be.
+// Authorization is the query itself: the wrong side simply matches no row, so
+// a Protectee, another Partner, or a stranger cannot act on — or probe for — a
+// Partnership that is not theirs. Every role scopes the read to one User, so
+// no value of this type can widen it.
+type partnershipRole string
+
+const (
+	byPartner   partnershipRole = "partnership.partner_id = ?"
+	byProtectee partnershipRole = "partnership.protectee_id = ?"
+)
+
+// livePartnershipQuery projects one live Partnership with both identities and
+// whatever Cooling-off it carries, up to and including the WHERE keyword; each
+// caller appends its own predicate.
+const livePartnershipQuery = `
+	SELECT partnership.id, partnership.protectee_id, protectee.email, partner.email,
+	       partnership.log_sharing, partnership.accepted_at,
+	       COALESCE(partnership.cooling_off_requested_at, 0),
+	       COALESCE(partnership.cooling_off_ends_at, 0)
+	FROM partnerships partnership
+	JOIN users protectee ON protectee.id = partnership.protectee_id
+	JOIN users partner ON partner.id = partnership.partner_id
+	WHERE partnership.ended_at IS NULL AND partnership.id = ? AND `
+
+// readLivePartnership resolves the live Partnership the given side holds, or
+// ErrPartnershipUnavailable. Every request path reads through here, so a
+// caller always has to name which side of the relationship they are.
+func readLivePartnership(ctx context.Context, queryer rowQueryer, role partnershipRole, partnershipID, userID int64) (livePartnership, error) {
+	if partnershipID <= 0 || userID <= 0 {
 		return livePartnership{}, ErrPartnershipUnavailable
 	}
+	return scanLivePartnership(queryer.QueryRowContext(ctx,
+		livePartnershipQuery+string(role), partnershipID, userID))
+}
+
+// readDuePartnership resolves one live Partnership for Nightloch's own
+// due-transition runner, which acts for no User and so scopes to neither side.
+// It is a separate function rather than a third role precisely so that no
+// request path can reach an unauthorized read by passing a role value.
+func readDuePartnership(ctx context.Context, queryer rowQueryer, partnershipID int64) (livePartnership, error) {
+	if partnershipID <= 0 {
+		return livePartnership{}, ErrPartnershipUnavailable
+	}
+	return scanLivePartnership(queryer.QueryRowContext(ctx,
+		livePartnershipQuery+"partnership.cooling_off_ends_at IS NOT NULL", partnershipID))
+}
+
+func scanLivePartnership(row *sql.Row) (livePartnership, error) {
 	var partnership livePartnership
 	var logSharing int
-	var acceptedAt int64
-	err := queryer.QueryRowContext(ctx, `
-		SELECT partnership.id, partnership.protectee_id, protectee.email, partner.email,
-		       partnership.log_sharing, partnership.accepted_at
-		FROM partnerships partnership
-		JOIN users protectee ON protectee.id = partnership.protectee_id
-		JOIN users partner ON partner.id = partnership.partner_id
-		WHERE partnership.id = ? AND partnership.partner_id = ? AND partnership.ended_at IS NULL`,
-		partnershipID, partnerID).
-		Scan(&partnership.id, &partnership.protecteeID, &partnership.protecteeEmail,
-			&partnership.partnerEmail, &logSharing, &acceptedAt)
+	var acceptedAt, requestedAt, endsAt int64
+	err := row.Scan(&partnership.id, &partnership.protecteeID, &partnership.protecteeEmail,
+		&partnership.partnerEmail, &logSharing, &acceptedAt, &requestedAt, &endsAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return livePartnership{}, ErrPartnershipUnavailable
 	}
@@ -109,6 +156,10 @@ func readLivePartnership(ctx context.Context, queryer rowQueryer, partnershipID,
 	}
 	partnership.logSharing = intToBool(logSharing)
 	partnership.since = time.Unix(acceptedAt, 0).UTC()
+	if requestedAt != 0 {
+		partnership.coolingOffRequestedAt = time.Unix(requestedAt, 0).UTC()
+		partnership.coolingOffEndsAt = time.Unix(endsAt, 0).UTC()
+	}
 	return partnership, nil
 }
 
@@ -116,7 +167,7 @@ func readLivePartnership(ctx context.Context, queryer rowQueryer, partnershipID,
 // consequences EndPartnership will commit, without committing them. Only the
 // Partner on the Partnership reaches it.
 func (s *Service) EndablePartnership(ctx context.Context, partnershipID, partnerID int64) (PartnershipEnding, error) {
-	partnership, err := readLivePartnership(ctx, s.db, partnershipID, partnerID)
+	partnership, err := readLivePartnership(ctx, s.db, byPartner, partnershipID, partnerID)
 	if err != nil {
 		return PartnershipEnding{}, err
 	}
@@ -145,27 +196,31 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 	// Authorization comes first, so a caller who holds no such Partnership
 	// learns only that it is unavailable — never that they typed the
 	// confirmation wrongly for a relationship they are not part of.
-	partnership, err := readLivePartnership(ctx, tx, command.PartnershipID, command.PartnerID)
+	partnership, err := readLivePartnership(ctx, tx, byPartner, command.PartnershipID, command.PartnerID)
 	if err != nil {
 		return PartnershipEnding{}, err
 	}
 	if strings.TrimSpace(command.Confirmation) != endConfirmationWord {
 		return PartnershipEnding{}, ErrEndConfirmationRequired
 	}
+	// The same route serves both endings a Partner may perform. Ending an
+	// unscheduled Partnership is their own independent act; ending one the
+	// Protectee already asked to end is the **End now** they were invited to
+	// consider, so the two are stored, audited, and announced apart (S3-08).
+	reason := EndReasonPartnerEnded
+	if !partnership.coolingOffEndsAt.IsZero() {
+		reason = EndReasonPartnerAgreedNow
+	}
 	// First commit wins: only the transaction that still sees a live
 	// Partnership may end it, and every later mutation hangs off that row.
 	result, err := tx.ExecContext(ctx, `
 		UPDATE partnerships SET ended_at = ?, ended_reason = ?
-		WHERE id = ? AND ended_at IS NULL`, now.Unix(), EndReasonPartnerEnded, partnership.id)
+		WHERE id = ? AND ended_at IS NULL`, now.Unix(), reason, partnership.id)
 	if err != nil {
 		return PartnershipEnding{}, fmt.Errorf("end Partnership: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return PartnershipEnding{}, fmt.Errorf("end Partnership: %w", err)
-	}
-	if affected != 1 {
-		return PartnershipEnding{}, ErrPartnershipUnavailable
+	if err := requireOneRow(result, ErrPartnershipUnavailable); err != nil {
+		return PartnershipEnding{}, err
 	}
 
 	remaining, err := countPartnersAfterEnding(ctx, tx, partnership.protecteeID, partnership.id)
@@ -183,7 +238,7 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 		PartnershipID: &partnership.id,
 		OccurredAt:    now,
 		Details: map[string]any{
-			"ended_reason":        EndReasonPartnerEnded,
+			"ended_reason":        reason,
 			"log_sharing":         partnership.logSharing,
 			"partner_count":       remaining,
 			"partner_lock_active": ending.PartnerLockActive(),
@@ -193,35 +248,8 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 		return PartnershipEnding{}, err
 	}
 
-	// Both parties and every remaining Partner are entitled to the ending
-	// signal (S3-20). Today the 3A exposure gate means the remaining Roster is
-	// always empty; the query is written for the Roster 3B opens up.
-	recipients := []string{partnership.protecteeEmail, partnership.partnerEmail}
-	roster, err := livePartnerEmails(ctx, tx, partnership.protecteeID)
-	if err != nil {
+	if err := s.queueEndingMessages(ctx, tx, partnership, remaining, now, reason, activityID); err != nil {
 		return PartnershipEnding{}, err
-	}
-	recipients = append(recipients, roster...)
-
-	scope := partnershipScope(partnership.id, now)
-	for sequence, recipient := range recipients {
-		message := renderPartnershipEnded(endingMessage{
-			ProtecteeEmail: partnership.protecteeEmail,
-			PartnerEmail:   partnership.partnerEmail,
-			EndedAt:        now,
-			PartnerCount:   remaining,
-			DashboardURL:   s.dashboardURL(),
-			ReceiptURL:     s.receiptURL(partnership.id),
-		}, recipient)
-		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, scope, sequence+1)
-		if err := queueDelivery(ctx, tx, deliveryJob{
-			ActivityID:    activityID,
-			PartnershipID: &partnership.id,
-			Message:       message,
-			CreatedAt:     now,
-		}); err != nil {
-			return PartnershipEnding{}, err
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -243,10 +271,20 @@ type EndedPartnership struct {
 	EndedReason    string
 }
 
-// PartnerEnded reports whether this receipt records the Partner's own
-// immediate ending, so a template can name the cause without restating the
-// stored vocabulary.
+// PartnerEnded, AgreedToEndNow, and EndedAfterCoolingOff name the three ways a
+// Partnership reaches its end, so a template can state the cause without
+// restating the stored vocabulary.
 func (e EndedPartnership) PartnerEnded() bool { return e.EndedReason == EndReasonPartnerEnded }
+
+// AgreedToEndNow reports the Partner waiving a Cooling-off the Protectee had
+// requested.
+func (e EndedPartnership) AgreedToEndNow() bool { return e.EndedReason == EndReasonPartnerAgreedNow }
+
+// EndedAfterCoolingOff reports Nightloch completing the Protectee's request on
+// its deadline.
+func (e EndedPartnership) EndedAfterCoolingOff() bool {
+	return e.EndedReason == EndReasonCoolingOffCompleted
+}
 
 // endedReceiptQuery projects the receipts one former Partner holds. Both
 // callers scope it to partner_id, so a receipt is unreachable by anyone else,
@@ -320,6 +358,47 @@ func (s *Service) EndedPartnerships(ctx context.Context, partnerID int64) ([]End
 	return receipts, nil
 }
 
+// queueEndingMessages queues the one ending signal, once per entitled
+// recipient. Both parties and every remaining Partner are entitled to it
+// (S3-20), each in their own envelope so the recipient list is never exposed
+// (S3-21). Today the 3A exposure gate means the remaining Roster is always
+// empty; the query is written for the Roster 3B opens up. reason selects the
+// approved variant, which is the only thing that differs between an immediate
+// end, an End now, and a completed Cooling-off.
+func (s *Service) queueEndingMessages(ctx context.Context, tx *sql.Tx, partnership livePartnership,
+	remaining int, endedAt time.Time, reason string, activityID int64) error {
+
+	recipients := []string{partnership.protecteeEmail, partnership.partnerEmail}
+	roster, err := livePartnerEmails(ctx, tx, partnership.protecteeID)
+	if err != nil {
+		return err
+	}
+	recipients = append(recipients, roster...)
+
+	scope := partnershipScope(partnership.id, endedAt)
+	for sequence, recipient := range recipients {
+		message := renderPartnershipEnded(endingMessage{
+			ProtecteeEmail: partnership.protecteeEmail,
+			PartnerEmail:   partnership.partnerEmail,
+			EndedAt:        endedAt,
+			EndedReason:    reason,
+			PartnerCount:   remaining,
+			DashboardURL:   s.dashboardURL(),
+			ReceiptURL:     s.receiptURL(partnership.id),
+		}, recipient)
+		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, scope, sequence+1)
+		if err := queueDelivery(ctx, tx, deliveryJob{
+			ActivityID:    activityID,
+			PartnershipID: &partnership.id,
+			Message:       message,
+			CreatedAt:     endedAt,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // newEnding describes one Partnership at, or just before, its ending.
 // remainingAfter is always the Protectee's Partner count once this Partnership
 // is gone, so a preview and a committed ending state the same consequence.
@@ -328,6 +407,7 @@ func newEnding(partnership livePartnership, remainingAfter int, endedAt time.Tim
 		PartnershipID: partnership.id, ProtecteeEmail: partnership.protecteeEmail,
 		Since: partnership.since, LogSharing: partnership.logSharing,
 		RemainingPartners: remainingAfter, EndedAt: endedAt,
+		CoolingOffEndsAt: partnership.coolingOffEndsAt,
 	}
 }
 
@@ -369,6 +449,28 @@ func livePartnerEmails(ctx context.Context, tx *sql.Tx, protecteeID int64) ([]st
 		return nil, fmt.Errorf("read remaining Roster: %w", err)
 	}
 	return emails, nil
+}
+
+// requireOneRow turns a guarded UPDATE that changed nothing into the caller's
+// own refusal, which is how every first-commit-wins race in this package is
+// settled.
+func requireOneRow(result sql.Result, lost error) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read affected rows: %w", err)
+	}
+	if affected != 1 {
+		return lost
+	}
+	return nil
+}
+
+// partnershipURL is where the affected Partner reviews a Cooling-off request
+// and, if they agree, ends it now.
+func (s *Service) partnershipURL(partnershipID int64) string {
+	link := *s.baseURL
+	link.Path = "/partners/partnerships/" + strconv.FormatInt(partnershipID, 10) + "/end"
+	return link.String()
 }
 
 // receiptURL is where a departing Partner reads the one thing they retain.

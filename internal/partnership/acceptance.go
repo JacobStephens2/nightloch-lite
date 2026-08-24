@@ -257,8 +257,16 @@ type ProtecteeEntry struct {
 	ProtecteeEmail string
 	Since          time.Time
 	LogSharing     bool
-	Roster         []RosterEntry
+	// CoolingOffEndsAt is the deadline this Protectee requested for this
+	// Partnership, and zero when they have requested nothing. The Partner
+	// keeps every power until it arrives.
+	CoolingOffEndsAt time.Time
+	Roster           []RosterEntry
 }
+
+// CoolingOffRunning reports whether this Protectee has asked to end this
+// Partnership, which turns the Partner's ending control into **End now**.
+func (e ProtecteeEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
 
 // ProtectingView returns the Protectees partnerID actively protects.
 func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]ProtecteeEntry, error) {
@@ -267,7 +275,8 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT partnerships.id, partnerships.protectee_id, users.email,
-		       partnerships.accepted_at, partnerships.log_sharing
+		       partnerships.accepted_at, partnerships.log_sharing,
+		       COALESCE(partnerships.cooling_off_ends_at, 0)
 		FROM partnerships JOIN users ON users.id = partnerships.protectee_id
 		WHERE partnerships.partner_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at`, partnerID)
@@ -279,13 +288,17 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 	var protecting []ProtecteeEntry
 	for rows.Next() {
 		var person ProtecteeEntry
-		var since int64
+		var since, endsAt int64
 		var logSharing int
-		if err := rows.Scan(&person.PartnershipID, &person.ProtecteeID, &person.ProtecteeEmail, &since, &logSharing); err != nil {
+		if err := rows.Scan(&person.PartnershipID, &person.ProtecteeID, &person.ProtecteeEmail,
+			&since, &logSharing, &endsAt); err != nil {
 			return nil, fmt.Errorf("read protected Protectee: %w", err)
 		}
 		person.Since = time.Unix(since, 0).UTC()
 		person.LogSharing = intToBool(logSharing)
+		if endsAt != 0 {
+			person.CoolingOffEndsAt = time.Unix(endsAt, 0).UTC()
+		}
 		protecting = append(protecting, person)
 	}
 	if err := rows.Err(); err != nil {
@@ -326,7 +339,8 @@ func (s *Service) CanViewLogs(ctx context.Context, actorID, protecteeID int64) (
 
 func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT users.email, partnerships.accepted_at, partnerships.log_sharing
+		SELECT partnerships.id, users.email, partnerships.accepted_at,
+		       partnerships.log_sharing, COALESCE(partnerships.cooling_off_ends_at, 0)
 		FROM partnerships JOIN users ON users.id = partnerships.partner_id
 		WHERE partnerships.protectee_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at`, protecteeID)
@@ -337,13 +351,16 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 	var roster []RosterEntry
 	for rows.Next() {
 		var entry RosterEntry
-		var since int64
+		var since, endsAt int64
 		var logSharing int
-		if err := rows.Scan(&entry.PartnerEmail, &since, &logSharing); err != nil {
+		if err := rows.Scan(&entry.PartnershipID, &entry.PartnerEmail, &since, &logSharing, &endsAt); err != nil {
 			return nil, fmt.Errorf("read Roster row: %w", err)
 		}
 		entry.Since = time.Unix(since, 0).UTC()
 		entry.LogSharing = intToBool(logSharing)
+		if endsAt != 0 {
+			entry.CoolingOffEndsAt = time.Unix(endsAt, 0).UTC()
+		}
 		roster = append(roster, entry)
 	}
 	if err := rows.Err(); err != nil {
