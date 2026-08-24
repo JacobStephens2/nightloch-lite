@@ -102,9 +102,16 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("GET /partners/received-invitations/{id}/decline", app.confirmReceivedDecline)
 	mux.HandleFunc("POST /partners/received-invitations/{id}/decline", app.declineReceivedInvitation)
 	// A Partner ends their own Partnership immediately; the receipt they keep
-	// afterwards is the only thing that survives for them (S3-16).
+	// afterwards is the only thing that survives for them (S3-16). The same
+	// route is their **End now** once the Protectee has requested Cooling-off.
 	mux.HandleFunc("GET /partners/partnerships/{id}/end", app.confirmEndPartnership)
 	mux.HandleFunc("POST /partners/partnerships/{id}/end", app.endPartnership)
+	// The Protectee's own exit is the 72-hour Cooling-off, which only they may
+	// start and only they may cancel.
+	mux.HandleFunc("GET /partners/partnerships/{id}/request-end", app.confirmRequestEnd)
+	mux.HandleFunc("POST /partners/partnerships/{id}/request-end", app.requestEnd)
+	mux.HandleFunc("GET /partners/partnerships/{id}/cancel-end", app.confirmCancelEnd)
+	mux.HandleFunc("POST /partners/partnerships/{id}/cancel-end", app.cancelEnd)
 	mux.HandleFunc("GET /partners/ended-partnerships/{id}", app.partnershipReceipt)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
@@ -144,6 +151,9 @@ type dashboardData struct {
 	// Ended is the read-only receipts this User keeps for Partnerships they
 	// no longer hold. They carry no Roster and no later Activity.
 	Ended []partnership.EndedPartnership
+	// Now anchors every Cooling-off countdown on the page to one instant, so
+	// two rows of the same Roster cannot disagree about how long is left.
+	Now time.Time
 }
 
 // invitePageData carries the Add a Partner form, including a rejected
@@ -187,7 +197,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	}
 	a.render(w, r, http.StatusOK, "dashboard", dashboardData{
 		CSRFToken: csrf, User: user, Version: a.version, View: view,
-		Received: received, Protecting: protecting, Ended: ended,
+		Received: received, Protecting: protecting, Ended: ended, Now: a.now().UTC(),
 	})
 }
 
