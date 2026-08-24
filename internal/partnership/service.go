@@ -190,6 +190,7 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		InviteeEmail:   inviteeEmail,
 		LogSharing:     command.LogSharing,
 		PartnerCount:   len(currentPartners),
+		Reciprocal:     reciprocal,
 		ReviewURL:      s.reviewURL(rawToken),
 		ExpiresAt:      expiresAt,
 	})}

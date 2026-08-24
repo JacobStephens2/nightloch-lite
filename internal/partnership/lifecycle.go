@@ -153,8 +153,13 @@ type ReceivedInvitation struct {
 	ID             int64
 	ProtecteeEmail string
 	LogSharing     bool
-	SentAt         time.Time
-	ExpiresAt      time.Time
+	// Reciprocal is whether accepting would form Reciprocal Partnerships,
+	// because this viewer already protects the Protectee who invited them.
+	// The list is scoped to the viewer's own address, so this row discloses
+	// only a relationship they are already part of.
+	Reciprocal bool
+	SentAt     time.Time
+	ExpiresAt  time.Time
 }
 
 // ReceivedInvitations lists the live Partner invitations addressed to the
@@ -167,7 +172,11 @@ func (s *Service) ReceivedInvitations(ctx context.Context, viewerID int64) ([]Re
 	now := s.now().UTC()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT invitation.id, protectee.email, invitation.log_sharing,
-		       invitation.last_sent_at, invitation.expires_at
+		       invitation.last_sent_at, invitation.expires_at,
+		       EXISTS(SELECT 1 FROM partnerships reverse
+		               WHERE reverse.protectee_id = invitee.id
+		                 AND reverse.partner_id = invitation.protectee_id
+		                 AND reverse.ended_at IS NULL)
 		FROM partner_invitations invitation
 		JOIN users protectee ON protectee.id = invitation.protectee_id
 		JOIN users invitee ON invitee.email = invitation.invitee_email
@@ -181,12 +190,14 @@ func (s *Service) ReceivedInvitations(ctx context.Context, viewerID int64) ([]Re
 	var received []ReceivedInvitation
 	for rows.Next() {
 		var invitation ReceivedInvitation
-		var logSharing int
+		var logSharing, reciprocal int
 		var sentAt, expiresAt int64
-		if err := rows.Scan(&invitation.ID, &invitation.ProtecteeEmail, &logSharing, &sentAt, &expiresAt); err != nil {
+		if err := rows.Scan(&invitation.ID, &invitation.ProtecteeEmail, &logSharing,
+			&sentAt, &expiresAt, &reciprocal); err != nil {
 			return nil, fmt.Errorf("read received Partner invitation: %w", err)
 		}
 		invitation.LogSharing = intToBool(logSharing)
+		invitation.Reciprocal = intToBool(reciprocal)
 		invitation.SentAt = time.Unix(sentAt, 0).UTC()
 		invitation.ExpiresAt = time.Unix(expiresAt, 0).UTC()
 		received = append(received, invitation)

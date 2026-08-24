@@ -62,7 +62,13 @@ type InvitationReview struct {
 	// OtherPartnerCount is how many Partners already protect the Protectee.
 	// Their identities are withheld until acceptance (S3-06).
 	OtherPartnerCount int
-	ExpiresAt         time.Time
+	// Reciprocal is whether accepting would create a second, independent
+	// Partnership in the opposite direction, because this invitee already
+	// protects the Protectee who invited them. It names a relationship the
+	// invitee is part of, so it stays behind ViewerMatches: a bearer link
+	// alone never discloses it (S3-04).
+	Reciprocal bool
+	ExpiresAt  time.Time
 	// ViewerEmail is the signed-in User's verified email, empty when nobody
 	// is signed in.
 	ViewerEmail   string
@@ -118,13 +124,21 @@ func (s *Service) ReviewInvitation(ctx context.Context, ref InvitationRef, viewe
 	}
 
 	// Before acceptance the invitee learns only how many Partners already
-	// protect this Protectee, never who they are (S3-06). The reciprocal
-	// consequence belongs to the acceptance disclosures instead.
+	// protect this Protectee, never who they are (S3-06).
 	partnerCount, err := countLivePartners(ctx, s.db, invitation.protecteeID)
 	if err != nil {
 		return InvitationReview{}, err
 	}
 	review.OtherPartnerCount = partnerCount
+	if review.ViewerMatches {
+		// The reverse direction already exists or it does not; either way it
+		// is the invitee's own relationship, so only they are told about it.
+		reciprocal, err := protects(ctx, s.db, invitation.protecteeID, viewerID)
+		if err != nil {
+			return InvitationReview{}, err
+		}
+		review.Reciprocal = reciprocal
+	}
 	return review, nil
 }
 
@@ -267,6 +281,11 @@ type ProtecteeEntry struct {
 	ProtecteeEmail string
 	Since          time.Time
 	LogSharing     bool
+	// Reciprocal is true when this Protectee is also one of the reader's own
+	// Partners, which is a second, independent Partnership with its own Log
+	// sharing, deadlines, and ending. Marking it in both areas is what keeps
+	// a mixed-role dashboard readable without implying merged powers (S3-44).
+	Reciprocal bool
 	// CoolingOffEndsAt is the deadline this Protectee requested for this
 	// Partnership, and zero when they have requested nothing. The Partner
 	// keeps every power until it arrives.
@@ -289,7 +308,11 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT partnerships.id, partnerships.protectee_id, users.email,
 		       partnerships.accepted_at, partnerships.log_sharing,
-		       COALESCE(partnerships.cooling_off_ends_at, 0)
+		       COALESCE(partnerships.cooling_off_ends_at, 0),
+		       EXISTS(SELECT 1 FROM partnerships reverse
+		               WHERE reverse.protectee_id = partnerships.partner_id
+		                 AND reverse.partner_id = partnerships.protectee_id
+		                 AND reverse.ended_at IS NULL)
 		FROM partnerships JOIN users ON users.id = partnerships.protectee_id
 		WHERE partnerships.partner_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at`, partnerID)
@@ -302,13 +325,14 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 	for rows.Next() {
 		var person ProtecteeEntry
 		var since, endsAt int64
-		var logSharing int
+		var logSharing, reciprocal int
 		if err := rows.Scan(&person.PartnershipID, &person.ProtecteeID, &person.ProtecteeEmail,
-			&since, &logSharing, &endsAt); err != nil {
+			&since, &logSharing, &endsAt, &reciprocal); err != nil {
 			return nil, fmt.Errorf("read protected Protectee: %w", err)
 		}
 		person.Since = time.Unix(since, 0).UTC()
 		person.LogSharing = intToBool(logSharing)
+		person.Reciprocal = intToBool(reciprocal)
 		if endsAt != 0 {
 			person.CoolingOffEndsAt = time.Unix(endsAt, 0).UTC()
 		}

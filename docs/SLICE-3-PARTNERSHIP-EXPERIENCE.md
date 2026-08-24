@@ -64,6 +64,32 @@ If you did not expect this invitation, do not accept it. Contact
 Replies to this email go directly to {{protectee_email}}.
 ```
 
+### Reciprocal invitation
+
+S3-04 requires the reciprocal effect to be disclosed when inviting, and the
+invitee is the party it lands on. When the inviting Protectee already protects
+the invited address, insert the paragraph below directly after the Roster
+paragraphs and keep the rest of the message identical. The invitation reaches
+the invited address alone, and that address is already inside the reverse
+Partnership, so this discloses nothing new to anyone.
+
+```text
+{{protectee_email}} already protects you as your Partner. Accepting creates a
+second, independent Partnership in the opposite direction, so you would be
+their Partner too. The two Partnerships do not merge: each keeps its own Log
+sharing, its own ending, and its own powers, and ending one does not end the
+other.
+```
+
+Omit the paragraph entirely in the ordinary direction. There is no second
+Partnership to describe, and a bare `Reciprocal Partnerships: No` would only
+prompt the reader to wonder what merged authority they had just avoided.
+
+The **Invitation landing page** carries the same paragraph under a
+**Reciprocal Partnerships** heading, shown only once the invited User has
+authenticated. A bearer link alone never reveals the reverse direction, for the
+same reason it never reveals the invited address.
+
 ### Zero current Partners
 
 When `partner_count` is zero the Roster paragraphs above would assert two
@@ -195,6 +221,12 @@ Allowlist entries, revoke Devices, and view their Roster and Activity.
 
 Log sharing: {{On — you can view their DNS domain log. |
 Off — you cannot view their DNS domain log.}}
+
+{{Only when reciprocal:
+Reciprocal Partnerships: Yes. {{protectee_email}} already protects you, and
+you now protect them. These are two independent Partnerships: ending or
+changing one does not change the other, and neither one gives either of you
+authority over the other’s Partnership.}}
 
 {{protectee_email}} has {{other_partner_count}} other active Partner(s).
 Sign in to see who they are:
@@ -699,6 +731,8 @@ Canceling User deletion will not restore this invitation.
 - A pending Partner invitation is immutable. Resending does not extend its expiry. Changing its invitee or proposed Log sharing requires cancellation and a new invitation.
 - A signed-in User sees all pending Partner invitations addressed to their verified email in **Partner invitations** and may review, accept, or decline without the bearer link. The same disclosures and confirmation rules apply.
 - The dashboard separates **Your protection** from **People you protect**. A User’s own Partner-lock status remains visible even when they protect other people. Reciprocal Partnerships appear independently in both areas.
+- Reciprocal Partnerships are two independent directional Partnerships. Each keeps its own Log sharing, Activity window, Cooling-off deadline, ending, Partner powers, and receipt; ending or changing one never mutates the other, and no screen or route lets a User's role in one direction act on the other direction's Partnership.
+- The invited User's own disclosures — the invitation email, the landing page, and their **Partner invitations** row — name the reciprocal effect whenever accepting would create one, and say the two Partnerships do not merge. The reverse direction stays withheld from an unauthenticated bearer-link viewer, exactly as the invited address does.
 - Zero active Partners means the Partner lock is inactive. Pending invitations never activate it; say that acceptance is required.
 - A Protectee may start Cooling-off on multiple Partnerships concurrently. Each receives its own 72-hour deadline.
 - Before Cooling-off starts on the final active Partnership, every relevant screen names the exact deadline and says the Protectee will be able to loosen their own Policy afterward.
