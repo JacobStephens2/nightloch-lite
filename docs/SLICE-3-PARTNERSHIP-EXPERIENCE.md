@@ -66,6 +66,10 @@ Replies to this email go directly to {{protectee_email}}.
 
 ### Reciprocal invitation
 
+> Added by #10. The frozen copy above disclosed the reciprocal effect only to
+> the Protectee's current Partners. This section extends it to the invited
+> User; nothing above it changed.
+
 S3-04 requires the reciprocal effect to be disclosed when inviting, and the
 invitee is the party it lands on. When the inviting Protectee already protects
 the invited address, insert the paragraph below directly after the Roster
@@ -731,7 +735,7 @@ Canceling User deletion will not restore this invitation.
 - A pending Partner invitation is immutable. Resending does not extend its expiry. Changing its invitee or proposed Log sharing requires cancellation and a new invitation.
 - A signed-in User sees all pending Partner invitations addressed to their verified email in **Partner invitations** and may review, accept, or decline without the bearer link. The same disclosures and confirmation rules apply.
 - The dashboard separates **Your protection** from **People you protect**. A User’s own Partner-lock status remains visible even when they protect other people. Reciprocal Partnerships appear independently in both areas.
-- Reciprocal Partnerships are two independent directional Partnerships. Each keeps its own Log sharing, Activity window, Cooling-off deadline, ending, Partner powers, and receipt; ending or changing one never mutates the other, and no screen or route lets a User's role in one direction act on the other direction's Partnership.
+- Reciprocal Partnerships are two independent directional Partnerships. Each keeps its own Log sharing, Cooling-off deadline, ending, Partner powers, and receipt, and every Activity entry is attributed to the Protectee and Partnership of its own direction; ending or changing one never mutates the other, and no screen or route lets a User's role in one direction act on the other direction's Partnership. The Activity *visibility window* is a read-side rule and is specified with the Activity read path, which #10 does not build.
 - The invited User's own disclosures — the invitation email, the landing page, and their **Partner invitations** row — name the reciprocal effect whenever accepting would create one, and say the two Partnerships do not merge. The reverse direction stays withheld from an unauthenticated bearer-link viewer, exactly as the invited address does.
 - Zero active Partners means the Partner lock is inactive. Pending invitations never activate it; say that acceptance is required.
 - A Protectee may start Cooling-off on multiple Partnerships concurrently. Each receives its own 72-hour deadline.

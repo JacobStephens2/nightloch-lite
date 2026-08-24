@@ -63,9 +63,9 @@ type InvitationReview struct {
 	// Their identities are withheld until acceptance (S3-06).
 	OtherPartnerCount int
 	// Reciprocal is whether accepting would create a second, independent
-	// Partnership in the opposite direction, because this invitee already
-	// protects the Protectee who invited them. It names a relationship the
-	// invitee is part of, so it stays behind ViewerMatches: a bearer link
+	// Partnership in the opposite direction, because the Protectee who sent
+	// this invitation already protects the invitee. It names a relationship
+	// the invitee is part of, so it stays behind ViewerMatches: a bearer link
 	// alone never discloses it (S3-04).
 	Reciprocal bool
 	ExpiresAt  time.Time
@@ -133,7 +133,7 @@ func (s *Service) ReviewInvitation(ctx context.Context, ref InvitationRef, viewe
 	if review.ViewerMatches {
 		// The reverse direction already exists or it does not; either way it
 		// is the invitee's own relationship, so only they are told about it.
-		reciprocal, err := protects(ctx, s.db, invitation.protecteeID, viewerID)
+		reciprocal, err := reciprocalWith(ctx, s.db, invitation.protecteeID, viewerID)
 		if err != nil {
 			return InvitationReview{}, err
 		}
@@ -207,7 +207,7 @@ func (s *Service) AcceptInvitation(ctx context.Context, ref InvitationRef, viewe
 	partnerCount := len(roster)
 	// Reciprocal is the reverse direction: this Protectee also protects the
 	// Partner who just accepted.
-	reciprocal, err := protects(ctx, tx, protecteeID, viewerID)
+	reciprocal, err := reciprocalWith(ctx, tx, protecteeID, viewerID)
 	if err != nil {
 		return Acceptance{}, err
 	}
@@ -309,10 +309,7 @@ func (s *Service) ProtectingView(ctx context.Context, partnerID int64) ([]Protec
 		SELECT partnerships.id, partnerships.protectee_id, users.email,
 		       partnerships.accepted_at, partnerships.log_sharing,
 		       COALESCE(partnerships.cooling_off_ends_at, 0),
-		       EXISTS(SELECT 1 FROM partnerships reverse
-		               WHERE reverse.protectee_id = partnerships.partner_id
-		                 AND reverse.partner_id = partnerships.protectee_id
-		                 AND reverse.ended_at IS NULL)
+		       `+reciprocalOfPartnership+`
 		FROM partnerships JOIN users ON users.id = partnerships.protectee_id
 		WHERE partnerships.partner_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at`, partnerID)
@@ -391,10 +388,7 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT partnerships.id, users.email, partnerships.accepted_at,
 		       partnerships.log_sharing, COALESCE(partnerships.cooling_off_ends_at, 0),
-		       EXISTS(SELECT 1 FROM partnerships reverse
-		               WHERE reverse.protectee_id = partnerships.partner_id
-		                 AND reverse.partner_id = partnerships.protectee_id
-		                 AND reverse.ended_at IS NULL),
+		       `+reciprocalOfPartnership+`,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.recipient_email = users.email
 		                  ORDER BY job.id DESC LIMIT 1), ?)
@@ -449,24 +443,44 @@ func countLivePartners(ctx context.Context, queryer rowQueryer, protecteeID int6
 	return partners, nil
 }
 
-// protects reports whether partnerID holds a live Partnership over
-// protecteeID. Partnerships are directional, so this is the single question
-// behind "reciprocal": the reverse-direction Partnership either exists or it
-// does not. A partnerID of zero is an address that has never signed in, which
-// protects nobody.
-func protects(ctx context.Context, queryer rowQueryer, partnerID, protecteeID int64) (bool, error) {
-	if partnerID <= 0 || protecteeID <= 0 {
+// reciprocalWith reports whether a Partnership from inviteeID to protecteeID
+// would be reciprocal — that is, whether protecteeID already holds a live
+// Partnership over inviteeID in the opposite direction. Partnerships are
+// directional, so this is the single question behind "reciprocal": the
+// reverse-direction Partnership either exists or it does not. Every caller
+// asks it in this order, invited party last, so no disclosure can state the
+// relationship backwards. An inviteeID of zero is an address that has never
+// signed in, which is protected by nobody.
+func reciprocalWith(ctx context.Context, queryer rowQueryer, protecteeID, inviteeID int64) (bool, error) {
+	if protecteeID <= 0 || inviteeID <= 0 {
 		return false, nil
 	}
 	var live int
 	if err := queryer.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM partnerships
 		WHERE protectee_id = ? AND partner_id = ? AND ended_at IS NULL`,
-		protecteeID, partnerID).Scan(&live); err != nil {
+		inviteeID, protecteeID).Scan(&live); err != nil {
 		return false, fmt.Errorf("read reverse-direction Partnership: %w", err)
 	}
 	return live > 0, nil
 }
+
+// reciprocalOfPartnership and reciprocalOfInvitation are the same question the
+// row projections ask in SQL, kept here beside reciprocalWith so the live-only
+// condition that defines "reciprocal" is stated in one place. The first
+// correlates to a Partnership row aliased `partnerships`; the second to an
+// invitation row aliased `invitation`, matched by invited address rather than
+// User id because an invitee need not have signed in yet.
+const reciprocalOfPartnership = `EXISTS(SELECT 1 FROM partnerships reverse
+	               WHERE reverse.protectee_id = partnerships.partner_id
+	                 AND reverse.partner_id = partnerships.protectee_id
+	                 AND reverse.ended_at IS NULL)`
+
+const reciprocalOfInvitation = `EXISTS(SELECT 1 FROM partnerships reverse
+	               JOIN users invited ON invited.id = reverse.protectee_id
+	               WHERE invited.email = invitation.invitee_email
+	                 AND reverse.partner_id = invitation.protectee_id
+	                 AND reverse.ended_at IS NULL)`
 
 // rowQueryer is satisfied by both *sql.DB and *sql.Tx.
 type rowQueryer interface {

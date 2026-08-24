@@ -3,6 +3,8 @@ package partnership
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -327,5 +329,88 @@ func TestCoolingOffOnOneReciprocalDirectionDoesNotScheduleTheOther(t *testing.T)
 	}
 	if !survivor.PartnerLockActive || len(survivor.Partners) != 1 {
 		t.Fatalf("the completed Cooling-off ended the reverse direction too: %+v", survivor)
+	}
+}
+
+// activityFor lists one Protectee's chronology as `action:partnership_id`
+// pairs, oldest first, so a test can assert which direction each entry was
+// attributed to rather than only how many there are.
+func activityFor(t *testing.T, service *Service, protecteeID int64) []string {
+	t.Helper()
+	rows, err := service.db.Query(`
+		SELECT action, COALESCE(partnership_id, 0) FROM activity_entries
+		WHERE protectee_id = ? ORDER BY id`, protecteeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var entries []string
+	for rows.Next() {
+		var action string
+		var partnershipID int64
+		if err := rows.Scan(&action, &partnershipID); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, fmt.Sprintf("%s:%d", action, partnershipID))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+// TestActivityAttributesEachReciprocalDirectionToItsOwnProtectee is AC 8 on the
+// Activity side: every entry lands in the chronology of the Protectee whose
+// Partnership it describes, and names that Partnership, so the two directions
+// never share a record even though the same two Users appear in both.
+func TestActivityAttributesEachReciprocalDirectionToItsOwnProtectee(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	ctx := context.Background()
+	alice := createUser(t, db, "alice@example.com")
+	bob := createUser(t, db, "bob@example.com")
+	reciprocalPair(t, service, alice, bob)
+
+	alicesRoster, err := service.ProtecteeView(ctx, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobProtectsAlice := alicesRoster.Partners[0].PartnershipID
+	bobsRoster, err := service.ProtecteeView(ctx, bob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliceProtectsBob := bobsRoster.Partners[0].PartnershipID
+
+	// Alice schedules her own ending and Bob ends it now, so both directions
+	// have seen every kind of entry this slice appends.
+	if _, err := service.StartCoolingOff(ctx, CoolingOffCommand{
+		PartnershipID: bobProtectsAlice, ProtecteeID: alice,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.EndPartnership(ctx, EndCommand{
+		PartnershipID: bobProtectsAlice, PartnerID: bob, Confirmation: "END",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantAlice := []string{
+		ActionInvitationSent + ":0",
+		fmt.Sprintf("%s:%d", ActionInvitationAccepted, bobProtectsAlice),
+		fmt.Sprintf("%s:%d", ActionCoolingOffStarted, bobProtectsAlice),
+		fmt.Sprintf("%s:%d", ActionPartnershipEndedByPartner, bobProtectsAlice),
+	}
+	if got := activityFor(t, service, alice); !slices.Equal(got, wantAlice) {
+		t.Fatalf("Alice's Activity = %v, want %v", got, wantAlice)
+	}
+	// Bob's own chronology records only his own direction. Nothing Alice did
+	// to the Partnership protecting her reached it.
+	wantBob := []string{
+		ActionInvitationSent + ":0",
+		fmt.Sprintf("%s:%d", ActionInvitationAccepted, aliceProtectsBob),
+	}
+	if got := activityFor(t, service, bob); !slices.Equal(got, wantBob) {
+		t.Fatalf("Bob's Activity = %v, want %v", got, wantBob)
 	}
 }
