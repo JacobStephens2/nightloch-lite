@@ -44,7 +44,7 @@ var templateSources = map[string]string{
 {{if .CoolingOffRunning}}
 <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partner power. They may also agree to end it sooner.<br>
-{{if eq (len $.View.Partners) 1}}At that deadline your Partner lock becomes inactive and you will be able to loosen your own Policy.{{else}}Your Partner lock stays active afterwards, because your other Partners remain.{{end}}<br>
+{{if .EndsPartnerLock}}At that deadline your Partner lock becomes inactive and you will be able to loosen your own Policy.{{else}}Your Partner lock stays active afterwards, because {{.PartnersAfterDeadline}} other Partner(s) outlast that deadline.{{end}}<br>
 <a href="/partners/partnerships/{{.PartnershipID}}/cancel-end">Cancel the ending request</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/request-end">Request to end this Partnership</a>
@@ -88,7 +88,7 @@ Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Part
 {{if .CoolingOffRunning}}
 <span class="warn-inline">{{.ProtecteeEmail}} requested to end this Partnership. It is scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}} may cancel the request.<br>
-{{if eq (len .Roster) 1}}At that deadline {{.ProtecteeEmail}}&rsquo;s Partner lock becomes inactive and they will be able to loosen their own Policy.{{else}}{{.ProtecteeEmail}}&rsquo;s Partner lock stays active afterwards, because their other Partners remain.{{end}}<br>
+{{if .EndsPartnerLock}}At that deadline {{.ProtecteeEmail}}&rsquo;s Partner lock becomes inactive and they will be able to loosen their own Policy.{{else}}{{.ProtecteeEmail}}&rsquo;s Partner lock stays active afterwards, because {{.PartnersAfterDeadline}} other Partner(s) outlast that deadline.{{end}}<br>
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End now</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a>
@@ -282,7 +282,7 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 {{if .Request.FinalPartnership}}
 <p class="warn">{{.Request.PartnerEmail}} is your final active Partner. At {{utc .Request.EndsAt}} your Partner lock becomes inactive and you will be able to loosen your own Policy.</p>
 {{else}}
-<p class="warn">You will still have {{.Request.RemainingPartners}} other active Partner(s) after {{utc .Request.EndsAt}}, so your Partner lock remains active.</p>
+<p class="warn">{{.Request.PartnersAfterDeadline}} other active Partner(s) outlast {{utc .Request.EndsAt}}, so your Partner lock remains active afterwards.</p>
 {{end}}
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 <div class="actions">
@@ -332,7 +332,7 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 {{if .Request.FinalPartnership}}
 <p class="warn">{{.Request.PartnerEmail}} is your final active Partner. At {{utc .Request.EndsAt}} your Partner lock becomes inactive and you will be able to loosen your own Policy.</p>
 {{else}}
-<p class="warn">You will still have {{.Request.RemainingPartners}} other active Partner(s) afterwards, so your Partner lock remains active.</p>
+<p class="warn">{{.Request.PartnersAfterDeadline}} other active Partner(s) outlast that deadline, so your Partner lock remains active afterwards.</p>
 {{end}}
 {{end}}
 <p><a class="button-link" href="/">Go to Nightloch</a></p>

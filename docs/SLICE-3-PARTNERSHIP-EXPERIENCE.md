@@ -503,6 +503,36 @@ The Partner lock will remain active after {{final_partner_email}}’s
 Partnership is scheduled to end on {{ends_at_utc}}.
 ```
 
+**Amended 2026-08-24 (implementing #11).** Three points this section left open,
+resolved as follows. Nothing about the approved copy changed.
+
+- **Recipients.** The final-Partnership alert goes to the Protectee and the
+  final Partner — who together are "the Protectee and every current Partner"
+  once the ending that caused the transition has left the Roster. The Partner
+  who just departed is not told: they already received that ending's own alert,
+  and the Roster it describes is no longer theirs to see (S3-16).
+- **The acceptance sentence** is appended to the alert that already states the
+  Partner-lock consequence — the one the Protectee and their prior Partners
+  read — immediately after that sentence, which is the claim it qualifies. The
+  new Partner's own confirmation does not discuss the lock and is unchanged.
+  The condition is the Partner lock having a scheduled ending at all, not one
+  Partnership being the last: whenever every live Partnership is in Cooling-off,
+  the lock is scheduled to deactivate at the latest of those deadlines, and
+  every screen already says so. When several countdowns share that instant —
+  the concurrent horizon a Protectee gets by scheduling every Partnership at
+  once — no one Partner is the final Partner, so the sentence names the horizon
+  rather than a person:
+
+  ```text
+  The Partner lock will remain active after the {{count}} Partnerships
+  scheduled to end on {{ends_at_utc}}.
+  ```
+
+- **Equal deadlines.** When concurrent countdowns share one instant, the ending
+  that commits first does not announce the other as a future final Partnership:
+  the deadline it would name has already arrived, and the same sweep settles it.
+  Each ending still produces its own Activity entry and ending alert.
+
 ## Partnership ended
 
 ### Subjects

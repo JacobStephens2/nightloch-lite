@@ -286,14 +286,11 @@ type RosterEntry struct {
 	// Partner. It is a visible warning only and never changes their powers or
 	// any lifecycle deadline (S3-58).
 	Reachability Reachability
-	// CoolingOffEndsAt is the exact deadline a requested ending will complete
-	// on, and zero when no ending is scheduled. Every entitled Roster viewer
-	// sees the same instant (S3-07).
-	CoolingOffEndsAt time.Time
+	// scheduledEnding is whatever Cooling-off this Partnership carries. Every
+	// entitled Roster viewer sees the same instant and the same consequence
+	// (S3-07).
+	scheduledEnding
 }
-
-// CoolingOffRunning reports whether this Partnership is scheduled to end.
-func (e RosterEntry) CoolingOffRunning() bool { return !e.CoolingOffEndsAt.IsZero() }
 
 // PendingInvitation is one outstanding Partner invitation as the Protectee who
 // sent it and each of their current Partners see it. The Protectee never holds

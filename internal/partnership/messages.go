@@ -313,6 +313,13 @@ type acceptanceMessage struct {
 	PartnerCount int
 	AcceptedAt   time.Time
 	DashboardURL string
+	// LockEndsAt and LockEndingPartners are the instant the Protectee's Partner
+	// lock was scheduled to deactivate before this acceptance, and the
+	// Partnerships ending at it. They are set only when such an instant
+	// existed, because that is the only case where a reader would otherwise
+	// expect a deadline they already know about to end the lock.
+	LockEndsAt         time.Time
+	LockEndingPartners []string
 }
 
 // renderAcceptanceToProtecteeAndPriorPartners produces the approved acceptance
@@ -323,6 +330,12 @@ func renderAcceptanceToProtecteeAndPriorPartners(message acceptanceMessage, reci
 	lock := "The Partner lock remains active."
 	if message.PartnerCount == 1 {
 		lock = "The Partner lock is now active."
+	}
+	// The acceptance overtook the ending that would have deactivated the lock.
+	// Saying so is the whole point: these readers were told that deadline
+	// would end it, and it no longer does (S3-43).
+	if surviving := survivingLockDisclosure(message); surviving != "" {
+		lock += "\n\n" + surviving
 	}
 	text := fmt.Sprintf(`%[1]s accepted %[2]s’s Partner invitation on
 %[3]s.
@@ -356,6 +369,26 @@ address %[9]s.`,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,
 		},
+	}
+}
+
+// survivingLockDisclosure states that the Partner lock outlives the ending it
+// was scheduled to deactivate at. The approved sentence names the one final
+// Partner; when several countdowns share that instant — the concurrent horizon
+// a Protectee gets by scheduling every Partnership at once — naming one of
+// them would be false, so the deadline itself carries the sentence instead.
+func survivingLockDisclosure(message acceptanceMessage) string {
+	switch len(message.LockEndingPartners) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("The Partner lock will remain active after %s’s\n"+
+			"Partnership is scheduled to end on %s.",
+			message.LockEndingPartners[0], utcStamp(message.LockEndsAt))
+	default:
+		return fmt.Sprintf("The Partner lock will remain active after the %d Partnerships\n"+
+			"scheduled to end on %s.",
+			len(message.LockEndingPartners), utcStamp(message.LockEndsAt))
 	}
 }
 
@@ -665,6 +698,63 @@ address %[5]s.`,
 		Envelope: mailmessage.Envelope{
 			To:      recipient,
 			Subject: "[Nightloch] " + message.ProtecteeEmail + " canceled a Partnership ending request",
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// finalCoolingOffMessage carries the ending that changed the Roster, the
+// Partnership it left final, and that Partnership's unchanged deadline.
+type finalCoolingOffMessage struct {
+	ProtecteeEmail    string
+	FinalPartnerEmail string
+	// EndedPartnerEmail is the Partner whose ending caused the transition.
+	// Both recipients were already entitled to that ending's own alert, so
+	// naming them here discloses nothing new.
+	EndedPartnerEmail string
+	RosterChangedAt   time.Time
+	// EndsAt is the deadline the Protectee already requested. The transition
+	// never moves it, and the copy says so explicitly.
+	EndsAt       time.Time
+	DashboardURL string
+}
+
+// renderCoolingOffBecameFinal produces the approved alert for a Cooling-off
+// that has become the final active Partnership. The Protectee and the final
+// Partner read the same body, each in their own envelope (S3-21). It states
+// the unchanged deadline, the lock consequence at it, and that nothing about
+// the Partnership's powers has changed in the meantime.
+func renderCoolingOffBecameFinal(message finalCoolingOffMessage, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s’s Partnership with %[2]s ended on
+%[3]s.
+
+As a result, %[4]s is now the final active Partner
+protecting %[2]s. That Partnership is already in Cooling-off
+and remains scheduled to end on %[5]s. Its deadline has not changed.
+
+If no other Partner accepts an invitation before that deadline, the Partner
+lock will become inactive and %[2]s will be able to loosen
+their own Policy.
+
+Until then, %[4]s retains all Partner powers and the
+Partner lock remains active.
+
+Review the Roster and Activity:
+%[6]s
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[7]s.`,
+		message.EndedPartnerEmail, message.ProtecteeEmail, utcStamp(message.RosterChangedAt),
+		message.FinalPartnerEmail, utcStamp(message.EndsAt), message.DashboardURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessageCoolingOffBecameFinal,
+		Envelope: mailmessage.Envelope{
+			To: recipient,
+			Subject: "[Nightloch] A scheduled Partnership end will deactivate " +
+				message.ProtecteeEmail + "’s Partner lock",
 			Text:    text,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,
