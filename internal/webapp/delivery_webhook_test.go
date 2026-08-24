@@ -305,3 +305,22 @@ func TestDeliveredEventClearsTheReachabilityWarning(t *testing.T) {
 	}
 	mustContain(t, body, "Reachable by email")
 }
+
+// A payload without a usable timestamp must still land. Stamped at the zero
+// time it would sort behind everything already applied and quietly do nothing.
+func TestCallbackWithoutATimestampIsStampedOnArrival(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	protectee, messageID := bouncedInvitation(t, env)
+	at := time.Now().UTC()
+	body := fmt.Sprintf(`{"type":"email.bounced","data":{"email_id":%q,"bounce":{"type":"Permanent"}}}`, messageID)
+
+	recorder := httptest.NewRecorder()
+	env.app.ServeHTTP(recorder, signedCallback(t, env, "evt_undated", body, at))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("undated callback = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if got := deliveryState(t, env, protectee); got != partnership.DeliveryFailed {
+		t.Fatalf("an undated bounce left delivery state at %q", got)
+	}
+}
