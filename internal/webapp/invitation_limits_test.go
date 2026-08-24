@@ -118,6 +118,31 @@ func TestProtecteeResendsOnePendingInvitationPerDay(t *testing.T) {
 		t.Fatalf("a day-old invitation offered no resend:\n%s", body)
 	}
 
+	// The Protectee confirms once before Nightloch emails anybody, and the
+	// confirmation states the consequences a reminder makes easy to assume
+	// away (S3-46).
+	confirm := httptest.NewRequest(http.MethodGet, action, nil)
+	confirm.AddCookie(session)
+	confirm.AddCookie(csrf)
+	confirmRecorder := httptest.NewRecorder()
+	env.app.ServeHTTP(confirmRecorder, confirm)
+	if confirmRecorder.Code != http.StatusOK {
+		t.Fatalf("GET resend confirmation = %d", confirmRecorder.Code)
+	}
+	for _, want := range []string{
+		"Resend this Partner invitation?",
+		"The link in the earlier email stops working",
+		"Your current Partners are not emailed again",
+		"does not give invitee@example.com more time to answer",
+	} {
+		if !strings.Contains(confirmRecorder.Body.String(), want) {
+			t.Fatalf("resend confirmation missing %q:\n%s", want, confirmRecorder.Body.String())
+		}
+	}
+	if queuedJobs(t, env) != 1 {
+		t.Fatal("reading the resend confirmation queued mail")
+	}
+
 	withoutCSRF := httptest.NewRequest(http.MethodPost, action, nil)
 	withoutCSRF.AddCookie(session)
 	withoutCSRFRecorder := httptest.NewRecorder()

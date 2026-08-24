@@ -113,6 +113,7 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("GET /partners/partnerships/{id}/cancel-end", app.confirmCancelEnd)
 	mux.HandleFunc("POST /partners/partnerships/{id}/cancel-end", app.cancelEnd)
 	mux.HandleFunc("GET /partners/ended-partnerships/{id}", app.partnershipReceipt)
+	mux.HandleFunc("GET /partners/sent-invitations/{id}/resend", app.confirmResendInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/resend", app.resendInvitation)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/cancel", app.cancelInvitation)
