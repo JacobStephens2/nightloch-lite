@@ -40,8 +40,13 @@ type invitationMessage struct {
 	InviteeEmail   string
 	LogSharing     bool
 	PartnerCount   int
-	ReviewURL      string
-	ExpiresAt      time.Time
+	// Reciprocal is whether this Protectee already protects the invitee, so
+	// accepting would form Reciprocal Partnerships. The message goes to the
+	// invited address alone, which is the one party already inside that
+	// reverse-direction relationship, so stating it discloses nothing new.
+	Reciprocal bool
+	ReviewURL  string
+	ExpiresAt  time.Time
 }
 
 // renderPartnerInvitation produces the approved Partner invitation from
@@ -70,7 +75,7 @@ If you accept, you can:
 
 %[2]s
 
-%[3]s
+%[3]s%[6]s
 
 You may end the Partnership immediately. If %[1]s requests to
 end it, the Partnership remains active for 72 hours unless they cancel the
@@ -90,6 +95,7 @@ Replies to this email go directly to %[1]s.`,
 		rosterDisclosure(message),
 		message.ReviewURL,
 		utcStamp(message.ExpiresAt),
+		reciprocalDisclosure(message),
 	)
 
 	return preparedMessage{
@@ -122,6 +128,24 @@ Nightloch has told those current Partners that this invitation was sent to
 %[3]s. If you accept, your verified email will remain visible to
 current and future Partners in the Roster and Activity.`,
 		message.ProtecteeEmail, message.PartnerCount, message.InviteeEmail)
+}
+
+// reciprocalDisclosure names the reverse-direction consequence for an invitee
+// the inviting Protectee already protects (S3-04). It is empty in the ordinary
+// direction, where there is no second Partnership to describe and a
+// "Reciprocal Partnerships: No" line would only invite the reader to wonder
+// what merged authority they had just avoided.
+func reciprocalDisclosure(message invitationMessage) string {
+	if !message.Reciprocal {
+		return ""
+	}
+	return fmt.Sprintf(`
+
+%[1]s already protects you as your Partner. Accepting creates a
+second, independent Partnership in the opposite direction, so you would be
+their Partner too. The two Partnerships do not merge: each keeps its own Log
+sharing, its own ending, and its own powers, and ending one does not end the
+other.`, message.ProtecteeEmail)
 }
 
 // invitationAlert is the Action alert every current Partner receives when
@@ -326,12 +350,24 @@ func renderAcceptanceToNewPartner(message acceptanceMessage) preparedMessage {
 	if message.LogSharing {
 		logSharing = "On — you can view their DNS domain log."
 	}
+	// The reverse direction is stated only when it exists. This Partner is
+	// already inside it, so naming it discloses nothing they do not have; what
+	// they need is the assurance that the two do not merge (S3-04).
+	reciprocal := ""
+	if message.Reciprocal {
+		reciprocal = fmt.Sprintf(`
+
+Reciprocal Partnerships: Yes. %[1]s already protects you, and
+you now protect them. These are two independent Partnerships: ending or
+changing one does not change the other, and neither one gives either of you
+authority over the other’s Partnership.`, message.ProtecteeEmail)
+	}
 	text := fmt.Sprintf(`You accepted the Partnership with %[1]s on %[2]s.
 
 You can now view their protection status, change their Policy, approve
 Allowlist entries, revoke Devices, and view their Roster and Activity.
 
-Log sharing: %[3]s
+Log sharing: %[3]s%[7]s
 
 %[1]s has %[4]d other active Partner(s).
 Sign in to see who they are:
@@ -344,7 +380,7 @@ You may end this Partnership immediately from Nightloch.
 
 Replies to this message go to the monitored address %[6]s.`,
 		message.ProtecteeEmail, utcStamp(message.AcceptedAt), logSharing,
-		message.PartnerCount-1, message.DashboardURL, alertsAddress)
+		message.PartnerCount-1, message.DashboardURL, alertsAddress, reciprocal)
 
 	return preparedMessage{
 		Kind: MessagePartnershipAcceptedPartner,

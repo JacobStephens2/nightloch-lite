@@ -51,7 +51,7 @@ CONTEXT.md              # glossary
 | 1 Live origin (OpenTofu + Caddy staging) | **Code in repo**; live demo needs human `tofu apply` |
 | 2 Magic-link sign-in | **Code in repo**; live demo pending origin |
 | 9 Continuous deploy | **Code in repo**; live demo pending origin |
-| 3 Partner graph + Activity | **3A complete; 3B started** — `internal/partnership/` owns the invitation lifecycle (send, review, accept, decline, cancel, expire), Partnerships and every way they end (immediate Partner ending, 72-hour Protectee Cooling-off with cancel, End now, and the durable deadline runner), Activity, authorization, and durable mail jobs. The one-Partner exposure gate is lifted: a Protectee may hold any number of Partners and pending invitations, and every current Partner receives their own invitation, cancellation, and acceptance alert |
+| 3 Partner graph + Activity | **3A complete; 3B started** — `internal/partnership/` owns the invitation lifecycle (send, review, accept, decline, cancel, expire), Partnerships and every way they end (immediate Partner ending, 72-hour Protectee Cooling-off with cancel, End now, and the durable deadline runner), Activity, authorization, and durable mail jobs. The one-Partner exposure gate is lifted: a Protectee may hold any number of Partners and pending invitations, and every current Partner receives their own invitation, cancellation, and acceptance alert. Reciprocal Partnerships and mixed-role Users are supported: opposite-direction Partnerships stay independent in Log sharing, Cooling-off, ending, powers, and receipts, and the dashboard separates **Your protection** from **People you protect** |
 | 4+ WG, AGH, Devices, Policy, … | Not started — follow plan |
 
 ## Commands
