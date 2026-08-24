@@ -489,18 +489,48 @@ func TestConcurrentCoolingOffOutcomesCommitExactlyOnce(t *testing.T) {
 		}
 	}
 
-	// Exactly one outcome landed: either the cancellation, or one ending.
+	// A Partnership ends exactly once, however many outcomes raced for it.
+	// Cancelling is not an alternative to ending: it withdraws the request and
+	// leaves the Partnership live, and the Partner may then still end it on
+	// their own independent authority. So a cancellation and an ending can
+	// both land — what may never happen is two endings, two cancellations, or
+	// an ending whose recorded cause disagrees with the state that held.
 	var ended, endings, cancellations int
+	var reason string
 	if err := db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM partnerships WHERE ended_at IS NOT NULL),
 		(SELECT COUNT(*) FROM activity_entries WHERE action IN (?, ?)),
-		(SELECT COUNT(*) FROM activity_entries WHERE action = ?)`,
+		(SELECT COUNT(*) FROM activity_entries WHERE action = ?),
+		COALESCE((SELECT ended_reason FROM partnerships), '')`,
 		ActionPartnershipEndedByPartner, ActionPartnershipEndedAfterCoolingOff,
-		ActionCoolingOffCanceled).Scan(&ended, &endings, &cancellations); err != nil {
+		ActionCoolingOffCanceled).Scan(&ended, &endings, &cancellations, &reason); err != nil {
 		t.Fatal(err)
 	}
-	if ended != endings || endings+cancellations != 1 {
-		t.Fatalf("ended=%d endings=%d cancellations=%d, want exactly one outcome", ended, endings, cancellations)
+	if ended != endings || endings != 1 || cancellations > 1 {
+		t.Fatalf("ended=%d endings=%d cancellations=%d, want one ending and at most one cancellation",
+			ended, endings, cancellations)
+	}
+	// The receipt and the ending mail both name this cause, so a withdrawn
+	// request must never be reported as one the Partner agreed to end, nor as
+	// one Nightloch completed on a deadline that no longer existed.
+	if cancellations == 1 && reason != EndReasonPartnerEnded {
+		t.Fatalf("the ending after a canceled request recorded %q, want %q",
+			reason, EndReasonPartnerEnded)
+	}
+	if cancellations == 0 && reason != EndReasonPartnerAgreedNow && reason != EndReasonCoolingOffCompleted {
+		t.Fatalf("the ending under a standing request recorded %q", reason)
+	}
+	// Whatever won, it queued exactly one envelope per entitled recipient.
+	var endingJobs, duplicates int
+	if err := db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM mail_delivery_jobs WHERE message_kind = ?),
+		(SELECT COUNT(*) FROM (SELECT recipient_email FROM mail_delivery_jobs
+		   WHERE message_kind = ? GROUP BY recipient_email HAVING COUNT(*) > 1))`,
+		MessagePartnershipEnded, MessagePartnershipEnded).Scan(&endingJobs, &duplicates); err != nil {
+		t.Fatal(err)
+	}
+	if endingJobs != 2 || duplicates != 0 {
+		t.Fatalf("the ending queued %d jobs with %d duplicated recipients", endingJobs, duplicates)
 	}
 }
 
