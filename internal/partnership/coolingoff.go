@@ -270,8 +270,7 @@ type coolingOffMessages struct {
 
 // queueCoolingOffMessages queues one envelope per entitled recipient. The
 // Protectee initiated the change and reads an in-app receipt instead, so they
-// are never on this list (S3-20). Today the 3A exposure gate means the wider
-// Roster is always empty; the query is written for the Roster 3B opens up.
+// are never on this list (S3-20).
 func (s *Service) queueCoolingOffMessages(ctx context.Context, tx *sql.Tx, messages coolingOffMessages) error {
 	roster, err := livePartnerEmails(ctx, tx, messages.partnership.protecteeID)
 	if err != nil {

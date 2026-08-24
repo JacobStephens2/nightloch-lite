@@ -37,7 +37,10 @@ var templateSources = map[string]string{
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
-<h2>Your Partners</h2><ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}.<br>
+<h2>Your Partners</h2>
+<p class="warn"><strong>Every Partner can act independently. Only add someone you trust.</strong> There is no quorum: any one of them can loosen your Policy or revoke your Devices on their own.</p>
+<ul class="rows">{{range .View.Partners}}<li><strong>{{.PartnerEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal: {{if .Reciprocal}}Yes — you are also their Partner{{else}}No{{end}}.<br>
+{{if .Reachability.Warning}}<span class="warn-inline">{{.Reachability.Label}}.</span> This does not change their Partner powers.<br>{{else}}{{.Reachability.Label}} by email.<br>{{end}}
 {{if .CoolingOffRunning}}
 <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partner power. They may also agree to end it sooner.<br>
@@ -46,18 +49,16 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/request-end">Request to end this Partnership</a>
 {{end}}</li>{{end}}</ul>
-<p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this Partnership ends.</p>
 {{else}}
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
-{{if not .View.PendingInvitations}}<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>{{end}}
 {{end}}
+<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
 {{if .View.PendingInvitations}}
 <h2>Invitations you sent</h2>
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
-<p class="lede">Nightloch currently supports one Partner, so <strong>Add a Partner</strong> returns once this invitation is accepted, declined, canceled, or expires.</p>
 <ul class="rows">{{range .View.PendingInvitations}}<li><strong>{{.InviteeEmail}}</strong><br>
 Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
-Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
 <span class="muted">The invited address and the proposed Log sharing cannot be edited. To correct either, cancel this invitation and send a new one.</span>
 <a href="/partners/sent-invitations/{{.ID}}/cancel">Cancel invitation</a></li>{{end}}</ul>
 {{end}}
@@ -71,8 +72,16 @@ Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log 
 {{end}}
 {{if .Protecting}}
 <h2>People you protect</h2>
+<p class="warn"><strong>Every Partner can act independently. Only add someone you trust.</strong> Each Partner below acts on their own; you cannot veto, remove, or escalate over another Partner.</p>
 <ul class="rows">{{range .Protecting}}<li><strong>{{.ProtecteeEmail}}</strong> — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On — you can view their DNS domain log.{{else}}Off — you cannot view their DNS domain log.{{end}}<br>
-Their Roster: {{range $index, $entry := .Roster}}{{if $index}}, {{end}}{{$entry.PartnerEmail}}{{end}}<br>
+<strong>Their Roster</strong>
+<ul class="rows">{{range .Roster}}<li>{{.PartnerEmail}} — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal: {{if .Reciprocal}}Yes{{else}}No{{end}}. {{if .Reachability.Warning}}<span class="warn-inline">{{.Reachability.Label}}.</span>{{else}}{{.Reachability.Label}}.{{end}}{{if .CoolingOffRunning}} <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span>{{end}}</li>{{end}}</ul>
+{{if .PendingInvitations}}
+<strong>Invitations {{.ProtecteeEmail}} sent</strong>
+<ul class="rows">{{range .PendingInvitations}}<li>{{.InviteeEmail}} — Invited by {{.InviterEmail}}. Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
+Log sharing if accepted: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal Partnership if accepted: {{if .Reciprocal}}Yes{{else}}No{{end}}. Delivery: {{.DeliveryState.Label}}.<br>
+<span class="muted">You can observe this invitation, but you cannot accept, cancel, or decline it. Accepting grants full Partner powers immediately.</span></li>{{end}}</ul>
+{{end}}
 {{if .CoolingOffRunning}}
 <span class="warn-inline">{{.ProtecteeEmail}} requested to end this Partnership. It is scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span><br>
 Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}} may cancel the request.<br>

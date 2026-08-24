@@ -27,9 +27,17 @@ func sendInvitation(t *testing.T, env *testEnv, session, csrf *http.Cookie, invi
 	if _, err := env.partnerships.DispatchDue(context.Background(), env.sender, 10); err != nil {
 		t.Fatal(err)
 	}
-	reviewURL = reviewLinkPattern.FindString(env.sender.Envelopes[len(env.sender.Envelopes)-1].Text)
+	// Current Partners receive their own alert about the same invitation, so
+	// the review link is found by recipient rather than by arrival order.
+	for _, envelope := range env.sender.Envelopes {
+		if envelope.To == inviteeEmail {
+			if link := reviewLinkPattern.FindString(envelope.Text); link != "" {
+				reviewURL = link
+			}
+		}
+	}
 	if reviewURL == "" {
-		t.Fatal("no review link in the invitation")
+		t.Fatalf("no invitation with a review link reached %s", inviteeEmail)
 	}
 	if err := env.db.QueryRow(
 		"SELECT id FROM partner_invitations WHERE invitee_email = ? ORDER BY id DESC LIMIT 1",
