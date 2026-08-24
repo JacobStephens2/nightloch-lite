@@ -72,12 +72,20 @@ func (a *App) deliveryWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A payload with no usable timestamp is stamped on arrival rather than at
+	// the zero time, which would sort behind every event already applied and
+	// silently do nothing.
+	occurredAt := callback.CreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = a.now()
+	}
+
 	err = a.partnerships.RecordDeliveryEvent(r.Context(), partnership.DeliveryEvent{
 		ProviderEventID:   eventID,
 		ProviderMessageID: callback.Data.EmailID,
 		Type:              partnership.DeliveryEventType(callback.Type),
 		Permanent:         !strings.EqualFold(callback.Data.Bounce.Type, transientBounce),
-		OccurredAt:        callback.CreatedAt,
+		OccurredAt:        occurredAt,
 	})
 	switch {
 	case errors.Is(err, partnership.ErrUnknownDeliveryEvent):
