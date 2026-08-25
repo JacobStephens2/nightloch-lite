@@ -1,0 +1,23 @@
+# Nightloch tunnel helper grant.
+#
+# Install as /etc/sudoers.d/nightloch-wg, owned by root, mode 0440, and validate
+# before reloading: visudo -cf /etc/sudoers.d/nightloch-wg
+#
+# The grant names exactly one absolute path and carries no wildcard. The helper
+# at that path is itself the allowlist: it accepts three subcommands and
+# validates every argument, so the sudoers file does not need to enumerate
+# argument shapes it cannot express safely.
+#
+# env_reset and secure_path are set for this command alone. The unprivileged
+# application cannot choose which wg or ip the helper finds, and cannot reach
+# the helper's own NIGHTLOCH_WG_INTERFACE and NIGHTLOCH_WG_CONFIG overrides.
+#
+# The helper must be root-owned and not writable by the nightloch user; a
+# writable helper would make this grant a full root shell.
+
+Cmnd_Alias NIGHTLOCH_WG = /usr/local/sbin/nightloch-wg
+
+Defaults!NIGHTLOCH_WG env_reset
+Defaults!NIGHTLOCH_WG secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+
+nightloch ALL=(root) NOPASSWD: NIGHTLOCH_WG
