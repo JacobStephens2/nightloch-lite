@@ -108,6 +108,10 @@ _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity p
 The human-readable history of attributable changes affecting a Protectee, visible to that Protectee and authorized Partners.
 _Avoid_: Audit log (in product UI), event stream, history (alone)
 
+**Deleted User**:
+Who a User whose Nightloch User has been deleted is in every retained product view. Their identity is replaced everywhere a view reads it, while the authorized action and its exact time survive on another Protectee’s Activity and on a former Partner’s receipt. Email Nightloch already delivered still names the address that identified them at the time and cannot be recalled or pseudonymized.
+_Avoid_: Anonymous user, removed user, former user, redacted
+
 **Activity category**:
 The fixed vocabulary Activity is filtered by — **Invitations**, **Partnerships**, **Cooling-off**, and **Delivery** — assigned per stable action rather than per sentence, so wording can change without changing what a filter means.
 _Avoid_: Type, tag, event class, log level

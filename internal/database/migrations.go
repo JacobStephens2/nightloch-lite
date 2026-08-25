@@ -8,6 +8,7 @@ package database
 const (
 	sendLedgerMigration    = 3
 	deliveryEventMigration = 4
+	userDeletionMigration  = 5
 )
 
 var migrations = []string{
@@ -189,4 +190,12 @@ var migrations = []string{
 	);
 	CREATE INDEX mail_delivery_events_job_idx
 		ON mail_delivery_events(job_id, occurred_at);`,
+	// A deleted User's row survives their deletion. Everything that references
+	// it — another Protectee's retained Activity, a former Partner's receipt,
+	// the Partnerships both hang off — would otherwise cascade away, erasing
+	// attributable events owned by people who still exist. What does not
+	// survive is the identity on the row: the verified email is replaced with
+	// a value that is not an address, so it can never be matched by a sign-in
+	// and the real address is free to register again.
+	`ALTER TABLE users ADD COLUMN deleted_at INTEGER;`,
 }
