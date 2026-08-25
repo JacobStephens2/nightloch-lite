@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
+
+	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 )
 
 // perimeter is one Protectee surrounded by every actor the Slice 3 gate names,
@@ -39,6 +42,17 @@ type perimeter struct {
 }
 
 const unauthenticatedViewer int64 = 0
+
+// endNow is the Partner's own immediate ending, failing the test on refusal.
+// It is the counterpart of startEnding, which is the Protectee's exit.
+func endNow(t *testing.T, service *Service, partnershipID, partnerID int64) {
+	t.Helper()
+	if _, err := service.EndPartnership(context.Background(), EndCommand{
+		PartnershipID: partnershipID, PartnerID: partnerID, Confirmation: "END",
+	}); err != nil {
+		t.Fatalf("EndPartnership: %v", err)
+	}
+}
 
 func newPerimeter(t *testing.T, service *Service, db *sql.DB) perimeter {
 	t.Helper()
@@ -159,6 +173,7 @@ func TestRosterAndPendingInvitationsReachOnlyTheProtecteeAndTheirCurrentPartners
 	service, db := newTestService(t)
 	ctx := context.Background()
 	fixture := newPerimeter(t, service, db)
+	unreachable(t, service, "partner-b@example.com")
 
 	// The Protectee's own view is the Roster; every other actor reads this
 	// Protectee only through People you protect, which a live Partnership is
@@ -173,6 +188,12 @@ func TestRosterAndPendingInvitationsReachOnlyTheProtecteeAndTheirCurrentPartners
 				if entry.PartnershipID == fixture.partnershipA || entry.PartnershipID == fixture.partnershipB {
 					t.Fatalf("%s read this Protectee's Roster as their own: %+v", actor.name, entry)
 				}
+			}
+		}
+
+		if actor.id == fixture.protectee {
+			if state := reachabilityOn(view.Partners, "partner-b@example.com"); state != ReachabilityUnreachable {
+				t.Fatalf("the Protectee's own Roster reads partner-b as %q", state)
 			}
 		}
 
@@ -194,10 +215,18 @@ func TestRosterAndPendingInvitationsReachOnlyTheProtecteeAndTheirCurrentPartners
 			continue
 		}
 		// A current Partner reads the whole Roster and the pending
-		// invitations, identically to every other entitled viewer (S3-15).
+		// invitations, identically to every other entitled viewer (S3-15,
+		// S3-45).
 		if len(reached.Roster) != 2 || len(reached.PendingInvitations) != 1 {
 			t.Fatalf("%s read Roster=%d pending=%d, want the full 2 and 1",
 				actor.name, len(reached.Roster), len(reached.PendingInvitations))
+		}
+		// Delivery state has no surface of its own: it rides on the Roster
+		// row, so it reaches exactly the viewers the row reaches and nobody
+		// else (S3-45). Every unentitled actor was already refused the row.
+		if state := reachabilityOn(reached.Roster, "partner-b@example.com"); state != ReachabilityUnreachable {
+			t.Fatalf("%s read partner-b's reachability as %q, want the standing warning",
+				actor.name, state)
 		}
 	}
 }
@@ -358,7 +387,8 @@ func relationshipStates() []relationshipCase {
 			startEnding(t, service, partnership, protectee)
 			return partner, protectee
 		},
-		// A scheduled ending changes nothing until its deadline (S3-19).
+		// A scheduled ending changes nothing until its deadline arrives: the
+		// Partnership stays active and the Partner keeps every power.
 		loosen: true, viewLogs: true,
 	}, {
 		name: "Protectee during Cooling-off",
@@ -372,11 +402,7 @@ func relationshipStates() []relationshipCase {
 		name: "former Partner",
 		build: func(t *testing.T, service *Service, db *sql.DB) (int64, int64) {
 			protectee, partner, partnership := firstPartnership(t, service, db, true)
-			if _, err := service.EndPartnership(context.Background(), EndCommand{
-				PartnershipID: partnership, PartnerID: partner, Confirmation: "END",
-			}); err != nil {
-				t.Fatal(err)
-			}
+			endNow(t, service, partnership, partner)
 			return partner, protectee
 		},
 		loosen: false, viewLogs: false,
@@ -384,11 +410,7 @@ func relationshipStates() []relationshipCase {
 		name: "Protectee whose last Partnership ended",
 		build: func(t *testing.T, service *Service, db *sql.DB) (int64, int64) {
 			protectee, partner, partnership := firstPartnership(t, service, db, true)
-			if _, err := service.EndPartnership(context.Background(), EndCommand{
-				PartnershipID: partnership, PartnerID: partner, Confirmation: "END",
-			}); err != nil {
-				t.Fatal(err)
-			}
+			endNow(t, service, partnership, partner)
 			return protectee, protectee
 		},
 		loosen: true, viewLogs: true,
@@ -446,11 +468,7 @@ func relationshipStates() []relationshipCase {
 		name: "repeated Partnership after the first ended",
 		build: func(t *testing.T, service *Service, db *sql.DB) (int64, int64) {
 			protectee, partner, partnership := firstPartnership(t, service, db, true)
-			if _, err := service.EndPartnership(context.Background(), EndCommand{
-				PartnershipID: partnership, PartnerID: partner, Confirmation: "END",
-			}); err != nil {
-				t.Fatal(err)
-			}
+			endNow(t, service, partnership, partner)
 			// The new Partnership carries its own Log-sharing choice, and the
 			// ended one's must not outlive it.
 			partnerUp(t, service, protectee, partner, "partner@example.com", false)
@@ -499,7 +517,6 @@ func TestAuthorizationPredicatesDenyMalformedAndUnknownIdentities(t *testing.T) 
 		{"both unset", 0, 0},
 		{"unknown actor", missing, protectee},
 		{"unknown Protectee", partner, missing},
-		{"both unknown", missing, missing},
 		// A Protectee identified as themselves is the one case where equal
 		// ids permit, so an unknown id repeated must still be refused.
 		{"unknown identity repeated", missing, missing},
@@ -512,5 +529,43 @@ func TestAuthorizationPredicatesDenyMalformedAndUnknownIdentities(t *testing.T) 
 		if err != nil || viewLogs {
 			t.Fatalf("CanViewLogs(%s) = %v, %v; want a refusal", malformed.name, viewLogs, err)
 		}
+	}
+}
+
+// reachabilityOn is one Partner's reachability as this Roster states it, or a
+// sentinel when the row is absent, so a missing row can never be mistaken for
+// a reassuring one.
+func reachabilityOn(roster []RosterEntry, partnerEmail string) Reachability {
+	for _, entry := range roster {
+		if entry.PartnerEmail == partnerEmail {
+			return entry.Reachability
+		}
+	}
+	return Reachability("absent")
+}
+
+// unreachable makes Nightloch's mail to partnerEmail bounce for good, which is
+// the only way a Roster row acquires a reachability warning to be audited.
+func unreachable(t *testing.T, service *Service, partnerEmail string) {
+	t.Helper()
+	ctx := context.Background()
+	sender := &mailmessage.RecordingSender{}
+	if _, err := service.DispatchDue(ctx, sender, 50); err != nil {
+		t.Fatal(err)
+	}
+	var messageID string
+	if err := service.db.QueryRow(`SELECT COALESCE(provider_message_id, '') FROM mail_delivery_jobs
+		WHERE recipient_email = ? AND provider_message_id IS NOT NULL
+		ORDER BY id DESC LIMIT 1`, partnerEmail).Scan(&messageID); err != nil {
+		t.Fatalf("no message was ever addressed to %s: %v", partnerEmail, err)
+	}
+	if err := service.RecordDeliveryEvent(ctx, DeliveryEvent{
+		ProviderEventID:   "evt-" + partnerEmail,
+		ProviderMessageID: messageID,
+		Type:              EventBounced,
+		Permanent:         true,
+		OccurredAt:        testClock.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

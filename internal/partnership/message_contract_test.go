@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"html"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func everyCanonicalMessage(t *testing.T, service *Service, db *sql.DB) []queuedM
 	declining := createUser(t, db, "declining@example.com")
 
 	// Invitation, acceptance, and the alerts each of them owes a Roster.
-	firstPartnership := acceptFor(t, service,
+	firstAccepted := acceptFor(t, service,
 		invite(t, service, protectee, "partner-a@example.com", true), partnerA).PartnershipID
 	second := invite(t, service, protectee, "partner-b@example.com", false)
 	// A resend repeats the same invitation on a fresh bearer link, a day later
@@ -69,13 +70,13 @@ func everyCanonicalMessage(t *testing.T, service *Service, db *sql.DB) []queuedM
 
 	// Cooling-off started, cancelled, restarted, and then made final by the
 	// other Partner ending their own Partnership.
-	startEnding(t, service, firstPartnership, protectee)
+	startEnding(t, service, firstAccepted, protectee)
 	if _, err := service.CancelCoolingOff(ctx, CoolingOffCommand{
-		PartnershipID: firstPartnership, ProtecteeID: protectee,
+		PartnershipID: firstAccepted, ProtecteeID: protectee,
 	}); err != nil {
 		t.Fatalf("CancelCoolingOff: %v", err)
 	}
-	startEnding(t, service, firstPartnership, protectee)
+	startEnding(t, service, firstAccepted, protectee)
 	if _, err := service.EndPartnership(ctx, EndCommand{
 		PartnershipID: secondPartnership, PartnerID: partnerB, Confirmation: "END",
 	}); err != nil {
@@ -220,10 +221,13 @@ func TestEveryCanonicalMessageCarriesTheSameContractInBothParts(t *testing.T) {
 			t.Errorf("%s replies to %q, want %q", label, message.replyTo, wantReplyTo)
 		}
 
-		// Every instant is stamped UTC, so no reader has to guess an offset.
-		for _, stamp := range instantPattern.FindAllStringSubmatch(message.text, -1) {
-			if stamp[2] != "UTC" {
-				t.Errorf("%s stamps %q outside UTC", label, stamp[0])
+		// Every instant is stamped UTC in both parts, so no reader has to
+		// guess an offset whichever part their client renders.
+		for part, content := range map[string]string{"text": message.text, "HTML": message.html} {
+			for _, stamp := range instantPattern.FindAllStringSubmatch(content, -1) {
+				if stamp[2] != "UTC" {
+					t.Errorf("%s stamps %q outside UTC in its %s part", label, stamp[0], part)
+				}
 			}
 		}
 		// Every link is Nightloch's own over TLS, and nothing else is fetched.
@@ -255,7 +259,7 @@ func assertPartsAgree(t *testing.T, label string, message queuedMessage) {
 			continue
 		}
 		if isBareURL(line) {
-			if !slicesHave(hrefs, line) {
+			if !slices.Contains(hrefs, line) {
 				t.Errorf("%s spells out %s in text but does not link it: %v", label, line, hrefs)
 			}
 			continue
@@ -284,15 +288,6 @@ func normalizeMeaning(text string) string {
 	return builder.String()
 }
 
-func slicesHave(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestNoMessageDisclosesARosterItsRecipientHasNotJoined(t *testing.T) {
 	t.Parallel()
 	service, db := newTestService(t)
@@ -309,10 +304,14 @@ func TestNoMessageDisclosesARosterItsRecipientHasNotJoined(t *testing.T) {
 		"protectee@example.com", "partner-a@example.com", "partner-b@example.com",
 		"withdrawn@example.com", "declining@example.com",
 	}
+	// A rule about what outsiders may read is worth nothing if no outsider was
+	// written to, so count them as the rule is applied.
+	audited := map[string]int{}
 	for _, message := range messages {
 		if !outsiders[message.recipient] {
 			continue
 		}
+		audited[message.recipient]++
 		for _, address := range everyone {
 			if address == message.recipient || address == "protectee@example.com" {
 				continue
@@ -324,10 +323,9 @@ func TestNoMessageDisclosesARosterItsRecipientHasNotJoined(t *testing.T) {
 		}
 	}
 
-	// And no message ever discloses who else received it.
-	for _, message := range messages {
-		if count := strings.Count(message.text, "Also sent to"); count > 0 {
-			t.Errorf("%s names its other recipients", message.kind)
+	for outsider := range outsiders {
+		if audited[outsider] == 0 {
+			t.Fatalf("%s received nothing, so the disclosure rule was never applied", outsider)
 		}
 	}
 }

@@ -511,7 +511,11 @@ func (s *Service) announceFinalCoolingOff(ctx context.Context, tx *sql.Tx,
 		EndsAt:            final.coolingOffEndsAt,
 		DashboardURL:      s.dashboardURL(),
 	}
-	scope := partnershipScope(final.id, at)
+	// Keyed on this transition's own Activity entry for the same reason the
+	// request and cancellation signals are: a Roster change can make the same
+	// Partnership final more than once, and two announcements in one second
+	// must not collide on one key.
+	scope := activityScope(activityID)
 	for sequence, recipient := range []string{final.protecteeEmail, final.partnerEmail} {
 		envelope := renderCoolingOffBecameFinal(message, recipient)
 		envelope.IdempotencyKey = idempotencyKey(envelope.Kind, envelope.To, scope, sequence+1)

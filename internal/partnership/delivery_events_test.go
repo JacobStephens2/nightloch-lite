@@ -559,12 +559,12 @@ func TestUndeterminedBounceIsTerminalRatherThanDelayed(t *testing.T) {
 
 // A provider accepting the next message says nothing about the mailbox that
 // rejected the last one. Only a reported delivery is a recovery, so an
-// unreachable Partner stays unreachable through every send in between (S3-58).
+// unreachable Partner stays unreachable through every send in between (S3-47).
 func TestASentMessageDoesNotClearAnUnreachablePartner(t *testing.T) {
 	t.Parallel()
 	service, db := newTestService(t)
 	ctx := context.Background()
-	protectee, _, _ := firstPartnership(t, service, db, false)
+	protectee, _, partnership := firstPartnership(t, service, db, false)
 
 	sender := &mailmessage.RecordingSender{}
 	if _, err := service.DispatchDue(ctx, sender, 20); err != nil {
@@ -577,7 +577,7 @@ func TestASentMessageDoesNotClearAnUnreachablePartner(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if row := rosterRow(t, service, protectee, partnershipIDOf(t, db)); row.Reachability != ReachabilityUnreachable {
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityUnreachable {
 		t.Fatalf("the bounce did not render: %v", row.Reachability)
 	}
 
@@ -588,7 +588,7 @@ func TestASentMessageDoesNotClearAnUnreachablePartner(t *testing.T) {
 	if _, err := service.DispatchDue(ctx, sender, 20); err != nil {
 		t.Fatal(err)
 	}
-	if row := rosterRow(t, service, protectee, partnershipIDOf(t, db)); row.Reachability != ReachabilityUnreachable {
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityUnreachable {
 		t.Fatalf("provider acceptance quieted a standing warning: %v", row.Reachability)
 	}
 
@@ -600,7 +600,7 @@ func TestASentMessageDoesNotClearAnUnreachablePartner(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if row := rosterRow(t, service, protectee, partnershipIDOf(t, db)); row.Reachability != ReachabilityOK {
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityOK {
 		t.Fatalf("a reported delivery did not clear the warning: %v", row.Reachability)
 	}
 }
@@ -613,15 +613,6 @@ func providerMessageIDFor(t *testing.T, db *sql.DB, recipient string) string {
 	if err := db.QueryRow(`SELECT COALESCE(provider_message_id, '') FROM mail_delivery_jobs
 		WHERE recipient_email = ? AND provider_message_id IS NOT NULL
 		ORDER BY id DESC LIMIT 1`, recipient).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
-func partnershipIDOf(t *testing.T, db *sql.DB) int64 {
-	t.Helper()
-	var id int64
-	if err := db.QueryRow("SELECT id FROM partnerships WHERE ended_at IS NULL").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id

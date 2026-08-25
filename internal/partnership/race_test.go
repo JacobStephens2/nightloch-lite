@@ -251,3 +251,56 @@ func TestARequestCancelledAndMadeAgainInTheSameSecondStillSends(t *testing.T) {
 		t.Fatalf("requests=%d alerts=%d, want the Partner told about each one", requests, alerts)
 	}
 }
+
+func TestSimultaneousAcceptancesOfOneInvitationCreateOnePartnership(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	invitee := createUser(t, db, "invitee@example.com")
+	invitation := invite(t, service, protectee, "invitee@example.com", true)
+
+	// The same invitee answering from two tabs, one on the bearer link and one
+	// from their own Partner invitations list. A Partnership is a durable
+	// relationship, so two of them between the same pair would be two sets of
+	// powers, two receipts, and two Activity windows.
+	accept := func(ref InvitationRef) func() error {
+		return func() error {
+			_, err := service.AcceptInvitation(context.Background(), ref, invitee)
+			return err
+		}
+	}
+	results := raceAll(
+		accept(ByToken(invitation.RawToken)),
+		accept(ByToken(invitation.RawToken)),
+		accept(ByID(invitation.ID)),
+		accept(ByID(invitation.ID)),
+	)
+	committed := 0
+	for index, err := range results {
+		switch {
+		case err == nil:
+			committed++
+		case errors.Is(err, ErrInvitationUnavailable):
+		default:
+			t.Fatalf("attempt %d = %v", index, err)
+		}
+	}
+	if committed != 1 {
+		t.Fatalf("%d acceptances committed, want 1", committed)
+	}
+
+	partnerships := countRows(t, db, "SELECT COUNT(*) FROM partnerships")
+	accepted := countRows(t, db,
+		"SELECT COUNT(*) FROM activity_entries WHERE invitation_id = ? AND action = ?",
+		invitation.ID, ActionInvitationAccepted)
+	// One Partnership, one entry, and one envelope each for the Protectee and
+	// the new Partner — the losers queued nothing.
+	newPartner := countRows(t, db,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE message_kind = ?", MessagePartnershipAcceptedPartner)
+	existing := countRows(t, db,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE message_kind = ?", MessagePartnershipAcceptedExisting)
+	if partnerships != 1 || accepted != 1 || newPartner != 1 || existing != 1 {
+		t.Fatalf("partnerships=%d entries=%d new-Partner=%d existing=%d, want 1 each",
+			partnerships, accepted, newPartner, existing)
+	}
+}
