@@ -41,9 +41,16 @@ var (
 	// ErrDeviceExists rejects minting a Device that already exists rather than
 	// allocating it a second tunnel address.
 	ErrDeviceExists = errors.New("that Protectee already has a Device with that name")
+	// ErrUnknownDevice rejects removing something that is not one of that
+	// Protectee's live Devices, which is also what a Device already removed
+	// is. Removal is therefore refused rather than repeated: the tunnel is
+	// never invoked a second time for a peer already withdrawn, and the
+	// quarantine clock never restarts.
+	ErrUnknownDevice = errors.New("that Protectee has no Device with that name")
 	// ErrAddressPoolExhausted rejects minting when the tunnel network holds no
-	// free address.
-	ErrAddressPoolExhausted = errors.New("no tunnel address is free; remove a Device before minting another")
+	// address a Device could be given. It is wrapped with the remedy the pool
+	// actually has, which is not the same remedy in both cases.
+	ErrAddressPoolExhausted = errors.New("no tunnel address is free")
 )
 
 // Device is one enrolled tunnel identity. There is no private key field: the
@@ -56,6 +63,10 @@ type Device struct {
 	PublicKey   string
 	Address     netip.Addr
 	CreatedAt   time.Time
+	// RemovedAt is the instant the record ended, and the zero time for a live
+	// Device. The whole quarantine window on the Device's address is derived
+	// from it; nothing else about the window is recorded.
+	RemovedAt time.Time
 }
 
 // KeyPair is one Device's identity at the moment it is minted. The private
@@ -141,14 +152,15 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 
 	var existing int
 	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM devices WHERE protectee_id = ? AND name = ?", protecteeID, name).Scan(&existing); err != nil {
+		"SELECT COUNT(*) FROM devices WHERE protectee_id = ? AND name = ? AND removed_at IS NULL",
+		protecteeID, name).Scan(&existing); err != nil {
 		return MintedDevice{}, fmt.Errorf("read existing Devices: %w", err)
 	}
 	if existing > 0 {
 		return MintedDevice{}, fmt.Errorf("%w: %s", ErrDeviceExists, name)
 	}
 
-	address, err := allocateAddress(ctx, tx)
+	address, err := allocateAddress(ctx, tx, s.now().UTC())
 	if err != nil {
 		return MintedDevice{}, err
 	}
@@ -194,6 +206,124 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 	}, nil
 }
 
+// RemoveCommand is one Operator's request to remove a Protectee's Device. A
+// Device is named the way an Operator knows it, which is the way it was minted.
+type RemoveCommand struct {
+	ProtecteeEmail string
+	DeviceName     string
+}
+
+// RemovedDevice is what removal reports: the record as it ended, and the
+// instant its tunnel address rejoins the pool. ReusableAt is derived from the
+// removal instant and the retention in force, so it is an answer rather than a
+// promise stored somewhere that could later disagree with the retention.
+type RemovedDevice struct {
+	Device     Device
+	ReusableAt time.Time
+}
+
+// RemoveDevice ends a Device's record and withdraws its tunnel peer, in the
+// mirror of the ordering minting uses: the record is ended inside a
+// transaction that commits only once the tunnel has dropped the peer, and a
+// commit that fails re-admits it. A Device an Operator can still see is
+// therefore still a Device the tunnel carries.
+//
+// The address is not returned to the pool. It stays out of allocation for
+// QuarantineWindow past this instant, which is strictly longer than the
+// query-log retention it has to outlast, so a later occupant of the address
+// can never resolve to this Protectee's retained queries.
+//
+// Only a live Device can be removed. Removing one that has already been
+// removed is refused rather than repeated, which is what keeps a second
+// attempt from invoking the helper again or restarting the quarantine clock.
+//
+// As with minting, the tunnel is invoked while the transaction is open, so the
+// single SQLite write lock is held for the length of a sudo subprocess. That
+// is the same trade minting makes and for the same reason: every other
+// ordering admits a window where the record and the tunnel disagree, and here
+// that window is a Device still carried by the tunnel that no Operator can
+// see to remove.
+func (s *Service) RemoveDevice(ctx context.Context, command RemoveCommand) (RemovedDevice, error) {
+	email, err := emailaddr.Normalize(command.ProtecteeEmail)
+	if err != nil {
+		return RemovedDevice{}, err
+	}
+	name, err := normalizeDeviceName(command.DeviceName)
+	if err != nil {
+		return RemovedDevice{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("begin removal: %w", err)
+	}
+	defer tx.Rollback()
+
+	var protecteeID int64
+	err = tx.QueryRowContext(ctx,
+		"SELECT id FROM users WHERE email = ? AND deleted_at IS NULL", email).Scan(&protecteeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownProtectee, email)
+	}
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("read Protectee: %w", err)
+	}
+
+	device := Device{ProtecteeID: protecteeID, Name: name}
+	var address string
+	var createdAt int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, name, public_key, address, created_at FROM devices
+		 WHERE protectee_id = ? AND name = ? AND removed_at IS NULL`,
+		protecteeID, name).Scan(&device.ID, &device.Name, &device.PublicKey, &address, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownDevice, name)
+	}
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("read Device: %w", err)
+	}
+	device.Address, err = netip.ParseAddr(address)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("read Device address %q: %w", address, err)
+	}
+	device.CreatedAt = time.Unix(createdAt, 0).UTC()
+
+	removedAt := s.now().UTC().Truncate(time.Second)
+	// Guarded on removed_at again rather than on the id alone, so a concurrent
+	// removal that won cannot be overwritten with a later instant and a longer
+	// window than the one already in force.
+	result, err := tx.ExecContext(ctx,
+		"UPDATE devices SET removed_at = ? WHERE id = ? AND removed_at IS NULL", removedAt.Unix(), device.ID)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("end the Device record: %w", err)
+	}
+	ended, err := result.RowsAffected()
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("end the Device record: %w", err)
+	}
+	if ended != 1 {
+		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownDevice, name)
+	}
+	device.RemovedAt = removedAt
+
+	if err := s.tunnel.RemovePeer(ctx, device.PublicKey); err != nil {
+		return RemovedDevice{}, fmt.Errorf("withdraw the Device from the tunnel: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		// The record is live again but the peer is gone, which would read as a
+		// Device nobody can reach and nobody can remove. Re-admit it, and say
+		// so plainly if that fails too.
+		if addErr := s.tunnel.AddPeer(ctx, device.PublicKey, device.Address); addErr != nil {
+			return RemovedDevice{}, errors.Join(
+				fmt.Errorf("commit the removal: %w", err),
+				fmt.Errorf("re-admit the Device whose removal did not commit: %w", addErr))
+		}
+		return RemovedDevice{}, fmt.Errorf("commit the removal: %w", err)
+	}
+
+	return RemovedDevice{Device: device, ReusableAt: ReusableAt(removedAt)}, nil
+}
+
 // DeviceStatus is a recorded Device together with what the tunnel says about
 // it. OnTunnel false is a real disagreement between the record and the
 // interface, never a tunnel this module could not read: Devices returns an
@@ -212,31 +342,42 @@ type DeviceStatus struct {
 // sides is what makes "neither is reachable without the other" a claim an
 // Operator can check rather than one this package merely asserts.
 type Membership struct {
-	// Devices is every recorded Device, ordered by tunnel address.
+	// Devices is every live Device, ordered by tunnel address. A removed
+	// Device is not one: its record ended, and the row that survives it exists
+	// only to hold its address out of the pool.
 	Devices []DeviceStatus
-	// UnaccountedPeers is tunnel membership belonging to no Device record.
+	// UnaccountedPeers is tunnel membership belonging to no live Device.
 	UnaccountedPeers []Peer
+	// Quarantined is every address a removed Device still holds, ordered by
+	// address, with the instant each rejoins the pool. Without it an Operator
+	// refused a mint for exhaustion could not tell whether the remedy is to
+	// remove a Device or to wait.
+	Quarantined []QuarantinedAddress
 }
 
-// Devices reports every recorded Device with its tunnel membership, together
-// with any tunnel membership no record explains. A tunnel that cannot be
-// reached — an uninstalled helper, a refused invocation, an interface that is
-// down — is an error, because reporting it as an empty membership would read
+// Devices reports every live Device with its tunnel membership, any tunnel
+// membership no record explains, and every address a removed Device still
+// holds in quarantine. A tunnel that cannot be reached — an uninstalled
+// helper, a refused invocation, an interface that is down — is an error, because reporting it as an empty membership would read
 // as "no Device is connected" when the truth is that nothing is known.
 func (s *Service) Devices(ctx context.Context) (Membership, error) {
+	now := s.now().UTC()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices`)
+		`SELECT id, protectee_id, name, public_key, address, created_at, removed_at FROM devices`)
 	if err != nil {
 		return Membership{}, fmt.Errorf("read Devices: %w", err)
 	}
 	defer rows.Close()
 
 	var devices []Device
+	var quarantined []QuarantinedAddress
 	for rows.Next() {
 		var device Device
 		var address string
 		var createdAt int64
-		if err := rows.Scan(&device.ID, &device.ProtecteeID, &device.Name, &device.PublicKey, &address, &createdAt); err != nil {
+		var removedAt sql.NullInt64
+		if err := rows.Scan(&device.ID, &device.ProtecteeID, &device.Name,
+			&device.PublicKey, &address, &createdAt, &removedAt); err != nil {
 			return Membership{}, fmt.Errorf("read Devices: %w", err)
 		}
 		device.Address, err = netip.ParseAddr(address)
@@ -244,7 +385,17 @@ func (s *Service) Devices(ctx context.Context) (Membership, error) {
 			return Membership{}, fmt.Errorf("read Device address %q: %w", address, err)
 		}
 		device.CreatedAt = time.Unix(createdAt, 0).UTC()
-		devices = append(devices, device)
+		if !removedAt.Valid {
+			devices = append(devices, device)
+			continue
+		}
+		device.RemovedAt = time.Unix(removedAt.Int64, 0).UTC()
+		// An expired quarantine is not reported: its address is already back
+		// in the pool, and showing a wait that has ended would read as one
+		// that has not.
+		if hold, held := quarantineOf(device.Address, device.RemovedAt, now); held {
+			quarantined = append(quarantined, hold)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return Membership{}, fmt.Errorf("read Devices: %w", err)
@@ -252,6 +403,7 @@ func (s *Service) Devices(ctx context.Context) (Membership, error) {
 	// Ordered here rather than in SQL: the column is text, so the database
 	// would sort 10.66.0.10 before 10.66.0.2.
 	slices.SortFunc(devices, func(a, b Device) int { return a.Address.Compare(b.Address) })
+	slices.SortFunc(quarantined, func(a, b QuarantinedAddress) int { return a.Address.Compare(b.Address) })
 
 	peers, err := s.tunnel.Peers(ctx)
 	if err != nil {
@@ -262,7 +414,7 @@ func (s *Service) Devices(ctx context.Context) (Membership, error) {
 		onTunnel[peer.PublicKey] = peer
 	}
 
-	membership := Membership{Devices: make([]DeviceStatus, 0, len(devices))}
+	membership := Membership{Devices: make([]DeviceStatus, 0, len(devices)), Quarantined: quarantined}
 	recorded := make(map[string]bool, len(devices))
 	for _, device := range devices {
 		recorded[device.PublicKey] = true
@@ -279,35 +431,89 @@ func (s *Service) Devices(ctx context.Context) (Membership, error) {
 	return membership, nil
 }
 
-// allocateAddress returns the lowest tunnel address no Device holds. The host
-// address is outside the loop's bounds rather than filtered out of it, so no
-// change to allocation can ever hand a Device the tunnel's own address.
-func allocateAddress(ctx context.Context, tx *sql.Tx) (netip.Addr, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT address FROM devices")
+// allocateAddress returns the lowest tunnel address that is neither held by a
+// live Device nor still in quarantine from a removed one. The host address is
+// outside the loop's bounds rather than filtered out of it, so no change to
+// allocation can ever hand a Device the tunnel's own address.
+//
+// Quarantine is read here rather than swept elsewhere: an address leaves
+// quarantine because its window has passed, not because a job ran, so there is
+// no sweep to fall behind and no state to be stale.
+func allocateAddress(ctx context.Context, tx *sql.Tx, now time.Time) (netip.Addr, error) {
+	inUse, quarantined, err := unavailableAddresses(ctx, tx, now)
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("read allocated addresses: %w", err)
+		return netip.Addr{}, err
 	}
-	defer rows.Close()
-
-	taken := map[string]bool{}
-	for rows.Next() {
-		var address string
-		if err := rows.Scan(&address); err != nil {
-			return netip.Addr{}, fmt.Errorf("read allocated addresses: %w", err)
-		}
-		taken[address] = true
-	}
-	if err := rows.Err(); err != nil {
-		return netip.Addr{}, fmt.Errorf("read allocated addresses: %w", err)
-	}
-
 	for octet := firstDeviceOctet; octet <= lastDeviceOctet; octet++ {
 		candidate := deviceAddress(octet)
-		if !taken[candidate.String()] {
+		_, held := quarantined[candidate.String()]
+		if !inUse[candidate.String()] && !held {
 			return candidate, nil
 		}
 	}
-	return netip.Addr{}, ErrAddressPoolExhausted
+	return netip.Addr{}, exhaustionError(quarantined)
+}
+
+// unavailableAddresses splits every address a Device could not be given into
+// the two reasons it could not: in use by a live Device, or still quarantined
+// from a removed one. They are kept apart rather than merged into one set
+// because the two have different remedies, and an Operator refused a mint has
+// to be told which one they are looking at.
+func unavailableAddresses(ctx context.Context, tx *sql.Tx, now time.Time) (map[string]bool, map[string]QuarantinedAddress, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT address, removed_at FROM devices")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read allocated addresses: %w", err)
+	}
+	defer rows.Close()
+
+	inUse := map[string]bool{}
+	quarantined := map[string]QuarantinedAddress{}
+	for rows.Next() {
+		var address string
+		var removedAt sql.NullInt64
+		if err := rows.Scan(&address, &removedAt); err != nil {
+			return nil, nil, fmt.Errorf("read allocated addresses: %w", err)
+		}
+		parsed, err := netip.ParseAddr(address)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read allocated address %q: %w", address, err)
+		}
+		if !removedAt.Valid {
+			inUse[address] = true
+			continue
+		}
+		hold, held := quarantineOf(parsed, time.Unix(removedAt.Int64, 0).UTC(), now)
+		if !held {
+			continue
+		}
+		// One address accumulates ended records over a deployment's life. The
+		// longest hold is the one that governs it.
+		if existing, seen := quarantined[address]; !seen || hold.ReusableAt.After(existing.ReusableAt) {
+			quarantined[address] = hold
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read allocated addresses: %w", err)
+	}
+	return inUse, quarantined, nil
+}
+
+// exhaustionError names the exhaustion and the remedy the pool actually has.
+// A pool full of live Devices is fixed by removing one; a pool whose free
+// addresses are all in quarantine is fixed by waiting, and telling an Operator
+// to remove a Device there would only make the wait longer.
+func exhaustionError(quarantined map[string]QuarantinedAddress) error {
+	earliest := time.Time{}
+	for _, hold := range quarantined {
+		if earliest.IsZero() || hold.ReusableAt.Before(earliest) {
+			earliest = hold.ReusableAt
+		}
+	}
+	if earliest.IsZero() {
+		return fmt.Errorf("%w: remove a Device before minting another", ErrAddressPoolExhausted)
+	}
+	return fmt.Errorf("%w: every address a Device is not using is in quarantine; the first leaves it at %s, or remove a live Device to free one now",
+		ErrAddressPoolExhausted, earliest.Format(time.RFC3339))
 }
 
 // deviceAddress is the assignable tunnel address with the given final octet.
