@@ -648,3 +648,118 @@ func TestEveryEntryAttributesItsActorTargetAndTime(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryActionHasACategoryAndEveryCategoryHasActions holds the claim the
+// filter vocabulary makes: no action falls outside the categories a viewer is
+// offered, so a category filter can never silently drop an entry, and no
+// category is offered that matches nothing.
+func TestEveryActionHasACategoryAndEveryCategoryHasActions(t *testing.T) {
+	t.Parallel()
+	offered := map[ActivityCategory]bool{}
+	for _, category := range ActivityCategories() {
+		if len(actionsIn(category)) == 0 {
+			t.Fatalf("%s is offered as a filter and covers no action", category)
+		}
+		offered[category] = true
+	}
+	for action, category := range categoryOfAction {
+		if !offered[category] {
+			t.Fatalf("%s is in category %q, which no viewer can filter by", action, category)
+		}
+	}
+	// Every action this package appends is in the table, so a new one cannot
+	// join Activity without being placed.
+	for _, action := range []string{
+		ActionInvitationSent, ActionInvitationResent, ActionInvitationAccepted,
+		ActionInvitationDeclined, ActionInvitationCanceled, ActionInvitationExpired,
+		ActionPartnershipEndedByPartner, ActionCoolingOffStarted, ActionCoolingOffCanceled,
+		ActionPartnershipEndedAfterCoolingOff, ActionCoolingOffBecameFinal,
+		ActionDeliveryDelayed, ActionDeliveryFailed, ActionDeliveryRecovered,
+	} {
+		if categoryOfAction[action] == AnyCategory {
+			t.Fatalf("%s has no category", action)
+		}
+	}
+}
+
+// TestAnExactlyFullPageSaysThereIsNothingAfterIt is the boundary the
+// look-ahead row exists for: a chronology that is an exact multiple of the
+// page size must end, not offer an empty page after itself.
+func TestAnExactlyFullPageSaysThereIsNothingAfterIt(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	fillActivity(t, service, protectee, ActivityPageSize)
+
+	view := mustPage(t, service, protectee, protectee, ActivityQuery{})
+	if len(view.Entries) != ActivityPageSize || view.More() {
+		t.Fatalf("an exactly full page held %d entries and offered another: %v",
+			len(view.Entries), view.NextPage)
+	}
+
+	// One more entry, and the same page now leads somewhere that holds it.
+	fillActivity(t, service, protectee, 1)
+	full := mustPage(t, service, protectee, protectee, ActivityQuery{})
+	if !full.More() {
+		t.Fatal("a chronology one longer than a page offered no second page")
+	}
+	second := mustPage(t, service, protectee, protectee, ActivityQuery{After: full.NextPage})
+	if len(second.Entries) != 1 || second.More() {
+		t.Fatalf("the second page held %d entries and offered another: %v",
+			len(second.Entries), second.NextPage)
+	}
+}
+
+// TestTheRequestPagePutsTheRequestAtTheTopOfItsPage proves the link a
+// completed timer offers lands on the request rather than on whichever page
+// the reader happened to be on: 72 hours of chronology separate them.
+func TestTheRequestPagePutsTheRequestAtTheTopOfItsPage(t *testing.T) {
+	t.Parallel()
+	service, db, advance := newTimedService(t)
+	ctx := context.Background()
+	protectee := createUser(t, db, "protectee@example.com")
+	partner := createUser(t, db, "partner@example.com")
+	partnerUp(t, service, protectee, partner, "partner@example.com", false)
+	advance(time.Hour)
+	request, err := service.StartCoolingOff(ctx, CoolingOffCommand{
+		PartnershipID: partnershipOf(t, service, protectee, partner), ProtecteeID: protectee,
+	})
+	if err != nil {
+		t.Fatalf("StartCoolingOff: %v", err)
+	}
+	// More than a page of chronology between the request and its deadline, so
+	// the two entries cannot share a page.
+	for index := range ActivityPageSize + 5 {
+		record(t, service, activityEntry{
+			ProtecteeID: protectee,
+			Action:      ActionInvitationSent,
+			ActorEmail:  "protectee@example.com",
+			TargetEmail: "invitee@example.com",
+			OccurredAt:  request.RequestedAt.Add(time.Duration(index+1) * time.Minute),
+		})
+	}
+	at(service, request.EndsAt)
+	if _, err := service.CompleteDueCoolingOff(ctx, 10); err != nil {
+		t.Fatalf("CompleteDueCoolingOff: %v", err)
+	}
+
+	first := mustPage(t, service, protectee, protectee, ActivityQuery{})
+	completion := first.Entries[0]
+	if completion.Action != ActionPartnershipEndedAfterCoolingOff {
+		t.Fatalf("the newest entry is %s", completion.Action)
+	}
+	for _, entry := range first.Entries {
+		if entry.ID == completion.RequestEntryID() {
+			t.Fatal("the request shares a page with the completion, so this proves nothing")
+		}
+	}
+
+	landing := mustPage(t, service, protectee, protectee, ActivityQuery{After: completion.RequestPage()})
+	if len(landing.Entries) == 0 || landing.Entries[0].ID != completion.RequestEntryID() {
+		t.Fatalf("the request page opens on %+v, want entry %d",
+			landing.Entries, completion.RequestEntryID())
+	}
+	if landing.Entries[0].Action != ActionCoolingOffStarted {
+		t.Fatalf("the request page opens on %s", landing.Entries[0].Action)
+	}
+}

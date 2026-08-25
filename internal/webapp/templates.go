@@ -3,7 +3,10 @@ package webapp
 import (
 	"fmt"
 	"html/template"
+	"net/url"
 	"time"
+
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
 var templateSources = map[string]string{
@@ -305,14 +308,14 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 </form>
 {{if .View.Entries}}
 <ul class="rows">{{range .View.Entries}}<li id="entry-{{.ID}}">
-{{if .Delivery}}<span class="muted">Delivery</span> {{end}}{{.Summary}}<br>
+{{if .Delivery}}<span class="muted">{{.Category.Label}}</span> {{end}}{{.Summary}}<br>
 <span class="muted">{{utc .OccurredAt}}{{if .Effective}} — takes effect {{utc .EffectiveAt}}{{end}}</span>
-{{if .RequestEntryID}}<br><a href="#entry-{{.RequestEntryID}}">See the request Nightloch carried out</a>{{end}}
+{{with requestLink $.BasePath .}}<br><a href="{{.}}">See the request Nightloch carried out</a>{{end}}
 {{if .Details}}<details><summary>Details</summary><ul class="rows">
 {{range .Details}}<li>{{.Label}}: {{if .Instant}}{{utc .At}}{{else}}{{.Text}}{{end}}</li>{{end}}
 </ul></details>{{end}}
 </li>{{end}}</ul>
-{{if .OlderURL}}<p class="actions"><a class="button-link" href="{{.OlderURL}}">Older entries</a></p>{{end}}
+{{if or .OlderURL .NewestURL}}<p class="actions">{{if .OlderURL}}<a class="button-link" href="{{.OlderURL}}">Older entries</a>{{end}}{{if .NewestURL}}<a class="quiet-link" href="{{.NewestURL}}">Back to the newest entries</a>{{end}}</p>{{end}}
 {{else if .View.Query.Filtered}}
 <p class="lede">Nothing in this chronology matches those filters. <a href="{{.ClearURL}}">Clear them</a> to read it in full.</p>
 {{else}}
@@ -428,7 +431,24 @@ var templateFuncs = template.FuncMap{
 		return template.HTML(fmt.Sprintf(`<time datetime="%s" data-utc>%s UTC</time>`,
 			utc.Format(time.RFC3339), utc.Format("2006-01-02 15:04")))
 	},
-	"countdown": countdown,
+	"countdown":   countdown,
+	"requestLink": requestLink,
+}
+
+// requestLink is the address of the Protectee request a completed timer
+// carried out (S3-18). It carries the page position holding that request and
+// no filter at all, because the request and the completion are 72 hours and
+// two categories apart: a bare fragment would only resolve on the rare page
+// that happened to hold both. It is empty when this entry completes no
+// request, and when the request lies before this reader's window, where the
+// module has already withheld the reference.
+func requestLink(basePath string, entry partnership.ActivityEntry) string {
+	position := entry.RequestPage()
+	if position.Zero() {
+		return ""
+	}
+	return fmt.Sprintf("%s?after=%s#entry-%d",
+		basePath, url.QueryEscape(position.String()), entry.RequestEntryID())
 }
 
 // countdown states how long is left before a Cooling-off deadline. The exact

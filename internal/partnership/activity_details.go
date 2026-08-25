@@ -149,9 +149,24 @@ func (e ActivityEntry) Details() []ActivityDetail {
 		add("Partner lock", lockState(details.PartnerLockActive))
 	case ActionDeliveryDelayed, ActionDeliveryFailed, ActionDeliveryRecovered:
 		add("Message", messageKindLabels[details.MessageKind])
-		add("Reachability", Reachability(details.Reachability).Label())
+		add("Reachability", reachabilityRow(details.Reachability))
 	}
 	return rows
+}
+
+// reachabilityRow renders a stored reachability, and renders nothing for one
+// this module does not know. Reachability.Label falls back to "Reachable",
+// which is the right answer for a Roster row derived from live jobs and the
+// wrong one here: an entry that recorded a failure must never be the thing
+// that claims a Partner is reachable.
+func reachabilityRow(stored string) string {
+	reachability := Reachability(stored)
+	switch reachability {
+	case ReachabilityOK, ReachabilityDelayed, ReachabilityUnreachable:
+		return reachability.Label()
+	default:
+		return ""
+	}
 }
 
 // outsideWindow reports whether an instant predates this reader's window. The
@@ -179,6 +194,21 @@ func (e ActivityEntry) RequestEntryID() int64 {
 // is absent from an entry that never carried it. They are the pointer halves
 // of the message renderers' own onOff and yesNo, so a detail row and an alert
 // cannot describe the same flag with different words.
+// RequestPage is the page position that holds the request entry, so a reader
+// can be taken to it rather than to wherever the chronology happens to be
+// open. A Cooling-off deadline is 72 hours after the request that set it, so
+// the two entries are routinely pages apart and often in different categories;
+// a link that only worked when they shared a page would usually do nothing.
+// The position is one past the request's own id, which puts that entry at the
+// top of the page it opens.
+func (e ActivityEntry) RequestPage() ActivityCursor {
+	id := e.RequestEntryID()
+	if id == 0 || e.details.RequestedAt == 0 {
+		return ActivityCursor{}
+	}
+	return ActivityCursor{OccurredAt: time.Unix(e.details.RequestedAt, 0).UTC(), ID: id + 1}
+}
+
 func onOffOf(value *bool) string {
 	if value == nil {
 		return ""
