@@ -9,6 +9,7 @@ const (
 	sendLedgerMigration    = 3
 	deliveryEventMigration = 4
 	userDeletionMigration  = 5
+	deviceMigration        = 6
 )
 
 var migrations = []string{
@@ -198,4 +199,36 @@ var migrations = []string{
 	// a value that is not an address, so it can never be matched by a sign-in
 	// and the real address is free to register again.
 	`ALTER TABLE users ADD COLUMN deleted_at INTEGER;`,
+	// Devices are the enforcement plane's half of a Protectee: an enrolled
+	// tunnel identity holding a public key and exactly one address out of
+	// 10.66.0.0/24. The server never holds the matching private key, so there
+	// is no column for one and none can be added by accident.
+	//
+	// The CHECK constraints restate what the nightloch-wg helper already
+	// refuses. That is deliberate duplication of a boundary, not of a rule: a
+	// row the helper would refuse must never be recordable, because this table
+	// is the source of truth for which addresses are allocated, and a row the
+	// tunnel cannot carry would take an address out of the pool for good.
+	`CREATE TABLE devices (
+		id INTEGER PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+		-- A WireGuard public key: 43 base64 characters and a single pad.
+		public_key TEXT NOT NULL CHECK(length(public_key) = 44 AND public_key LIKE '%='),
+		-- One bare address, no prefix length, inside the tunnel network and
+		-- assignable to a Device: the host at .1 is permanently reserved.
+		address TEXT NOT NULL CHECK(
+			address LIKE '10.66.0.%'
+			AND address NOT LIKE '%/%'
+			AND CAST(substr(address, 9) AS INTEGER) BETWEEN 2 AND 254
+			AND substr(address, 9) = CAST(CAST(substr(address, 9) AS INTEGER) AS TEXT)
+		),
+		created_at INTEGER NOT NULL
+	);
+	-- Uniqueness is carried by indexes rather than table constraints so the
+	-- removal slice can narrow them to live Devices without rebuilding the
+	-- table.
+	CREATE UNIQUE INDEX devices_address_idx ON devices(address);
+	CREATE UNIQUE INDEX devices_public_key_idx ON devices(public_key);
+	CREATE UNIQUE INDEX devices_name_idx ON devices(user_id, name);`,
 }

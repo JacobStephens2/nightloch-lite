@@ -8,10 +8,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const defaultResendFrom = "Nightloch <alerts@nightloch.app>"
+
+// defaultTunnelPort is the port Slice 1's cloud firewall already opens.
+const defaultTunnelPort = 51820
 
 // Config contains the configuration required by the HTTP control plane.
 type Config struct {
@@ -39,6 +43,54 @@ func DatabasePath() (string, error) {
 		return "", errors.New("DATABASE_PATH must be a durable file")
 	}
 	return filepath.Clean(path), nil
+}
+
+// Tunnel is the deployment's server side of the WireGuard tunnel, which is
+// what a minted Device's configuration has to name. It is loaded on its own
+// rather than as part of Config so that the Operator commands that need it do
+// not also demand the mail and challenge secrets that only serving needs.
+//
+// What a value has to look like to be renderable is the enforcement module's
+// rule, not this package's: this only reports what is absent or unreadable.
+type Tunnel struct {
+	// EndpointHost is the published tunnel hostname. A hostname rather than an
+	// address is what lets the droplet be rebuilt without invalidating a
+	// Device that is already installed on a phone.
+	EndpointHost string
+	// EndpointPort is the tunnel's listening port.
+	EndpointPort int
+	// PublicKey is the tunnel interface's own public key. The matching private
+	// key stays on the host, inside the interface configuration only root
+	// reads, and never reaches this process.
+	PublicKey string
+}
+
+// LoadTunnel reads the tunnel environment for the Operator commands that mint
+// and list Devices.
+func LoadTunnel() (Tunnel, error) {
+	tunnel := Tunnel{
+		EndpointHost: strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_HOST")),
+		EndpointPort: defaultTunnelPort,
+		PublicKey:    strings.TrimSpace(os.Getenv("TUNNEL_PUBLIC_KEY")),
+	}
+	if port := strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_PORT")); port != "" {
+		parsed, err := strconv.Atoi(port)
+		if err != nil {
+			return Tunnel{}, fmt.Errorf("TUNNEL_ENDPOINT_PORT must be a port number: %w", err)
+		}
+		tunnel.EndpointPort = parsed
+	}
+	var missing []string
+	if tunnel.EndpointHost == "" {
+		missing = append(missing, "TUNNEL_ENDPOINT_HOST")
+	}
+	if tunnel.PublicKey == "" {
+		missing = append(missing, "TUNNEL_PUBLIC_KEY")
+	}
+	if len(missing) > 0 {
+		return Tunnel{}, fmt.Errorf("required environment variables are missing: %s", strings.Join(missing, ", "))
+	}
+	return tunnel, nil
 }
 
 // Load reads and validates the environment for the serve command.
