@@ -56,13 +56,11 @@ const dumpOutput = interfacePrivateKey + "\tcHVibGljcHVibGljcHVibGljcHVibGljcHVi
 	validKey + "\t(none)\t203.0.113.7:51820\t10.66.0.2/32\t1755000000\t1024\t2048\t25\n" +
 	otherValidKey + "\t(none)\t(none)\t10.66.0.9/32\t0\t0\t0\t25\n"
 
-// The exit codes the helper documents, and the contract the Go caller in the
-// enforcement module will read: a refusal is an Operator mistake, an
+// The exit codes the helper documents are the same constants the Go adapter
+// in tunnel.go maps: a refusal is a request the allowlist does not accept, an
 // unavailable tunnel is a plane that is down, and they must not be confused.
-const (
-	exitRefused     = 2
-	exitUnavailable = 3
-)
+// Asserting the script against the caller's own constants is how the two are
+// kept from drifting apart.
 
 type helperRun struct {
 	exitCode int

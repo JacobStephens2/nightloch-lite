@@ -8,10 +8,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
 )
 
 const defaultResendFrom = "Nightloch <alerts@nightloch.app>"
+
+// defaultTunnelPort is the port Slice 1's cloud firewall already opens.
+const defaultTunnelPort = 51820
 
 // Config contains the configuration required by the HTTP control plane.
 type Config struct {
@@ -39,6 +45,46 @@ func DatabasePath() (string, error) {
 		return "", errors.New("DATABASE_PATH must be a durable file")
 	}
 	return filepath.Clean(path), nil
+}
+
+// LoadTunnel reads the tunnel environment for the Operator commands that mint
+// and list Devices. It is loaded on its own rather than as part of Config so
+// that those commands do not also demand the mail and challenge secrets only
+// serving needs.
+//
+// It reports what is absent or unreadable and nothing more: what a value has
+// to look like to render a working Device configuration is the enforcement
+// module's own rule, checked when that module is built.
+//
+// TUNNEL_ENDPOINT_HOST is the published tunnel hostname. A hostname rather
+// than an address is what lets the droplet be rebuilt without invalidating a
+// Device already installed on a phone. TUNNEL_PUBLIC_KEY is the wg0
+// interface's own public key; its private half stays on the host, inside the
+// interface configuration only root reads, and never reaches this process.
+func LoadTunnel() (enforcement.TunnelSettings, error) {
+	tunnel := enforcement.TunnelSettings{
+		EndpointHost: strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_HOST")),
+		EndpointPort: defaultTunnelPort,
+		PublicKey:    strings.TrimSpace(os.Getenv("TUNNEL_PUBLIC_KEY")),
+	}
+	if port := strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_PORT")); port != "" {
+		parsed, err := strconv.Atoi(port)
+		if err != nil {
+			return enforcement.TunnelSettings{}, fmt.Errorf("TUNNEL_ENDPOINT_PORT must be a port number: %w", err)
+		}
+		tunnel.EndpointPort = parsed
+	}
+	var missing []string
+	if tunnel.EndpointHost == "" {
+		missing = append(missing, "TUNNEL_ENDPOINT_HOST")
+	}
+	if tunnel.PublicKey == "" {
+		missing = append(missing, "TUNNEL_PUBLIC_KEY")
+	}
+	if len(missing) > 0 {
+		return enforcement.TunnelSettings{}, fmt.Errorf("required environment variables are missing: %s", strings.Join(missing, ", "))
+	}
+	return tunnel, nil
 }
 
 // Load reads and validates the environment for the serve command.
