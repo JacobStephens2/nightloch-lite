@@ -38,7 +38,7 @@ type testEnv struct {
 	partnerships *partnership.Service
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newTestEnv(t *testing.T, healthChecks ...HealthCheck) *testEnv {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "nightloch.db"))
 	if err != nil {
@@ -55,7 +55,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	app, err := New(Options{
 		Auth: authService, DB: db, Partnerships: partnerships,
 		TurnstileSite: "site-key", DeliveryWebhookSecret: testWebhookSecret, Version: "test",
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HealthChecks: healthChecks,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
