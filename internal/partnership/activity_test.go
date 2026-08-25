@@ -14,7 +14,7 @@ import (
 // these, because a window is about which events reach a reader at all.
 func visibleActions(t *testing.T, service *Service, protecteeID, viewerID int64) []string {
 	t.Helper()
-	view, err := service.Activity(context.Background(), protecteeID, viewerID)
+	view, err := service.Activity(context.Background(), protecteeID, viewerID, ActivityQuery{})
 	if err != nil {
 		t.Fatalf("Activity: %v", err)
 	}
@@ -30,7 +30,7 @@ func visibleActions(t *testing.T, service *Service, protecteeID, viewerID int64)
 // anything that distinguishes "not yours" from "no such User".
 func refuseActivity(t *testing.T, service *Service, protecteeID, viewerID int64) {
 	t.Helper()
-	view, err := service.Activity(context.Background(), protecteeID, viewerID)
+	view, err := service.Activity(context.Background(), protecteeID, viewerID, ActivityQuery{})
 	if !errors.Is(err, ErrActivityUnavailable) {
 		t.Fatalf("Activity = %+v, %v; want ErrActivityUnavailable", view, err)
 	}
@@ -88,7 +88,7 @@ func TestProtecteeReadsTheirCompleteActivityNewestFirst(t *testing.T) {
 		t.Fatalf("Protectee Activity = %v, want %v", got, want)
 	}
 
-	view, err := service.Activity(context.Background(), protectee, protectee)
+	view, err := service.Activity(context.Background(), protectee, protectee, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestPartnerActivityBeginsAtTheExactAcceptanceInstant(t *testing.T) {
 		t.Fatalf("Partner Activity = %v, want %v", got, want)
 	}
 
-	view, err := service.Activity(ctx, protectee, partner)
+	view, err := service.Activity(ctx, protectee, partner, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestLaterPartnershipOpensANewWindowAndHidesTheGap(t *testing.T) {
 	if got := visibleActions(t, service, protectee, partner); !sameActions(got, want) {
 		t.Fatalf("returning Partner Activity = %v, want %v", got, want)
 	}
-	view, err := service.Activity(ctx, protectee, partner)
+	view, err := service.Activity(ctx, protectee, partner, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,11 +268,11 @@ func TestReciprocalPartnershipsKeepSeparateWindowsInEachDirection(t *testing.T) 
 	if got := visibleActions(t, service, bo, ada); !sameActions(got, []string{ActionInvitationAccepted}) {
 		t.Fatalf("Ada reading Bo's Activity = %v", got)
 	}
-	adaOnBo, err := service.Activity(ctx, bo, ada)
+	adaOnBo, err := service.Activity(ctx, bo, ada, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	boOnAda, err := service.Activity(ctx, ada, bo)
+	boOnAda, err := service.Activity(ctx, ada, bo, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestPartnerAlertsLinkToTheProtecteeChronology(t *testing.T) {
 	}
 
 	// The recipient of both alerts is authorized to open that link.
-	if _, err := service.Activity(ctx, protectee, partner); err != nil {
+	if _, err := service.Activity(ctx, protectee, partner, ActivityQuery{}); err != nil {
 		t.Fatalf("the alerted Partner cannot read the Activity they were sent to: %v", err)
 	}
 }
@@ -392,7 +392,7 @@ func TestActivityWindowHoldsThroughCoolingOffAndClosesOnCompletion(t *testing.T)
 
 	// The Protectee still reads the completion, attributed to Nightloch and
 	// naming the deadline they themselves requested.
-	view, err := service.Activity(ctx, protectee, protectee)
+	view, err := service.Activity(ctx, protectee, protectee, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestEndNowReadsApartFromAnIndependentEnding(t *testing.T) {
 		t.Fatalf("End now: %v", err)
 	}
 
-	view, err := service.Activity(ctx, protectee, protectee)
+	view, err := service.Activity(ctx, protectee, protectee, ActivityQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
