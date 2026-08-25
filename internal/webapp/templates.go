@@ -285,7 +285,7 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <title>Activity · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p>
-{{if .Own}}<h1>Your Activity</h1>
+{{if not .View.Windowed}}<h1>Your Activity</h1>
 <p class="lede">Every change to your protection, newest first. Nightloch keeps your complete history for as long as your Nightloch User exists.</p>
 {{else}}<h1>Activity for {{.View.ProtecteeEmail}}</h1>
 <p class="lede">Every change to {{.View.ProtecteeEmail}}&rsquo;s protection since you became their Partner, newest first. Your view begins at {{utc .View.VisibleFrom}}, when you accepted; nothing from before then is shown, and this view ends if the Partnership ends.</p>
