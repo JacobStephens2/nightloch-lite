@@ -172,7 +172,9 @@ type activityWindow struct {
 // acceptance NULL, and an unknown Protectee matches no row at all. A later
 // Partnership between the same two Users is a different row with a later
 // acceptance, so re-partnering opens a new window rather than reviving the old
-// one, and the gap between them is never inside either.
+// one, and the gap between them is never inside either. A deleted Protectee
+// matches no row at all: their chronology is removed with them, and a former
+// Partner reads the receipt they keep and nothing else (S3-71).
 const activityWindowQuery = `
 	SELECT protectee.email, live.accepted_at,
 	       (SELECT MIN(entry.id) FROM activity_entries entry
@@ -180,7 +182,7 @@ const activityWindowQuery = `
 	FROM users protectee
 	LEFT JOIN partnerships live ON live.protectee_id = protectee.id
 	     AND live.partner_id = ?2 AND live.ended_at IS NULL
-	WHERE protectee.id = ?1`
+	WHERE protectee.id = ?1 AND protectee.deleted_at IS NULL`
 
 func (s *Service) activityWindow(ctx context.Context, protecteeID, viewerID int64) (activityWindow, error) {
 	if protecteeID <= 0 || viewerID <= 0 {
@@ -411,6 +413,9 @@ func (e ActivityEntry) Summary() string {
 	case ActionPartnershipEndedAfterCoolingOff:
 		return fmt.Sprintf("Nightloch ended %s’s Partnership with %s on the Cooling-off deadline %s requested.",
 			e.ProtecteeEmail, e.TargetEmail, e.ProtecteeEmail)
+	case ActionPartnershipEndedByUserDeletion:
+		return fmt.Sprintf("%s deleted their Nightloch User, so Nightloch ended their Partnership with %s immediately. %[1]s holds no Partner power over %[2]s.",
+			e.TargetEmail, e.ProtecteeEmail)
 	case ActionCoolingOffBecameFinal:
 		return fmt.Sprintf("Nightloch recorded that the Partnership with %s is now the last one holding %s’s Partner lock active.",
 			e.TargetEmail, e.ProtecteeEmail)

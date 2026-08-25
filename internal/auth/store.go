@@ -189,7 +189,10 @@ func (s *Store) Authenticate(ctx context.Context, sessionHash [32]byte, now time
 		FROM sessions JOIN users ON users.id = sessions.user_id
 		WHERE sessions.token_hash = ?
 		  AND sessions.revoked_at IS NULL
-		  AND sessions.expires_at > ?`, sessionHash[:], now.Unix()).Scan(&user.ID, &user.Email)
+		  AND sessions.expires_at > ?
+		  -- A deleted User has no session. Their row survives so the Activity
+		  -- and receipts that reference it do, not so it can still sign in.
+		  AND users.deleted_at IS NULL`, sessionHash[:], now.Unix()).Scan(&user.ID, &user.Email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrInvalidLink
 	}
