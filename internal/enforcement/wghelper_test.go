@@ -1,18 +1,17 @@
 package enforcement
 
-// The privileged root helper is the sudo boundary: the application process runs
-// unprivileged, and `nightloch-wg` is the one thing it may invoke as root. Its
-// security value is that its surface is small and closed, so these tests run the
-// real script — not a Go reimplementation of it — with stub `wg` and `ip`
-// executables earlier on PATH. Every allowlisted subcommand is asserted on the
-// exact arguments it passes through, and every refusal is asserted to invoke
-// nothing at all.
+// These tests run the real `nightloch-wg` script — not a Go reimplementation of
+// it — with stub `wg` and `ip` executables earlier on PATH. Every allowlisted
+// subcommand is asserted on the exact arguments it passes through, and every
+// refusal is asserted to invoke nothing at all. What the helper is and what
+// bounds it: docs/adr/0004-reach-the-tunnel-through-a-root-helper.md
 
 import (
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,29 +35,19 @@ const otherValidKey = "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY="
 // would otherwise be handed the server's own identity.
 const interfacePrivateKey = "c2VydmVycHJpdmF0ZWtleXNlcnZlcnByaXZhdGVrZXk="
 
-// existingConfig is a wg-quick configuration with directives `wg showconf` does
-// not report, so persistence can be asserted to keep them.
+// existingConfig is a wg-quick configuration carrying an existing peer, and a
+// comment whose prose contains the literal "[Peer]" so section detection can be
+// asserted not to mistake a directive's text for a section header.
 const existingConfig = `[Interface]
 Address = 10.66.0.1/24
 ListenPort = 51820
 PrivateKey = ` + interfacePrivateKey + `
 PostUp = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+# Peers below this line are managed by nightloch-wg; the [Peer] word here is prose.
 
 [Peer]
 PublicKey = ` + otherValidKey + `
 AllowedIPs = 10.66.0.9/32
-`
-
-// showconfOutput is what the stub `wg showconf` reports as live peer state. It
-// deliberately disagrees with existingConfig: persistence must take peers from
-// the running interface, so the file and the interface cannot drift apart.
-const showconfOutput = `[Interface]
-ListenPort = 51820
-PrivateKey = ` + interfacePrivateKey + `
-
-[Peer]
-PublicKey = ` + validKey + `
-AllowedIPs = 10.66.0.2/32
 `
 
 // dumpOutput is what the stub `wg show <iface> dump` reports: an interface line
@@ -66,6 +55,14 @@ AllowedIPs = 10.66.0.2/32
 const dumpOutput = interfacePrivateKey + "\tcHVibGljcHVibGljcHVibGljcHVibGljcHVibGljcHU=\t51820\toff\n" +
 	validKey + "\t(none)\t203.0.113.7:51820\t10.66.0.2/32\t1755000000\t1024\t2048\t25\n" +
 	otherValidKey + "\t(none)\t(none)\t10.66.0.9/32\t0\t0\t0\t25\n"
+
+// The exit codes the helper documents, and the contract the Go caller in the
+// enforcement module will read: a refusal is an Operator mistake, an
+// unavailable tunnel is a plane that is down, and they must not be confused.
+const (
+	exitRefused     = 2
+	exitUnavailable = 3
+)
 
 type helperRun struct {
 	exitCode int
@@ -110,7 +107,6 @@ if [ -n "${NIGHTLOCH_STUB_WG_FAILS:-}" ]; then
 	exit 1
 fi
 case "$1 $3" in
-	"showconf ") printf '%s' "$NIGHTLOCH_STUB_SHOWCONF" ;;
 	"show dump") printf '%s' "$NIGHTLOCH_STUB_DUMP" ;;
 esac
 exit 0
@@ -183,7 +179,6 @@ func (e *helperEnv) runWith(extraEnv []string, args ...string) helperRun {
 		"NIGHTLOCH_WG_INTERFACE=wg0",
 		"NIGHTLOCH_WG_CONFIG=" + e.configPath,
 		"NIGHTLOCH_STUB_LOG=" + e.logPath,
-		"NIGHTLOCH_STUB_SHOWCONF=" + showconfOutput,
 		"NIGHTLOCH_STUB_DUMP=" + dumpOutput,
 	}, extraEnv...)
 	var stdout, stderr strings.Builder
@@ -203,17 +198,12 @@ func (e *helperEnv) runWith(extraEnv []string, args ...string) helperRun {
 
 func assertInvocations(t *testing.T, got, want []string) {
 	t.Helper()
-	if len(got) != len(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("invocations = %q, want %q", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("invocations = %q, want %q", got, want)
-		}
 	}
 }
 
-func TestAddPeerSetsTheRunningInterfaceAndPersistsToTheConfiguration(t *testing.T) {
+func TestAddPeerPersistsToTheConfigurationAndSetsTheRunningInterface(t *testing.T) {
 	env := newHelperEnv(t)
 
 	run := env.run("add-peer", validKey, "10.66.0.2")
@@ -224,35 +214,48 @@ func TestAddPeerSetsTheRunningInterfaceAndPersistsToTheConfiguration(t *testing.
 	assertInvocations(t, env.invocations(), []string{
 		"ip link show dev wg0",
 		"wg set wg0 peer " + validKey + " allowed-ips 10.66.0.2/32",
-		"wg showconf wg0",
 	})
 
-	config := env.config()
-	// The interface section keeps the directives wg-quick needs and `wg
-	// showconf` does not report, so a reboot brings the same interface up.
-	for _, directive := range []string{
-		"Address = 10.66.0.1/24",
-		"ListenPort = 51820",
-		"PostUp = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE",
-	} {
-		if !strings.Contains(config, directive) {
-			t.Fatalf("configuration lost %q:\n%s", directive, config)
-		}
-	}
-	// Peers come from the running interface, so the file cannot claim a
-	// membership the interface does not have.
-	if !strings.Contains(config, "PublicKey = "+validKey) {
-		t.Fatalf("configuration missing the added peer:\n%s", config)
-	}
-	if strings.Contains(config, otherValidKey) {
-		t.Fatalf("configuration kept a peer the interface no longer has:\n%s", config)
-	}
-	if strings.Count(config, "[Interface]") != 1 {
-		t.Fatalf("configuration has a duplicated interface section:\n%s", config)
+	// Every line the helper does not manage survives verbatim, including the
+	// directives wg-quick needs to bring the same interface back up and the
+	// comment whose prose contains "[Peer]".
+	want := existingConfig + `
+[Peer]
+PublicKey = ` + validKey + `
+AllowedIPs = 10.66.0.2/32
+`
+	if got := env.config(); got != want {
+		t.Fatalf("configuration =\n%s\nwant\n%s", got, want)
 	}
 }
 
-func TestRemovePeerClearsTheRunningInterfaceAndPersistsToTheConfiguration(t *testing.T) {
+func TestAddingAPeerTwiceRewritesItsOneBlock(t *testing.T) {
+	env := newHelperEnv(t)
+
+	if run := env.run("add-peer", validKey, "10.66.0.2"); run.exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+	if run := env.run("add-peer", validKey, "10.66.0.3"); run.exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+
+	config := env.config()
+	if count := strings.Count(config, "PublicKey = "+validKey); count != 1 {
+		t.Fatalf("peer appears %d times, want 1:\n%s", count, config)
+	}
+	if strings.Contains(config, "10.66.0.2/32") {
+		t.Fatalf("the superseded address survived:\n%s", config)
+	}
+	if !strings.Contains(config, "10.66.0.3/32") {
+		t.Fatalf("the new address is missing:\n%s", config)
+	}
+	// The Device that was already there is not collateral.
+	if !strings.Contains(config, "PublicKey = "+otherValidKey) {
+		t.Fatalf("an unrelated peer was lost:\n%s", config)
+	}
+}
+
+func TestRemovePeerPersistsToTheConfigurationAndClearsTheRunningInterface(t *testing.T) {
 	env := newHelperEnv(t)
 
 	run := env.run("remove-peer", otherValidKey)
@@ -263,10 +266,13 @@ func TestRemovePeerClearsTheRunningInterfaceAndPersistsToTheConfiguration(t *tes
 	assertInvocations(t, env.invocations(), []string{
 		"ip link show dev wg0",
 		"wg set wg0 peer " + otherValidKey + " remove",
-		"wg showconf wg0",
 	})
-	if strings.Contains(env.config(), otherValidKey) {
-		t.Fatalf("removed peer survived in the configuration:\n%s", env.config())
+	config := env.config()
+	if strings.Contains(config, otherValidKey) || strings.Contains(config, "10.66.0.9/32") {
+		t.Fatalf("removed peer survived in the configuration:\n%s", config)
+	}
+	if !strings.Contains(config, "Address = 10.66.0.1/24") {
+		t.Fatalf("removal took the interface section with it:\n%s", config)
 	}
 }
 
@@ -365,8 +371,8 @@ func TestEveryRefusalExitsNonZeroAndInvokesNothing(t *testing.T) {
 
 			run := env.run(args...)
 
-			if run.exitCode == 0 {
-				t.Fatalf("helper accepted %q; stdout = %q", args, run.stdout)
+			if run.exitCode != exitRefused {
+				t.Fatalf("exit = %d for %q, want %d; stdout = %q", run.exitCode, args, exitRefused, run.stdout)
 			}
 			if got := env.invocations(); len(got) != 0 {
 				t.Fatalf("refusal invoked %q", got)
@@ -392,8 +398,8 @@ func TestAMissingConfigurationRefusesBeforeTouchingTheInterface(t *testing.T) {
 
 	run := env.run("add-peer", validKey, "10.66.0.2")
 
-	if run.exitCode == 0 {
-		t.Fatal("helper mutated the interface with nowhere to persist the change")
+	if run.exitCode != exitUnavailable {
+		t.Fatalf("exit = %d, want %d (the tunnel is not in a state to change)", run.exitCode, exitUnavailable)
 	}
 	if got := env.invocations(); len(got) != 0 {
 		t.Fatalf("missing configuration invoked %q", got)
@@ -405,8 +411,8 @@ func TestAnAbsentInterfaceRefusesBeforeInvokingWireGuard(t *testing.T) {
 
 	run := env.runWith([]string{"NIGHTLOCH_STUB_IP_FAILS=1"}, "add-peer", validKey, "10.66.0.2")
 
-	if run.exitCode == 0 {
-		t.Fatal("helper reported success against an interface that is not there")
+	if run.exitCode != exitUnavailable {
+		t.Fatalf("exit = %d, want %d (the tunnel is not in a state to change)", run.exitCode, exitUnavailable)
 	}
 	assertInvocations(t, env.invocations(), []string{"ip link show dev wg0"})
 	if env.config() != existingConfig {
@@ -414,16 +420,56 @@ func TestAnAbsentInterfaceRefusesBeforeInvokingWireGuard(t *testing.T) {
 	}
 }
 
-func TestAFailedWireGuardCommandSurfacesAndLeavesTheConfigurationAlone(t *testing.T) {
+func TestAConfigurationWithNoInterfaceSectionIsRefusedRatherThanRewritten(t *testing.T) {
+	// Replacing a configuration this helper did not understand would leave the
+	// tunnel unable to come back up at all, which is worse than dropping a
+	// Device.
+	for name, body := range map[string]string{
+		"empty":            "",
+		"peers only":       "[Peer]\nPublicKey = " + otherValidKey + "\n",
+		"unrecognised":     "nonsense\n",
+		"commented header": "# [Interface]\nAddress = 10.66.0.1/24\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newHelperEnv(t)
+			env.writeConfig(body)
+
+			run := env.run("add-peer", validKey, "10.66.0.2")
+
+			if run.exitCode != exitUnavailable {
+				t.Fatalf("exit = %d, want %d; stderr = %q", run.exitCode, exitUnavailable, run.stderr)
+			}
+			if got := env.invocations(); len(got) != 0 {
+				t.Fatalf("an unrecognised configuration still invoked %q", got)
+			}
+			if env.config() != body {
+				t.Fatalf("an unrecognised configuration was rewritten:\n%s", env.config())
+			}
+		})
+	}
+}
+
+func TestARefusedInterfaceChangeLeavesNoRenderedConfigurationBehind(t *testing.T) {
 	env := newHelperEnv(t)
 
 	run := env.runWith([]string{"NIGHTLOCH_STUB_WG_FAILS=1"}, "add-peer", validKey, "10.66.0.2")
 
 	if run.exitCode == 0 {
-		t.Fatal("helper reported success after wg failed")
+		t.Fatal("helper reported success after wg refused the change")
 	}
 	if env.config() != existingConfig {
-		t.Fatalf("failed wg command still rewrote the configuration:\n%s", env.config())
+		t.Fatalf("a refused wg set still rewrote the configuration:\n%s", env.config())
+	}
+	// The rendered file is a scratch file, not a second configuration for an
+	// operator to find and wonder about.
+	entries, err := os.ReadDir(filepath.Dir(env.configPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), "nightloch-pending") {
+			t.Fatalf("a rendered configuration was left behind: %s", entry.Name())
+		}
 	}
 }
 
