@@ -3,6 +3,7 @@ package webapp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -38,14 +39,6 @@ func newPerimeterFixture(t *testing.T) perimeterFixture {
 	_, fixture.invitationID = sendInvitation(t, env,
 		fixture.protectee, fixture.protecteeCSRF, "invitee@example.com", false)
 	fixture.invitee, fixture.inviteeCSRF = signIn(t, env, "invitee@example.com")
-	if recorder := post(t, env,
-		fmt.Sprintf("https://lite.nightloch.app/partners/partnerships/%d/request-end", fixture.partnershipID),
-		url.Values{"csrf_token": []string{fixture.protecteeCSRF.Value}},
-		fixture.protectee, fixture.protecteeCSRF); recorder.Code != http.StatusOK {
-		// The Protectee acted, so they read their in-app receipt rather than
-		// a redirect: they are never mailed about their own request (S3-20).
-		t.Fatalf("request-end = %d", recorder.Code)
-	}
 	return fixture
 }
 
@@ -64,6 +57,11 @@ type mutatingRoute struct {
 	// is empty only where the form itself is the confirmation screen.
 	confirm string
 	form    url.Values
+	// setUp puts the Partnership into the state this control acts from. A
+	// confirmation screen states the consequence of an action that is
+	// currently available, so a control whose precondition is missing would be
+	// audited against the screen that correctly refuses to offer it.
+	setUp func(t *testing.T)
 }
 
 func (f perimeterFixture) mutatingRoutes() []mutatingRoute {
@@ -116,7 +114,21 @@ func (f perimeterFixture) mutatingRoutes() []mutatingRoute {
 			name: "cancel a requested ending", path: base + "/partners/partnerships/" + partnership + "/cancel-end",
 			confirm: base + "/partners/partnerships/" + partnership + "/cancel-end",
 			session: f.protectee, token: f.protecteeCSRF,
+			setUp: f.scheduleAnEnding,
 		},
+	}
+}
+
+// scheduleAnEnding starts the Protectee's own Cooling-off, which is what the
+// cancelling control needs to have something to cancel. The Protectee acted,
+// so they read an in-app receipt rather than a redirect (S3-20).
+func (f perimeterFixture) scheduleAnEnding(t *testing.T) {
+	t.Helper()
+	request := fmt.Sprintf("https://lite.nightloch.app/partners/partnerships/%d/request-end", f.partnershipID)
+	if recorder := post(t, f.env, request,
+		url.Values{"csrf_token": []string{f.protecteeCSRF.Value}},
+		f.protectee, f.protecteeCSRF); recorder.Code != http.StatusOK {
+		t.Fatalf("request-end = %d", recorder.Code)
 	}
 }
 
@@ -126,6 +138,11 @@ func (f perimeterFixture) mutatingRoutes() []mutatingRoute {
 func stateFingerprint(t *testing.T, env *testEnv) string {
 	t.Helper()
 	var invitations, partnerships, live, activity, jobs, sessions, scheduled int
+	// tokens folds every stored bearer-token hash together, and sends is the
+	// rolling quota. A GET that quietly rotated a link or consumed a resend
+	// would change neither a row count nor a state, so both are fingerprinted
+	// rather than inferred.
+	var tokens, sends string
 	if err := env.db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM partner_invitations),
 		(SELECT COUNT(*) FROM partnerships),
@@ -133,8 +150,11 @@ func stateFingerprint(t *testing.T, env *testEnv) string {
 		(SELECT COUNT(*) FROM activity_entries),
 		(SELECT COUNT(*) FROM mail_delivery_jobs),
 		(SELECT COUNT(*) FROM sessions),
-		(SELECT COUNT(*) FROM partnerships WHERE cooling_off_ends_at IS NOT NULL)`).
-		Scan(&invitations, &partnerships, &live, &activity, &jobs, &sessions, &scheduled); err != nil {
+		(SELECT COUNT(*) FROM partnerships WHERE cooling_off_ends_at IS NOT NULL),
+		(SELECT COALESCE(GROUP_CONCAT(HEX(token_hash)), '') FROM partner_invitations),
+		(SELECT COALESCE(GROUP_CONCAT(invitation_id || '@' || sent_at), '') FROM partner_invitation_sends)`).
+		Scan(&invitations, &partnerships, &live, &activity, &jobs, &sessions, &scheduled,
+			&tokens, &sends); err != nil {
 		t.Fatal(err)
 	}
 	states, err := env.db.Query("SELECT id, state FROM partner_invitations ORDER BY id")
@@ -154,8 +174,9 @@ func stateFingerprint(t *testing.T, env *testEnv) string {
 	if err := states.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return fmt.Sprintf("invitations=%d partnerships=%d live=%d activity=%d jobs=%d sessions=%d scheduled=%d %s",
-		invitations, partnerships, live, activity, jobs, sessions, scheduled, strings.Join(detail, ","))
+	return fmt.Sprintf("invitations=%d partnerships=%d live=%d activity=%d jobs=%d sessions=%d scheduled=%d %s tokens=%s sends=%s",
+		invitations, partnerships, live, activity, jobs, sessions, scheduled,
+		strings.Join(detail, ","), tokens, sends)
 }
 
 func TestEveryStateChangingActionIsAuthenticatedCSRFProtectedAndConfirmed(t *testing.T) {
@@ -164,6 +185,9 @@ func TestEveryStateChangingActionIsAuthenticatedCSRFProtectedAndConfirmed(t *tes
 	env := fixture.env
 
 	for _, route := range fixture.mutatingRoutes() {
+		if route.setUp != nil {
+			route.setUp(t)
+		}
 		before := stateFingerprint(t, env)
 
 		// A GET of the POST path is never the action. Either the route
@@ -209,9 +233,18 @@ func TestEveryStateChangingActionIsAuthenticatedCSRFProtectedAndConfirmed(t *tes
 		if route.confirm == "" {
 			continue
 		}
-		if recorder := get(t, env, route.confirm, route.session, route.token); recorder.Code != http.StatusOK &&
-			recorder.Code != http.StatusSeeOther {
-			t.Errorf("consequence screen for %s = %d", route.name, recorder.Code)
+		screen := get(t, env, route.confirm, route.session, route.token)
+		if screen.Code != http.StatusOK {
+			t.Errorf("consequence screen for %s = %d", route.name, screen.Code)
+			continue
+		}
+		// The screen is only a confirmation if it submits to the very action
+		// it describes, so the actor reads the consequence on the page that
+		// performs it rather than being redirected somewhere vaguer.
+		action := strings.TrimPrefix(route.path, "https://lite.nightloch.app")
+		if !strings.Contains(screen.Body.String(), `action="`+action+`"`) {
+			t.Errorf("the consequence screen for %s does not submit to %s:\n%s",
+				route.name, action, screen.Body.String())
 		}
 	}
 }
@@ -219,9 +252,9 @@ func TestEveryStateChangingActionIsAuthenticatedCSRFProtectedAndConfirmed(t *tes
 const forgedToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY"
 
 func withToken(form url.Values, token string) url.Values {
-	filled := url.Values{}
-	for key, values := range form {
-		filled[key] = values
+	filled := maps.Clone(form)
+	if filled == nil {
+		filled = url.Values{}
 	}
 	filled.Set("csrf_token", token)
 	return filled
@@ -240,7 +273,7 @@ func TestNoLinkNightlochEmailsChangesAnythingWhenFollowed(t *testing.T) {
 	// Every link Nightloch has ever put in an email, including the bearer
 	// links that authorize an invitee. Following one is reading, never acting:
 	// a mail client that prefetches must not accept, decline, cancel, or end
-	// anything (S3-25).
+	// anything (S3-28).
 	links := map[string]bool{}
 	for _, envelope := range env.sender.Envelopes {
 		for _, link := range mailLinkPattern.FindAllString(envelope.Text, -1) {
@@ -268,6 +301,7 @@ func TestNoLinkNightlochEmailsChangesAnythingWhenFollowed(t *testing.T) {
 			{"the Protectee", fixture.protectee, fixture.protecteeCSRF},
 			{"their Partner", fixture.partner, fixture.partnerCSRF},
 			{"an unrelated User", fixture.stranger, fixture.strangerCSRF},
+			{"the invitee the bearer link names", fixture.invitee, fixture.inviteeCSRF},
 		} {
 			recorder := get(t, env, link, follower.session, follower.token)
 			if recorder.Code >= http.StatusInternalServerError {
@@ -307,7 +341,7 @@ func TestNoActorReachesAControlThatBelongsToSomebodyElse(t *testing.T) {
 			session: fixture.partner, token: fixture.partnerCSRF,
 		},
 		{
-			name:    "a Protectee cancelling their own Cooling-off from the Partner's control",
+			name:    "a Protectee reaching for the Partner's immediate-ending control",
 			path:    base + "/partners/partnerships/" + partnership + "/end",
 			form:    url.Values{"confirmation": {"END"}},
 			want:    http.StatusNotFound,
