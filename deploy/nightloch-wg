@@ -3,9 +3,9 @@
 # nightloch-wg — the privileged root helper for tunnel membership.
 #
 # Install at /usr/local/sbin/nightloch-wg, owned by root, mode 0755, alongside
-# the grant in nightloch-wg.sudoers. This script is the sudo boundary: the
-# application process runs unprivileged and this is the one thing it may invoke
-# as root, so its whole security value is that its surface is small and closed.
+# the grant in nightloch-wg.sudoers. Why the tunnel is reached this way, and
+# what bounds the escalation:
+# docs/adr/0004-reach-the-tunnel-through-a-root-helper.md
 #
 # It exposes exactly three subcommands and refuses everything else:
 #
@@ -16,11 +16,13 @@
 # Every argument is validated against its expected shape before any command is
 # invoked and before any file is written, so a refusal has no side effect.
 #
-# Membership changes are written to the interface configuration as well as the
-# running interface, so a reboot does not silently drop minted Devices. The
-# interface section of the configuration is preserved verbatim — wg-quick needs
-# directives `wg showconf` does not report — and the peer sections are taken
-# from the running interface, so the file and the interface cannot disagree.
+# A membership change is rendered into the interface configuration first and
+# only then applied to the running interface, so a reboot does not silently drop
+# minted Devices. The order matters: rendering can fail on a configuration this
+# helper does not recognise, and failing before `wg set` leaves the interface
+# and its configuration agreeing rather than drifting apart. The rendered file
+# is moved into place only after the interface accepts the change, so a refused
+# `wg set` leaves the configuration byte-for-byte as it was.
 #
 # `show` reports one line per peer: public key, allowed IPs, and the latest
 # handshake as a Unix timestamp, tab separated. It deliberately does not pass
@@ -74,6 +76,19 @@ unavailable() {
 	exit 3
 }
 
+# trim strips leading and trailing blanks into the global `trimmed`, so a
+# section header or directive is recognised however the file is indented.
+trim() {
+	trimmed="$1"
+	while :; do
+		case "$trimmed" in
+		' '* | '	'*) trimmed="${trimmed#?}" ;;
+		*' ' | *'	') trimmed="${trimmed%?}" ;;
+		*) break ;;
+		esac
+	done
+}
+
 # validate_public_key accepts only a WireGuard base64 key: 43 characters from
 # the base64 alphabet followed by a single trailing pad.
 validate_public_key() {
@@ -117,9 +132,10 @@ validate_address() {
 	fi
 }
 
-# require_config runs before the interface is touched: a membership change with
-# nowhere to persist would leave the running interface ahead of its own
-# configuration, which is the drift this helper exists to prevent.
+# require_config runs before the interface is touched. A configuration this
+# helper cannot recognise is refused rather than rewritten: replacing a file
+# whose interface section was not understood would leave the tunnel unable to
+# come back up at all, which is worse than dropping a Device.
 require_config() {
 	if [ ! -f "$config" ]; then
 		unavailable "interface configuration $config is missing"
@@ -127,6 +143,13 @@ require_config() {
 	if [ ! -w "$config" ]; then
 		unavailable "interface configuration $config is not writable"
 	fi
+	while IFS= read -r line || [ -n "$line" ]; do
+		trim "$line"
+		if [ "$trimmed" = "[Interface]" ]; then
+			return 0
+		fi
+	done <"$config"
+	unavailable "interface configuration $config has no [Interface] section"
 }
 
 require_interface() {
@@ -135,36 +158,92 @@ require_interface() {
 	fi
 }
 
-# persist_config rewrites the interface configuration from the running
-# interface: the [Interface] section of the existing file verbatim, then the
-# peer sections `wg showconf` reports.
-persist_config() {
-	tmp="$config.nightloch-tmp.$$"
-	dump="$config.nightloch-dump.$$"
-	trap 'rm -f "$tmp" "$dump"' EXIT HUP INT TERM
+# render_config writes the whole configuration to "$1" with the peer whose key
+# is "$2" removed, and, when "$3" is a Device address, that peer appended fresh.
+# Every other line of the file survives verbatim, so directives this helper does
+# not understand are carried across untouched. Adding a key that is already
+# present rewrites its one block rather than adding a second.
+render_config() {
+	rendered="$1"
+	target_key="$2"
+	new_address="${3:-}"
 
-	wg showconf "$interface" >"$dump"
+	: >"$rendered"
+	in_peer=0
+	block=''
+	drop_block=0
 
-	: >"$tmp"
 	while IFS= read -r line || [ -n "$line" ]; do
-		case "$line" in
-		*'[Peer]'*) break ;;
+		trim "$line"
+		case "$trimmed" in
+		'[Peer]')
+			flush_block
+			in_peer=1
+			block="$line
+"
+			continue
+			;;
+		'['*']')
+			flush_block
+			in_peer=0
+			printf '%s\n' "$line" >>"$rendered"
+			continue
+			;;
 		esac
-		printf '%s\n' "$line" >>"$tmp"
-	done <"$config"
-
-	in_peers=0
-	while IFS= read -r line || [ -n "$line" ]; do
-		case "$line" in
-		*'[Peer]'*) in_peers=1 ;;
-		esac
-		if [ "$in_peers" -eq 1 ]; then
-			printf '%s\n' "$line" >>"$tmp"
+		if [ "$in_peer" -eq 0 ]; then
+			printf '%s\n' "$line" >>"$rendered"
+			continue
 		fi
-	done <"$dump"
+		case "$trimmed" in
+		PublicKey*=*)
+			trim "${trimmed#*=}"
+			if [ "$trimmed" = "$target_key" ]; then
+				drop_block=1
+			fi
+			;;
+		esac
+		block="$block$line
+"
+	done <"$config"
+	flush_block
 
-	rm -f "$dump"
-	mv "$tmp" "$config"
+	if [ -n "$new_address" ]; then
+		{
+			printf '\n[Peer]\n'
+			printf 'PublicKey = %s\n' "$target_key"
+			printf 'AllowedIPs = %s/32\n' "$new_address"
+		} >>"$rendered"
+	fi
+}
+
+# flush_block writes the peer block gathered so far unless it is the one being
+# replaced or removed.
+flush_block() {
+	if [ -n "$block" ] && [ "$drop_block" -eq 0 ]; then
+		printf '%s' "$block" >>"$rendered"
+	fi
+	block=''
+	drop_block=0
+}
+
+# apply_change renders the configuration with the change already made, asks the
+# interface to accept it, and only then moves the rendered file into place. A
+# refused `wg set` therefore leaves the configuration untouched, and a
+# configuration this helper could not render is refused before the interface is
+# asked for anything. "$1" is the peer's key, "$2" its Device address or empty
+# for a removal, and the rest is the argument list for `wg set`.
+apply_change() {
+	peer_key="$1"
+	peer_address="$2"
+	shift 2
+
+	pending="$config.nightloch-pending.$$"
+	trap 'rm -f "$pending"' EXIT HUP INT TERM
+
+	render_config "$pending" "$peer_key" "$peer_address"
+	wg set "$interface" "$@"
+	mv "$pending" "$config"
+
 	trap - EXIT HUP INT TERM
 }
 
@@ -173,16 +252,14 @@ cmd_add_peer() {
 	validate_address "$2"
 	require_config
 	require_interface
-	wg set "$interface" peer "$1" allowed-ips "$2/32"
-	persist_config
+	apply_change "$1" "$2" peer "$1" allowed-ips "$2/32"
 }
 
 cmd_remove_peer() {
 	validate_public_key "$1"
 	require_config
 	require_interface
-	wg set "$interface" peer "$1" remove
-	persist_config
+	apply_change "$1" '' peer "$1" remove
 }
 
 # cmd_show prints public key, allowed IPs, and latest handshake per peer. The

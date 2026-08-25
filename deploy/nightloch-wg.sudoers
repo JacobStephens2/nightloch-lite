@@ -3,6 +3,9 @@
 # Install as /etc/sudoers.d/nightloch-wg, owned by root, mode 0440, and validate
 # before reloading: visudo -cf /etc/sudoers.d/nightloch-wg
 #
+# Why the tunnel is reached this way rather than through ambient capabilities or
+# a privileged daemon: docs/adr/0004-reach-the-tunnel-through-a-root-helper.md
+#
 # The grant names exactly one absolute path and carries no wildcard. The helper
 # at that path is itself the allowlist: it accepts three subcommands and
 # validates every argument, so the sudoers file does not need to enumerate
@@ -12,8 +15,10 @@
 # application cannot choose which wg or ip the helper finds, and cannot reach
 # the helper's own NIGHTLOCH_WG_INTERFACE and NIGHTLOCH_WG_CONFIG overrides.
 #
-# The helper must be root-owned and not writable by the nightloch user; a
-# writable helper would make this grant a full root shell.
+# Both are deployment requirements, not nice-to-haves: the helper must be
+# root-owned and not writable by the nightloch user, because a writable helper
+# would make this grant a full root shell, and this grant must never grow a
+# wildcard.
 
 Cmnd_Alias NIGHTLOCH_WG = /usr/local/sbin/nightloch-wg
 

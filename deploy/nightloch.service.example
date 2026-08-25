@@ -20,7 +20,8 @@ UMask=0077
 # Hardening. NoNewPrivileges must stay off: the app reaches the tunnel only by
 # invoking /usr/local/sbin/nightloch-wg under sudo, and sudo cannot raise
 # privilege with it set. The narrow grant in nightloch-wg.sudoers, and the
-# helper's own closed subcommand surface, are what bound that escalation.
+# helper's own closed subcommand surface, are what bound that escalation
+# instead — docs/adr/0004-reach-the-tunnel-through-a-root-helper.md.
 NoNewPrivileges=false
 ProtectSystem=strict
 ProtectHome=true
