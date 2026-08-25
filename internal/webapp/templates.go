@@ -270,10 +270,10 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
 <main class="dashboard"><section><h1>Ended Partnership</h1>
 {{if .Receipt.ProtecteeDeleted}}
-<p class="lede">Your Partnership with {{.Receipt.ProtecteeLabel}} ended on {{utc .Receipt.EndedAt}}, when they deleted their Nightloch User.</p>
+<p class="lede">Your Partnership with {{.Receipt.ProtecteeLabel}} ended on {{utc .Receipt.EndedAt}}.</p>
 <ul class="rows"><li>Protectee: {{.Receipt.ProtecteeLabel}}<br>
 Ended: {{utc .Receipt.EndedAt}}<br>
-How it ended: They deleted their Nightloch User, so Nightloch ended the Partnership at that instant.</li></ul>
+How it ended: {{if .Receipt.EndedByUserDeletion}}They deleted their Nightloch User, so Nightloch ended the Partnership at that instant.{{else if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else if .Receipt.AgreedToEndNow}}You agreed to end the Partnership immediately after they requested Cooling-off.{{else if .Receipt.EndedAfterCoolingOff}}Nightloch ended the Partnership after the Cooling-off they requested completed.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
 <p class="lede">This is everything Nightloch retains about that Partnership. Their verified email, their Roster, and their Activity are gone, and no Partnership can be formed with a deleted User. Emails Nightloch already sent you still name the address that identified them when each event happened; a delivered message cannot be recalled or pseudonymized.</p>
 {{else}}
 {{if .JustEnded}}

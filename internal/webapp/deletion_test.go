@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -126,5 +127,35 @@ func TestADeletedUserHoldsNoSessionAndNoInvitation(t *testing.T) {
 	activity := get(t, env, "https://lite.nightloch.app/activity", protecteeSession, protecteeCSRF)
 	if activity.Code != http.StatusSeeOther {
 		t.Fatalf("GET /activity as a deleted User = %d", activity.Code)
+	}
+}
+
+func TestAReceiptForADeletedProtecteeStillStatesHowThatPartnershipEnded(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	_, _, partnerSession, partnerCSRF, partnershipID := livePartnership(t, env)
+
+	// The Partner ends it first; the Protectee deletes their User afterwards.
+	// The receipt has to pseudonymize who it is about without claiming the
+	// deletion is what ended the Partnership.
+	endURL := fmt.Sprintf("https://lite.nightloch.app/partners/partnerships/%d/end", partnershipID)
+	end := post(t, env, endURL, url.Values{
+		"confirmation": []string{"END"}, "csrf_token": []string{partnerCSRF.Value},
+	}, partnerSession, partnerCSRF)
+	if end.Code != http.StatusOK {
+		t.Fatalf("POST end = %d", end.Code)
+	}
+	deleteUserByEmail(t, env, "protectee@example.com")
+
+	body := get(t, env, fmt.Sprintf("https://lite.nightloch.app/partners/ended-partnerships/%d", partnershipID),
+		partnerSession, partnerCSRF).Body.String()
+	if strings.Contains(body, "protectee@example.com") || !strings.Contains(body, "Deleted User") {
+		t.Fatalf("the receipt did not pseudonymize the former Protectee:\n%s", body)
+	}
+	if strings.Contains(body, "deleted their Nightloch User, so Nightloch ended the Partnership") {
+		t.Fatalf("the receipt blamed the deletion for an ending the Partner performed:\n%s", body)
+	}
+	if !strings.Contains(body, "You ended the Partnership immediately.") {
+		t.Fatalf("the receipt lost its own ending cause:\n%s", body)
 	}
 }

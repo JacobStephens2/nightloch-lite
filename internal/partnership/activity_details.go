@@ -133,11 +133,7 @@ func (e ActivityEntry) Details() []ActivityDetail {
 		add("Log sharing", onOffOf(details.LogSharing))
 		add("Active Partners", countOf(details.PartnerCount))
 		addInstant("Deadline no longer scheduled", details.CanceledDeadline)
-	case ActionPartnershipEndedByPartner:
-		add("Log sharing while active", onOffOf(details.LogSharing))
-		add("Active Partners remaining", countOf(details.PartnerCount))
-		add("Partner lock", lockState(details.PartnerLockActive))
-	case ActionPartnershipEndedByUserDeletion:
+	case ActionPartnershipEndedByPartner, ActionPartnershipEndedByUserDeletion:
 		add("Log sharing while active", onOffOf(details.LogSharing))
 		add("Active Partners remaining", countOf(details.PartnerCount))
 		add("Partner lock", lockState(details.PartnerLockActive))
