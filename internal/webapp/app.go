@@ -121,6 +121,11 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("GET /partners/partnerships/{id}/cancel-end", app.confirmCancelEnd)
 	mux.HandleFunc("POST /partners/partnerships/{id}/cancel-end", app.cancelEnd)
 	mux.HandleFunc("GET /partners/ended-partnerships/{id}", app.partnershipReceipt)
+	// Activity is one chronology per Protectee, read through whichever window
+	// the viewer holds. A Protectee reads their own; a Partner names the
+	// Protectee whose protection they joined.
+	mux.HandleFunc("GET /activity", app.ownActivity)
+	mux.HandleFunc("GET /activity/{id}", app.protecteeActivity)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/resend", app.confirmResendInvitation)
 	mux.HandleFunc("POST /partners/sent-invitations/{id}/resend", app.resendInvitation)
 	mux.HandleFunc("GET /partners/sent-invitations/{id}/cancel", app.confirmCancelInvitation)

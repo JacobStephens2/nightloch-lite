@@ -3,7 +3,10 @@ package webapp
 import (
 	"fmt"
 	"html/template"
+	"net/url"
 	"time"
+
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
 var templateSources = map[string]string{
@@ -53,7 +56,7 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 {{else}}
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
 {{end}}
-<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
+<p class="actions"><a class="button-link" href="/partners/invite">Add a Partner</a> <a href="/activity">View your Activity</a></p>
 {{if .View.PendingInvitations}}
 <h2>Invitations you sent</h2>
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
@@ -97,7 +100,8 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End now</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a>
-{{end}}</li>{{end}}</ul>
+{{end}}
+<a href="/activity/{{.ProtecteeID}}">View their Activity</a></li>{{end}}</ul>
 {{end}}
 {{if .Ended}}
 <h2>Partnerships you ended</h2>
@@ -105,7 +109,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeEmail}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Browsing Activity arrives later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+<div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -205,7 +209,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <main class="dashboard"><section><h1>You canceled this invitation</h1>
 <p class="lede">You canceled the Partner invitation to {{.CounterpartyEmail}} on {{utc .At}}. No Partnership was created and no Partner powers were granted.</p>
 <p class="lede">Nightloch has told {{.CounterpartyEmail}}. To invite a different address, or to offer different Log sharing, send a new invitation.</p>
-<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
+<p class="actions"><a class="button-link" href="/partners/invite">Add a Partner</a> <a href="/activity">View your Activity</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-outcome": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -279,6 +283,52 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <p class="lede">You keep only this read-only receipt, and it covers only this ended Partnership. It shows nothing about {{.Receipt.ProtecteeEmail}}&rsquo;s remaining Partners or anything that happened afterwards. To protect them again, ask them to send a new Partner invitation.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"activity": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p>
+{{if not .View.Windowed}}<h1>Your Activity</h1>
+<p class="lede">Every change to your protection, newest first. Nightloch keeps your complete history for as long as your Nightloch User exists.</p>
+{{else}}<h1>Activity for {{.View.ProtecteeEmail}}</h1>
+<p class="lede">Every change to {{.View.ProtecteeEmail}}&rsquo;s protection since you became their Partner, newest first. Your view begins at {{utc .View.VisibleFrom}}, when you accepted; nothing from before then is shown, and this view ends if the Partnership ends.</p>
+{{end}}
+{{if .FilterError}}<p class="error" role="alert">{{.FilterError}}</p>{{end}}
+<form class="filters" method="get" action="{{.BasePath}}">
+<label for="category">Category</label>
+<select id="category" name="category"><option value="">Everything</option>
+{{range .Categories}}<option value="{{.}}"{{if eq . $.View.Query.Category}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+<label for="actor">Who acted</label>
+<select id="actor" name="actor"><option value="">Anyone</option>
+{{range .View.Actors}}<option value="{{.}}"{{if eq . $.View.Query.Actor}} selected{{end}}>{{.}}</option>{{end}}</select>
+<label for="from">From (UTC date)</label><input id="from" name="from" type="date" value="{{.From}}">
+<label for="to">To (UTC date)</label><input id="to" name="to" type="date" value="{{.To}}">
+<button type="submit">Apply filters</button>
+{{if .View.Query.Filtered}}<a class="quiet-link" href="{{.ClearURL}}">Clear filters</a>{{end}}
+</form>
+{{if .View.Entries}}
+<ul class="rows">{{range .View.Entries}}<li id="entry-{{.ID}}">
+{{if .Delivery}}<span class="muted">{{.Category.Label}}</span> {{end}}{{.Summary}}<br>
+<span class="muted">{{utc .OccurredAt}}{{if .Effective}} — takes effect {{utc .EffectiveAt}}{{end}}</span>
+{{with requestLink $.BasePath .}}<br><a href="{{.}}">See the request Nightloch carried out</a>{{end}}
+{{if .Details}}<details><summary>Details</summary><ul class="rows">
+{{range .Details}}<li>{{.Label}}: {{if .Instant}}{{utc .At}}{{else}}{{.Text}}{{end}}</li>{{end}}
+</ul></details>{{end}}
+</li>{{end}}</ul>
+{{if or .OlderURL .NewestURL}}<p class="actions">{{if .OlderURL}}<a class="button-link" href="{{.OlderURL}}">Older entries</a>{{end}}{{if .NewestURL}}<a class="quiet-link" href="{{.NewestURL}}">Back to the newest entries</a>{{end}}</p>{{end}}
+{{else if .View.Query.Filtered}}
+<p class="lede">Nothing in this chronology matches those filters. <a href="{{.ClearURL}}">Clear them</a> to read it in full.</p>
+{{else}}
+<p class="lede">There is nothing to show yet.</p>
+{{end}}
+<p class="muted">Every time is shown in your browser&rsquo;s local timezone with UTC beside it. Activity has no free-text search and no export.</p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"activity-unavailable": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That Activity is unavailable</h1>
+<p class="lede">Nightloch cannot show this Activity. A Protectee reads their own history, and a Partner reads it only while their Partnership is active. A Partnership you no longer hold leaves you the receipt for it and nothing else.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
 	"partnership-unavailable": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Partnership unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
@@ -381,7 +431,24 @@ var templateFuncs = template.FuncMap{
 		return template.HTML(fmt.Sprintf(`<time datetime="%s" data-utc>%s UTC</time>`,
 			utc.Format(time.RFC3339), utc.Format("2006-01-02 15:04")))
 	},
-	"countdown": countdown,
+	"countdown":   countdown,
+	"requestLink": requestLink,
+}
+
+// requestLink is the address of the Protectee request a completed timer
+// carried out (S3-18). It carries the page position holding that request and
+// no filter at all, because the request and the completion are 72 hours and
+// two categories apart: a bare fragment would only resolve on the rare page
+// that happened to hold both. It is empty when this entry completes no
+// request, and when the request lies before this reader's window, where the
+// module has already withheld the reference.
+func requestLink(basePath string, entry partnership.ActivityEntry) string {
+	position := entry.RequestPage()
+	if position.Zero() {
+		return ""
+	}
+	return fmt.Sprintf("%s?after=%s#entry-%d",
+		basePath, url.QueryEscape(position.String()), entry.RequestEntryID())
 }
 
 // countdown states how long is left before a Cooling-off deadline. The exact
@@ -434,4 +501,4 @@ for (const element of document.querySelectorAll("time[data-utc]")) {
 }
 `
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn-inline{color:var(--accent);font-weight:700}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn-inline{color:var(--accent);font-weight:700}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px 16px;margin:24px 0}.filters label{margin:0 0 6px;font-size:.85rem}.filters select,.filters input[type=date]{border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:9px 10px}.filters button{padding:9px 14px}details summary{color:var(--muted);cursor:pointer;font-size:.92rem;margin-top:8px}details .rows{margin:10px 0 0}details .rows li{background:#0d1218;padding:8px 12px;margin-bottom:6px;font-size:.92rem}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`

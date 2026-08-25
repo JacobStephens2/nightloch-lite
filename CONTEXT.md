@@ -108,6 +108,10 @@ _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity p
 The human-readable history of attributable changes affecting a Protectee, visible to that Protectee and authorized Partners.
 _Avoid_: Audit log (in product UI), event stream, history (alone)
 
+**Activity category**:
+The fixed vocabulary Activity is filtered by — **Invitations**, **Partnerships**, **Cooling-off**, and **Delivery** — assigned per stable action rather than per sentence, so wording can change without changing what a filter means.
+_Avoid_: Type, tag, event class, log level
+
 **Coverage report**:
 A periodic summary of Coverage for a Protectee’s Devices, sent to Partners (and useful as a deliverability heartbeat).
 _Avoid_: Digest (unless meaning this report), weekly email (alone)

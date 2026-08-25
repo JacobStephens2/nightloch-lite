@@ -205,7 +205,7 @@ func (s *Service) InvitePartner(ctx context.Context, command InviteCommand) (Inv
 		Reciprocal:     reciprocal,
 		SentAt:         now,
 		ExpiresAt:      expiresAt,
-		ActivityURL:    s.dashboardURL(),
+		ActivityURL:    s.activityURL(command.ProtecteeID),
 	}
 	for _, partnerEmail := range currentPartners {
 		messages = append(messages, renderInvitationSentToPartner(alert, partnerEmail))
