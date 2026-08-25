@@ -605,3 +605,12 @@ func (s *Service) receiptURL(partnershipID int64) string {
 func partnershipScope(partnershipID int64, at time.Time) [32]byte {
 	return sha256.Sum256(fmt.Appendf(nil, "partnership\x00%d\x00%d", partnershipID, at.UTC().Unix()))
 }
+
+// activityScope keys a delivery job to the one Activity entry it reports on.
+// It is what an event that can repeat on the same Partnership in the same
+// second uses instead of partnershipScope: the entry id is durable, unique per
+// event, and unchanged by a retry, so the key stays stable for exactly one
+// send without two distinct signals ever colliding.
+func activityScope(activityID int64) [32]byte {
+	return sha256.Sum256(fmt.Appendf(nil, "activity\x00%d", activityID))
+}
