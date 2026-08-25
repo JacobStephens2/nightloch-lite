@@ -211,8 +211,11 @@ var migrations = []string{
 	// tunnel cannot carry would take an address out of the pool for good.
 	`CREATE TABLE devices (
 		id INTEGER PRIMARY KEY,
-		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		-- NOCASE because a Device name is the only thing distinguishing one of a
+		-- Protectee's Devices from another, and "Pixel" and "pixel" naming two
+		-- Devices would spend two tunnel addresses on one phone.
+		name TEXT NOT NULL COLLATE NOCASE CHECK(length(trim(name)) > 0),
 		-- A WireGuard public key: 43 base64 characters and a single pad.
 		public_key TEXT NOT NULL CHECK(length(public_key) = 44 AND public_key LIKE '%='),
 		-- One bare address, no prefix length, inside the tunnel network and
@@ -230,5 +233,5 @@ var migrations = []string{
 	-- table.
 	CREATE UNIQUE INDEX devices_address_idx ON devices(address);
 	CREATE UNIQUE INDEX devices_public_key_idx ON devices(public_key);
-	CREATE UNIQUE INDEX devices_name_idx ON devices(user_id, name);`,
+	CREATE UNIQUE INDEX devices_name_idx ON devices(protectee_id, name);`,
 }

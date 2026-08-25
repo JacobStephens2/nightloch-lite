@@ -18,7 +18,7 @@ const otherDeviceKey = "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY="
 func TestDeviceSchemaHoldsOneDevicePerTunnelAddress(t *testing.T) {
 	t.Parallel()
 	db := migratedDB(t)
-	insert := `INSERT INTO devices(user_id, name, public_key, address, created_at)
+	insert := `INSERT INTO devices(protectee_id, name, public_key, address, created_at)
 		VALUES (?, ?, ?, ?, unixepoch())`
 
 	if _, err := db.Exec(insert, 1, "Pixel", deviceKey, "10.66.0.2"); err != nil {
@@ -33,6 +33,11 @@ func TestDeviceSchemaHoldsOneDevicePerTunnelAddress(t *testing.T) {
 	if _, err := db.Exec(insert, 1, "Pixel", otherDeviceKey, "10.66.0.3"); err == nil {
 		t.Fatal("schema allowed one Protectee two Devices of the same name")
 	}
+	// A difference of case is the same Device, not a second one entitled to
+	// its own tunnel address.
+	if _, err := db.Exec(insert, 1, "pixel", otherDeviceKey, "10.66.0.3"); err == nil {
+		t.Fatal("schema allowed one Protectee two Devices differing only in case")
+	}
 	// A different Protectee naming their Device the same thing is not a clash.
 	if _, err := db.Exec(insert, 2, "Pixel", otherDeviceKey, "10.66.0.3"); err != nil {
 		t.Fatalf("second Protectee's Device: %v", err)
@@ -42,7 +47,7 @@ func TestDeviceSchemaHoldsOneDevicePerTunnelAddress(t *testing.T) {
 func TestDeviceSchemaRefusesWhatTheHelperWouldRefuse(t *testing.T) {
 	t.Parallel()
 	db := migratedDB(t)
-	insert := `INSERT INTO devices(user_id, name, public_key, address, created_at)
+	insert := `INSERT INTO devices(protectee_id, name, public_key, address, created_at)
 		VALUES (?, ?, ?, ?, unixepoch())`
 
 	for name, row := range map[string][]any{
@@ -64,7 +69,7 @@ func TestDeviceSchemaRefusesWhatTheHelperWouldRefuse(t *testing.T) {
 func TestDeletingAUserTakesTheirDevicesWithThem(t *testing.T) {
 	t.Parallel()
 	db := migratedDB(t)
-	if _, err := db.Exec(`INSERT INTO devices(user_id, name, public_key, address, created_at)
+	if _, err := db.Exec(`INSERT INTO devices(protectee_id, name, public_key, address, created_at)
 		VALUES (1, 'Pixel', ?, '10.66.0.2', unixepoch())`, deviceKey); err != nil {
 		t.Fatal(err)
 	}

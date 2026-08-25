@@ -143,11 +143,7 @@ func openEnforcement() (*enforcement.Service, *sql.DB, error) {
 		db.Close()
 		return nil, nil, err
 	}
-	service, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, enforcement.TunnelSettings{
-		EndpointHost: tunnel.EndpointHost,
-		EndpointPort: tunnel.EndpointPort,
-		PublicKey:    tunnel.PublicKey,
-	})
+	service, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, tunnel)
 	if err != nil {
 		db.Close()
 		return nil, nil, err
@@ -155,9 +151,9 @@ func openEnforcement() (*enforcement.Service, *sql.DB, error) {
 	return service, db, nil
 }
 
-// runMintDevice enrolls one Device for one Protectee. Minting is an Operator
-// command in this slice and deliberately not a product action: the Enrollment
-// allowlist that opens enrollment to Users is Slice 5.
+// runMintDevice mints one Device for one Protectee. Minting is the Operator
+// act and deliberately not a product action: enrolling — a User doing this for
+// themselves — waits on the Enrollment allowlist in Slice 5.
 //
 // The configuration goes to stdout on its own so it can be piped into a file
 // or a QR encoder; everything an Operator reads goes to stderr. The private
@@ -182,6 +178,12 @@ func runMintDevice(protecteeEmail, deviceName string) error {
 	fmt.Fprintf(os.Stderr, "minted Device %q for %s at %s\n",
 		minted.Device.Name, protecteeEmail, minted.Device.Address)
 	fmt.Fprintln(os.Stderr, "the private key below is not stored by the server and is shown once")
+	// Until the enroll screen exists, this command is the only place a
+	// Protectee is handed a full-tunnel configuration, so it is the only place
+	// the failure mode can be stated before they install one.
+	fmt.Fprintln(os.Stderr, "tell the Protectee: this is a full tunnel. If Nightloch is down while")
+	fmt.Fprintln(os.Stderr, "the tunnel is on, the Device loses the internet rather than losing")
+	fmt.Fprintln(os.Stderr, "protection; turning the tunnel off restores it and leaves them unprotected.")
 	fmt.Print(minted.Configuration)
 	return nil
 }
@@ -198,21 +200,26 @@ func runDevices() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	devices, err := service.Devices(ctx)
+	membership, err := service.Devices(ctx)
 	if err != nil {
 		return err
 	}
-	for _, status := range devices {
+	for _, status := range membership.Devices {
 		handshake := "never"
 		if !status.LatestHandshake.IsZero() {
 			handshake = status.LatestHandshake.Format(time.RFC3339)
 		}
-		membership := "on tunnel"
+		carried := "on tunnel"
 		if !status.OnTunnel {
-			membership = "MISSING FROM TUNNEL"
+			carried = "MISSING FROM TUNNEL"
 		}
 		fmt.Printf("%s\t%s\t%s\tlast handshake %s\n",
-			status.Device.Address, status.Device.Name, membership, handshake)
+			status.Device.Address, status.Device.Name, carried, handshake)
+	}
+	// Membership no record explains is the half a list of Devices can never
+	// show, and the half an Operator most needs to see.
+	for _, peer := range membership.UnaccountedPeers {
+		fmt.Printf("%s\t(no Device record)\tUNACCOUNTED PEER %s\n", peer.AllowedIPs, peer.PublicKey)
 	}
 	return nil
 }

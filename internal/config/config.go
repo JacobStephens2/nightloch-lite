@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
 )
 
 const defaultResendFrom = "Nightloch <alerts@nightloch.app>"
@@ -45,30 +47,22 @@ func DatabasePath() (string, error) {
 	return filepath.Clean(path), nil
 }
 
-// Tunnel is the deployment's server side of the WireGuard tunnel, which is
-// what a minted Device's configuration has to name. It is loaded on its own
-// rather than as part of Config so that the Operator commands that need it do
-// not also demand the mail and challenge secrets that only serving needs.
-//
-// What a value has to look like to be renderable is the enforcement module's
-// rule, not this package's: this only reports what is absent or unreadable.
-type Tunnel struct {
-	// EndpointHost is the published tunnel hostname. A hostname rather than an
-	// address is what lets the droplet be rebuilt without invalidating a
-	// Device that is already installed on a phone.
-	EndpointHost string
-	// EndpointPort is the tunnel's listening port.
-	EndpointPort int
-	// PublicKey is the tunnel interface's own public key. The matching private
-	// key stays on the host, inside the interface configuration only root
-	// reads, and never reaches this process.
-	PublicKey string
-}
-
 // LoadTunnel reads the tunnel environment for the Operator commands that mint
-// and list Devices.
-func LoadTunnel() (Tunnel, error) {
-	tunnel := Tunnel{
+// and list Devices. It is loaded on its own rather than as part of Config so
+// that those commands do not also demand the mail and challenge secrets only
+// serving needs.
+//
+// It reports what is absent or unreadable and nothing more: what a value has
+// to look like to render a working Device configuration is the enforcement
+// module's own rule, checked when that module is built.
+//
+// TUNNEL_ENDPOINT_HOST is the published tunnel hostname. A hostname rather
+// than an address is what lets the droplet be rebuilt without invalidating a
+// Device already installed on a phone. TUNNEL_PUBLIC_KEY is the wg0
+// interface's own public key; its private half stays on the host, inside the
+// interface configuration only root reads, and never reaches this process.
+func LoadTunnel() (enforcement.TunnelSettings, error) {
+	tunnel := enforcement.TunnelSettings{
 		EndpointHost: strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_HOST")),
 		EndpointPort: defaultTunnelPort,
 		PublicKey:    strings.TrimSpace(os.Getenv("TUNNEL_PUBLIC_KEY")),
@@ -76,7 +70,7 @@ func LoadTunnel() (Tunnel, error) {
 	if port := strings.TrimSpace(os.Getenv("TUNNEL_ENDPOINT_PORT")); port != "" {
 		parsed, err := strconv.Atoi(port)
 		if err != nil {
-			return Tunnel{}, fmt.Errorf("TUNNEL_ENDPOINT_PORT must be a port number: %w", err)
+			return enforcement.TunnelSettings{}, fmt.Errorf("TUNNEL_ENDPOINT_PORT must be a port number: %w", err)
 		}
 		tunnel.EndpointPort = parsed
 	}
@@ -88,7 +82,7 @@ func LoadTunnel() (Tunnel, error) {
 		missing = append(missing, "TUNNEL_PUBLIC_KEY")
 	}
 	if len(missing) > 0 {
-		return Tunnel{}, fmt.Errorf("required environment variables are missing: %s", strings.Join(missing, ", "))
+		return enforcement.TunnelSettings{}, fmt.Errorf("required environment variables are missing: %s", strings.Join(missing, ", "))
 	}
 	return tunnel, nil
 }

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -86,7 +87,7 @@ func NewService(db *sql.DB, tunnel Tunnel, settings TunnelSettings) (*Service, e
 	return &Service{db: db, tunnel: tunnel, settings: settings, now: time.Now, newKeys: generateKeyPair}, nil
 }
 
-// MintCommand is one Operator's request to enroll a Device for a Protectee.
+// MintCommand is one Operator's request to mint a Device for a Protectee.
 type MintCommand struct {
 	ProtecteeEmail string
 	DeviceName     string
@@ -140,7 +141,7 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 
 	var existing int
 	if err := tx.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM devices WHERE user_id = ? AND name = ?", protecteeID, name).Scan(&existing); err != nil {
+		"SELECT COUNT(*) FROM devices WHERE protectee_id = ? AND name = ?", protecteeID, name).Scan(&existing); err != nil {
 		return MintedDevice{}, fmt.Errorf("read existing Devices: %w", err)
 	}
 	if existing > 0 {
@@ -158,7 +159,7 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 
 	createdAt := s.now().UTC().Truncate(time.Second)
 	result, err := tx.ExecContext(ctx,
-		`INSERT INTO devices(user_id, name, public_key, address, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO devices(protectee_id, name, public_key, address, created_at) VALUES (?, ?, ?, ?, ?)`,
 		protecteeID, name, keys.PublicKey, address.String(), createdAt.Unix())
 	if err != nil {
 		return MintedDevice{}, fmt.Errorf("record Device: %w", err)
@@ -203,16 +204,30 @@ type DeviceStatus struct {
 	LatestHandshake time.Time
 }
 
-// Devices reports every recorded Device with its tunnel membership, ordered by
-// tunnel address. A tunnel that cannot be reached — an uninstalled helper, a
-// refused invocation, an interface that is down — is an error, because
-// reporting it as an empty membership would read as "no Device is connected"
-// when the truth is that nothing is known.
-func (s *Service) Devices(ctx context.Context) ([]DeviceStatus, error) {
+// Membership is the whole of what the records and the tunnel together say, and
+// it is deliberately not just a list of Devices. Minting commits the record
+// and the peer in one ordering, but a process killed between the two halves
+// can still leave the tunnel carrying a peer no record explains — membership
+// nobody owns, which no listing of Devices could ever show. Reporting both
+// sides is what makes "neither is reachable without the other" a claim an
+// Operator can check rather than one this package merely asserts.
+type Membership struct {
+	// Devices is every recorded Device, ordered by tunnel address.
+	Devices []DeviceStatus
+	// UnaccountedPeers is tunnel membership belonging to no Device record.
+	UnaccountedPeers []Peer
+}
+
+// Devices reports every recorded Device with its tunnel membership, together
+// with any tunnel membership no record explains. A tunnel that cannot be
+// reached — an uninstalled helper, a refused invocation, an interface that is
+// down — is an error, because reporting it as an empty membership would read
+// as "no Device is connected" when the truth is that nothing is known.
+func (s *Service) Devices(ctx context.Context) (Membership, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_id, name, public_key, address, created_at FROM devices ORDER BY address`)
+		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices`)
 	if err != nil {
-		return nil, fmt.Errorf("read Devices: %w", err)
+		return Membership{}, fmt.Errorf("read Devices: %w", err)
 	}
 	defer rows.Close()
 
@@ -222,36 +237,46 @@ func (s *Service) Devices(ctx context.Context) ([]DeviceStatus, error) {
 		var address string
 		var createdAt int64
 		if err := rows.Scan(&device.ID, &device.ProtecteeID, &device.Name, &device.PublicKey, &address, &createdAt); err != nil {
-			return nil, fmt.Errorf("read Devices: %w", err)
+			return Membership{}, fmt.Errorf("read Devices: %w", err)
 		}
 		device.Address, err = netip.ParseAddr(address)
 		if err != nil {
-			return nil, fmt.Errorf("read Device address %q: %w", address, err)
+			return Membership{}, fmt.Errorf("read Device address %q: %w", address, err)
 		}
 		device.CreatedAt = time.Unix(createdAt, 0).UTC()
 		devices = append(devices, device)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read Devices: %w", err)
+		return Membership{}, fmt.Errorf("read Devices: %w", err)
 	}
+	// Ordered here rather than in SQL: the column is text, so the database
+	// would sort 10.66.0.10 before 10.66.0.2.
+	slices.SortFunc(devices, func(a, b Device) int { return a.Address.Compare(b.Address) })
 
 	peers, err := s.tunnel.Peers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read tunnel membership: %w", err)
+		return Membership{}, fmt.Errorf("read tunnel membership: %w", err)
 	}
-	membership := make(map[string]Peer, len(peers))
+	onTunnel := make(map[string]Peer, len(peers))
 	for _, peer := range peers {
-		membership[peer.PublicKey] = peer
+		onTunnel[peer.PublicKey] = peer
 	}
 
-	statuses := make([]DeviceStatus, 0, len(devices))
+	membership := Membership{Devices: make([]DeviceStatus, 0, len(devices))}
+	recorded := make(map[string]bool, len(devices))
 	for _, device := range devices {
-		peer, onTunnel := membership[device.PublicKey]
-		statuses = append(statuses, DeviceStatus{
-			Device: device, OnTunnel: onTunnel, LatestHandshake: peer.LatestHandshake,
+		recorded[device.PublicKey] = true
+		peer, present := onTunnel[device.PublicKey]
+		membership.Devices = append(membership.Devices, DeviceStatus{
+			Device: device, OnTunnel: present, LatestHandshake: peer.LatestHandshake,
 		})
 	}
-	return statuses, nil
+	for _, peer := range peers {
+		if !recorded[peer.PublicKey] {
+			membership.UnaccountedPeers = append(membership.UnaccountedPeers, peer)
+		}
+	}
+	return membership, nil
 }
 
 // allocateAddress returns the lowest tunnel address no Device holds. The host

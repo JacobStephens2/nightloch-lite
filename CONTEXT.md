@@ -100,6 +100,10 @@ _Avoid_: Admin (in product UI), superuser, root (for the person)
 The Operator-controlled set of Users permitted to enroll Devices (v1 gate against open VPN exit).
 _Avoid_: Invite-only (alone), beta list, device allowlist (confusable with Allowlist entry)
 
+**Mint**:
+The Operator act of creating a Device from the command line: allocate its tunnel address, record it, add its tunnel peer, and hand over its configuration once. Distinct from **enroll**, which is a User doing it for themselves through the product once the Enrollment allowlist opens.
+_Avoid_: Provision, issue, generate a peer, enroll (when the Operator is the actor)
+
 **Action alert**:
 An immediate integrity email about a discrete event (loosen, enroll, Partnership change, cooling-off start, etc.).
 _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity path)
