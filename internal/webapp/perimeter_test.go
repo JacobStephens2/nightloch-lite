@@ -291,56 +291,63 @@ func TestNoActorReachesAControlThatBelongsToSomebodyElse(t *testing.T) {
 	// Each control names the one actor it belongs to; every other signed-in
 	// User must be refused, and must change nothing by asking.
 	for _, attempt := range []struct {
-		name           string
-		path           string
-		form           url.Values
+		name string
+		path string
+		form url.Values
+		// want is the refusal this attempt must receive. Every control an
+		// actor does not hold answers the same unavailable page as an id that
+		// names nobody, so nothing can be inferred from the difference.
+		want           int
 		session, token *http.Cookie
 	}{
 		{
 			name:    "a Partner requesting their Protectee's own Cooling-off",
 			path:    base + "/partners/partnerships/" + partnership + "/request-end",
+			want:    http.StatusNotFound,
 			session: fixture.partner, token: fixture.partnerCSRF,
 		},
 		{
 			name:    "a Protectee cancelling their own Cooling-off from the Partner's control",
 			path:    base + "/partners/partnerships/" + partnership + "/end",
 			form:    url.Values{"confirmation": {"END"}},
+			want:    http.StatusNotFound,
 			session: fixture.protectee, token: fixture.protecteeCSRF,
 		},
 		{
 			name:    "an unrelated User ending somebody's Partnership",
 			path:    base + "/partners/partnerships/" + partnership + "/end",
 			form:    url.Values{"confirmation": {"END"}},
+			want:    http.StatusNotFound,
 			session: fixture.stranger, token: fixture.strangerCSRF,
 		},
 		{
+			// A withdrawal nobody may make sends the actor back to their own
+			// dashboard, which discloses nothing about the invitation.
 			name:    "an unrelated User withdrawing somebody's invitation",
 			path:    base + "/partners/sent-invitations/" + invitation + "/cancel",
+			want:    http.StatusSeeOther,
 			session: fixture.stranger, token: fixture.strangerCSRF,
 		},
 		{
 			name:    "a Partner accepting an invitation addressed to somebody else",
 			path:    base + "/partners/received-invitations/" + invitation + "/accept",
+			want:    http.StatusNotFound,
 			session: fixture.partner, token: fixture.partnerCSRF,
 		},
 		{
-			name:    "an unrelated User reading a Protectee's Activity",
+			// Activity has no mutation at all, so there is nothing here for
+			// any actor to reach.
+			name:    "an unrelated User posting to a Protectee's Activity",
 			path:    base + "/activity/" + strconv.FormatInt(protecteeIDOf(t, env), 10),
+			want:    http.StatusMethodNotAllowed,
 			session: fixture.stranger, token: fixture.strangerCSRF,
 		},
 	} {
 		before := stateFingerprint(t, env)
 		recorder := post(t, env, attempt.path, withToken(attempt.form, attempt.token.Value),
 			attempt.session, attempt.token)
-		if recorder.Code == http.StatusSeeOther && recorder.Header().Get("Location") == "/" {
-			// A refusal that redirects home must still have refused.
-			if after := stateFingerprint(t, env); after != before {
-				t.Fatalf("%s succeeded:\n%s\n%s", attempt.name, before, after)
-			}
-			continue
-		}
-		if recorder.Code < http.StatusBadRequest && recorder.Code != http.StatusOK {
-			t.Errorf("%s = %d", attempt.name, recorder.Code)
+		if recorder.Code != attempt.want {
+			t.Errorf("%s = %d, want %d", attempt.name, recorder.Code, attempt.want)
 		}
 		if after := stateFingerprint(t, env); after != before {
 			t.Fatalf("%s changed state:\n%s\n%s", attempt.name, before, after)
