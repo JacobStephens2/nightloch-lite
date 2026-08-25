@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -447,6 +448,16 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 		return nil, fmt.Errorf("read Roster: %w", err)
 	}
 	return roster, nil
+}
+
+// activityURL is where a current Partner reads one Protectee's chronology.
+// An Action alert about somebody else's Partnership sends its reader there
+// rather than to their own dashboard, because the change they were told about
+// belongs to that Protectee's history.
+func (s *Service) activityURL(protecteeID int64) string {
+	link := *s.baseURL
+	link.Path = "/activity/" + strconv.FormatInt(protecteeID, 10)
+	return link.String()
 }
 
 func (s *Service) dashboardURL() string {

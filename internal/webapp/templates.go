@@ -53,7 +53,7 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 {{else}}
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
 {{end}}
-<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
+<p class="actions"><a class="button-link" href="/partners/invite">Add a Partner</a> <a href="/activity">View your Activity</a></p>
 {{if .View.PendingInvitations}}
 <h2>Invitations you sent</h2>
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
@@ -97,7 +97,8 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End now</a>
 {{else}}
 <a href="/partners/partnerships/{{.PartnershipID}}/end">End this Partnership</a>
-{{end}}</li>{{end}}</ul>
+{{end}}
+<a href="/activity/{{.ProtecteeID}}">View their Activity</a></li>{{end}}</ul>
 {{end}}
 {{if .Ended}}
 <h2>Partnerships you ended</h2>
@@ -105,7 +106,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeEmail}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Browsing Activity arrives later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+<div class="notice"><strong>Next milestone</strong><p>Activity pagination and filters arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -205,7 +206,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <main class="dashboard"><section><h1>You canceled this invitation</h1>
 <p class="lede">You canceled the Partner invitation to {{.CounterpartyEmail}} on {{utc .At}}. No Partnership was created and no Partner powers were granted.</p>
 <p class="lede">Nightloch has told {{.CounterpartyEmail}}. To invite a different address, or to offer different Log sharing, send a new invitation.</p>
-<p><a class="button-link" href="/partners/invite">Add a Partner</a></p>
+<p class="actions"><a class="button-link" href="/partners/invite">Add a Partner</a> <a href="/activity">View your Activity</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-outcome": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -279,6 +280,30 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <p class="lede">You keep only this read-only receipt, and it covers only this ended Partnership. It shows nothing about {{.Receipt.ProtecteeEmail}}&rsquo;s remaining Partners or anything that happened afterwards. To protect them again, ask them to send a new Partner invitation.</p>
 <p><a class="button-link" href="/">Go to Nightloch</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"activity": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p>
+{{if .Own}}<h1>Your Activity</h1>
+<p class="lede">Every change to your protection, newest first. Nightloch keeps your complete history for as long as your Nightloch User exists.</p>
+{{else}}<h1>Activity for {{.View.ProtecteeEmail}}</h1>
+<p class="lede">Every change to {{.View.ProtecteeEmail}}&rsquo;s protection since you became their Partner, newest first. Your view begins at {{utc .View.VisibleFrom}}, when you accepted; nothing from before then is shown, and this view ends if the Partnership ends.</p>
+{{end}}
+{{if .View.Entries}}
+<ul class="rows">{{range .View.Entries}}<li>{{.Summary}}<br>
+<span class="muted">{{utc .OccurredAt}}{{if .Effective}} — takes effect {{utc .EffectiveAt}}{{end}}</span></li>{{end}}</ul>
+{{else}}
+<p class="lede">There is nothing to show yet.</p>
+{{end}}
+<div class="notice"><strong>Next milestone</strong><p>Pagination and category, actor, and date-range filters arrive later in Slice 3.</p></div>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"activity-unavailable": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><main class="shell"><section class="card"><p class="eyebrow">Nightloch Lite</p><h1>That Activity is unavailable</h1>
+<p class="lede">Nightloch cannot show this Activity. A Protectee reads their own history, and a Partner reads it only while their Partnership is active. A Partnership you no longer hold leaves you the receipt for it and nothing else.</p>
+<p><a class="button-link" href="/">Go to Nightloch</a></p></section></main></body></html>`,
 	"partnership-unavailable": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Partnership unavailable · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
