@@ -359,7 +359,7 @@ func (s *Service) CancelInvitation(ctx context.Context, invitationID, protecteeI
 		ProtecteeEmail: invitation.protecteeEmail,
 		InviteeEmail:   invitation.inviteeEmail,
 		CanceledAt:     now,
-		ActivityURL:    s.dashboardURL(),
+		ActivityURL:    s.activityURL(invitation.protecteeID),
 	}
 	for _, partnerEmail := range currentPartners {
 		messages = append(messages, renderInvitationCanceledToPartner(alert, partnerEmail))
