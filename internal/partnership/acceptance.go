@@ -383,7 +383,14 @@ func (s *Service) CanViewLogs(ctx context.Context, actorID, protecteeID int64) (
 		return false, nil
 	}
 	if actorID == protecteeID {
-		return true, nil
+		// Reading your own log needs no Partnership, but it does need a User:
+		// an unknown or deleted identity authorizes nothing.
+		var live int
+		if err := s.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM users WHERE id = ? AND deleted_at IS NULL", actorID).Scan(&live); err != nil {
+			return false, fmt.Errorf("read Log-sharing authorization: %w", err)
+		}
+		return live > 0, nil
 	}
 	var sharing int
 	err := s.db.QueryRowContext(ctx, `
