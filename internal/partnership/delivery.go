@@ -118,6 +118,9 @@ func reachabilityOf(state DeliveryState) Reachability { return state.meaning().r
 // deliveryJob is one prepared message queued for exactly one recipient, in the
 // same transaction as the mutation it reports (ADR 0002).
 type deliveryJob struct {
+	// ActivityID is the entry this message reports, and is zero for the one
+	// signal that reports no entry in any surviving chronology: the completion
+	// of a User deletion, whose own Activity is removed with them.
 	ActivityID    int64
 	InvitationID  *int64
 	PartnershipID *int64
@@ -132,7 +135,7 @@ func queueDelivery(ctx context.Context, tx *sql.Tx, job deliveryJob) error {
 			recipient_email, subject, body_text, body_html, reply_to,
 			idempotency_key, state, attempts, next_attempt_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		job.ActivityID, job.InvitationID, job.PartnershipID, job.Message.Kind,
+		nullableActivity(job.ActivityID), job.InvitationID, job.PartnershipID, job.Message.Kind,
 		job.Message.To, job.Message.Subject, job.Message.Text, job.Message.HTML,
 		job.Message.ReplyTo, job.Message.IdempotencyKey, DeliveryQueued,
 		job.CreatedAt.UTC().Unix(), job.CreatedAt.UTC().Unix())
@@ -140,6 +143,16 @@ func queueDelivery(ctx context.Context, tx *sql.Tx, job deliveryJob) error {
 		return fmt.Errorf("queue delivery job: %w", err)
 	}
 	return nil
+}
+
+// nullableActivity stores an absent Activity entry as NULL, which is also
+// where an entry deleted later leaves its jobs (ON DELETE SET NULL), so the
+// two states a job can be in without an entry are the same state.
+func nullableActivity(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
 }
 
 // invitationDelivery is the scope every message about one invitation shares:

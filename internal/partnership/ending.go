@@ -146,7 +146,7 @@ func readDuePartnership(ctx context.Context, queryer rowQueryer, partnershipID i
 		livePartnershipQuery+"partnership.cooling_off_ends_at IS NOT NULL", partnershipID))
 }
 
-func scanLivePartnership(row *sql.Row) (livePartnership, error) {
+func scanLivePartnership(row rowScanner) (livePartnership, error) {
 	var partnership livePartnership
 	var logSharing int
 	var acceptedAt, requestedAt, endsAt int64
@@ -273,13 +273,34 @@ func (s *Service) EndPartnership(ctx context.Context, command EndCommand) (Partn
 // else: no Roster, no remaining-Partner count, and nothing that happened after
 // the ending instant (S3-16).
 type EndedPartnership struct {
-	PartnershipID  int64
+	PartnershipID int64
+	// ProtecteeEmail is empty once that Protectee's User is deleted, because
+	// the receipt then identifies them only as Deleted User. Read it through
+	// ProtecteeLabel rather than directly, so a screen cannot render a blank
+	// where a person used to be.
 	ProtecteeEmail string
-	Since          time.Time
-	EndedAt        time.Time
-	LogSharing     bool
-	EndedReason    string
+	// ProtecteeDeleted marks the minimal retained receipt: the ending cause
+	// and the exact instant, and nothing else about the relationship — no
+	// address, no start, no Log sharing, no Roster, no Activity (S3-71).
+	ProtecteeDeleted bool
+	Since            time.Time
+	EndedAt          time.Time
+	LogSharing       bool
+	EndedReason      string
 }
+
+// ProtecteeLabel is who this receipt is about, which is Deleted User once
+// their User is gone.
+func (e EndedPartnership) ProtecteeLabel() string {
+	if e.ProtecteeDeleted {
+		return DeletedUserLabel
+	}
+	return e.ProtecteeEmail
+}
+
+// EndedByUserDeletion reports the Partnership ending because a User on it was
+// deleted, which is the one ending cause that outlives the identity it names.
+func (e EndedPartnership) EndedByUserDeletion() bool { return e.EndedReason == EndReasonUserDeleted }
 
 // PartnerEnded, AgreedToEndNow, and EndedAfterCoolingOff name the three ways a
 // Partnership reaches its end, so a template can state the cause without
@@ -299,9 +320,16 @@ func (e EndedPartnership) EndedAfterCoolingOff() bool {
 // endedReceiptQuery projects the receipts one former Partner holds. Both
 // callers scope it to partner_id, so a receipt is unreachable by anyone else,
 // including the Protectee and the Partners still on that Roster.
+//
+// A deleted Protectee is projected as the pseudonym here rather than filtered
+// out or fixed up by a caller: the receipt survives their deletion, and the
+// address, the start, and the Log sharing do not (S3-71).
 const endedReceiptQuery = `
-	SELECT partnership.id, protectee.email, partnership.accepted_at,
-	       partnership.ended_at, partnership.log_sharing, partnership.ended_reason
+	SELECT partnership.id,
+	       CASE WHEN protectee.deleted_at IS NULL THEN protectee.email ELSE '' END,
+	       protectee.deleted_at IS NOT NULL,
+	       partnership.accepted_at, partnership.ended_at, partnership.log_sharing,
+	       partnership.ended_reason
 	FROM partnerships partnership
 	JOIN users protectee ON protectee.id = partnership.protectee_id
 	WHERE partnership.ended_at IS NOT NULL AND partnership.partner_id = ?`
@@ -313,12 +341,18 @@ func scanEndedPartnership(scanner rowScanner) (EndedPartnership, error) {
 	var receipt EndedPartnership
 	var since, endedAt int64
 	var logSharing int
-	if err := scanner.Scan(&receipt.PartnershipID, &receipt.ProtecteeEmail, &since,
-		&endedAt, &logSharing, &receipt.EndedReason); err != nil {
+	if err := scanner.Scan(&receipt.PartnershipID, &receipt.ProtecteeEmail,
+		&receipt.ProtecteeDeleted, &since, &endedAt, &logSharing,
+		&receipt.EndedReason); err != nil {
 		return EndedPartnership{}, err
 	}
-	receipt.Since = time.Unix(since, 0).UTC()
 	receipt.EndedAt = time.Unix(endedAt, 0).UTC()
+	if receipt.ProtecteeDeleted {
+		// Everything else the receipt would carry describes a relationship
+		// with a person who no longer exists, so it is not read at all.
+		return receipt, nil
+	}
+	receipt.Since = time.Unix(since, 0).UTC()
 	receipt.LogSharing = intToBool(logSharing)
 	return receipt, nil
 }

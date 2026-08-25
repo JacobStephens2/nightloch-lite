@@ -615,6 +615,13 @@ func endingVariant(message endingMessage) (subject, opening string) {
 				message.ProtecteeEmail),
 			fmt.Sprintf("Nightloch ended the Partnership after the Cooling-off requested by\n%s completed.",
 				message.ProtecteeEmail)
+	case EndReasonUserDeleted:
+		// A Partner whose own User was deleted is told factually, not as a
+		// generic Partner ending: the cause was the deletion (S3-72).
+		return fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
+				message.PartnerEmail, message.ProtecteeEmail),
+			fmt.Sprintf("%s deleted their Nightloch User.\nNightloch therefore ended their Partnership with %s\nimmediately.",
+				message.PartnerEmail, message.ProtecteeEmail)
 	default:
 		return fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
 				message.PartnerEmail, message.ProtecteeEmail),
@@ -827,6 +834,52 @@ address %[5]s.`,
 			To: recipient,
 			Subject: fmt.Sprintf("[Nightloch] %s canceled the invitation to %s",
 				message.ProtecteeEmail, message.InviteeEmail),
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+// userDeletionMessage carries the completion of one User's deletion to one
+// Partner who still protected them.
+type userDeletionMessage struct {
+	ProtecteeEmail string
+	DeletedAt      time.Time
+	ReceiptURL     string
+}
+
+// renderUserDeleted produces the approved deletion-completed alert from
+// docs/SLICE-3-PARTNERSHIP-EXPERIENCE.md. Each Partner who still protected the
+// deleted User receives their own, naming only their own Partnership, so a
+// completion never discloses the Roster it dissolves (S3-73).
+//
+// It names the verified email that identified the User when the deletion
+// happened, which is what makes it attributable real-time notice, and says
+// plainly that the retained receipt does not and that this message cannot be
+// taken back (S3-78).
+func renderUserDeleted(message userDeletionMessage, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s’s Nightloch User was deleted on %[2]s.
+
+Your Partnership ended at that time. You can no longer change their Policy,
+revoke their Devices, view their Roster or Activity, or exercise any other
+Partner power.
+
+Your retained receipt identifies the former Protectee only as Deleted User:
+%[3]s
+
+Previously delivered emails, including this message, continue to contain
+the verified email that identified the User when the event occurred.
+
+This is an integrity message from Nightloch. Replies go to the monitored
+address %[4]s.`,
+		message.ProtecteeEmail, utcStamp(message.DeletedAt), message.ReceiptURL, alertsAddress)
+
+	return preparedMessage{
+		Kind: MessageUserDeleted,
+		Envelope: mailmessage.Envelope{
+			To:      recipient,
+			Subject: fmt.Sprintf("[Nightloch] %s deleted their Nightloch User", message.ProtecteeEmail),
 			Text:    text,
 			HTML:    textToHTML(text),
 			ReplyTo: alertsAddress,

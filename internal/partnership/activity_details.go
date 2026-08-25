@@ -137,6 +137,10 @@ func (e ActivityEntry) Details() []ActivityDetail {
 		add("Log sharing while active", onOffOf(details.LogSharing))
 		add("Active Partners remaining", countOf(details.PartnerCount))
 		add("Partner lock", lockState(details.PartnerLockActive))
+	case ActionPartnershipEndedByUserDeletion:
+		add("Log sharing while active", onOffOf(details.LogSharing))
+		add("Active Partners remaining", countOf(details.PartnerCount))
+		add("Partner lock", lockState(details.PartnerLockActive))
 	case ActionPartnershipEndedAfterCoolingOff:
 		add("Requested by", details.RequestedBy)
 		addInstant("Requested on", details.RequestedAt)
