@@ -17,9 +17,11 @@ Restart=on-failure
 RestartSec=3
 UMask=0077
 
-# Hardening. NoNewPrivileges conflicts with sudo to nightloch-wg — Slice 4/5
-# should use a privileged helper socket or ambient capabilities instead of sudo.
-NoNewPrivileges=true
+# Hardening. NoNewPrivileges must stay off: the app reaches the tunnel only by
+# invoking /usr/local/sbin/nightloch-wg under sudo, and sudo cannot raise
+# privilege with it set. The narrow grant in nightloch-wg.sudoers, and the
+# helper's own closed subcommand surface, are what bound that escalation.
+NoNewPrivileges=false
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true

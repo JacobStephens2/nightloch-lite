@@ -1,0 +1,231 @@
+#!/bin/sh
+#
+# nightloch-wg — the privileged root helper for tunnel membership.
+#
+# Install at /usr/local/sbin/nightloch-wg, owned by root, mode 0755, alongside
+# the grant in nightloch-wg.sudoers. This script is the sudo boundary: the
+# application process runs unprivileged and this is the one thing it may invoke
+# as root, so its whole security value is that its surface is small and closed.
+#
+# It exposes exactly three subcommands and refuses everything else:
+#
+#   add-peer <public-key> <address>   add a Device to the tunnel
+#   remove-peer <public-key>          remove a Device from the tunnel
+#   show                              report peer and handshake state
+#
+# Every argument is validated against its expected shape before any command is
+# invoked and before any file is written, so a refusal has no side effect.
+#
+# Membership changes are written to the interface configuration as well as the
+# running interface, so a reboot does not silently drop minted Devices. The
+# interface section of the configuration is preserved verbatim — wg-quick needs
+# directives `wg showconf` does not report — and the peer sections are taken
+# from the running interface, so the file and the interface cannot disagree.
+#
+# `show` reports one line per peer: public key, allowed IPs, and the latest
+# handshake as a Unix timestamp, tab separated. It deliberately does not pass
+# `wg show ... dump` through: that output leads with the interface's own private
+# key, and the unprivileged caller must never be handed the server's identity.
+#
+# Exit codes: 0 success, 2 refusal (unknown subcommand or malformed argument),
+# 3 the tunnel is not in a state the operation can be performed against, and
+# whatever wg reported otherwise. Absence of the helper is the shell's 127, so a
+# caller can tell a missing helper from a refusal.
+#
+# NIGHTLOCH_WG_INTERFACE and NIGHTLOCH_WG_CONFIG exist so the tests can run this
+# script against a scratch interface configuration. Under sudo they are not a
+# surface: the shipped grant sets env_reset and its own secure_path, so neither
+# these variables nor PATH cross the boundary from the caller.
+
+set -eu
+umask 077
+
+interface="${NIGHTLOCH_WG_INTERFACE:-wg0}"
+config="${NIGHTLOCH_WG_CONFIG:-/etc/wireguard/wg0.conf}"
+
+# The tunnel network from the security design: 10.66.0.0/24 with the host
+# permanently at 10.66.0.1. Allocation is the application's job; refusing an
+# address outside the range is this script keeping its own surface closed.
+network_prefix="10.66.0."
+first_device_octet=2
+last_device_octet=254
+
+usage() {
+	cat >&2 <<'USAGE'
+usage: nightloch-wg add-peer <public-key> <address>
+       nightloch-wg remove-peer <public-key>
+       nightloch-wg show
+USAGE
+}
+
+# refuse reports a closed door: the input was not something this helper accepts,
+# and nothing has been invoked or written.
+refuse() {
+	printf 'nightloch-wg: %s\n' "$1" >&2
+	usage
+	exit 2
+}
+
+# unavailable reports that the tunnel is not in a state this operation can be
+# performed against. Distinct from a refusal so a caller can tell an operator
+# mistake from a plane that is down.
+unavailable() {
+	printf 'nightloch-wg: %s\n' "$1" >&2
+	exit 3
+}
+
+# validate_public_key accepts only a WireGuard base64 key: 43 characters from
+# the base64 alphabet followed by a single trailing pad.
+validate_public_key() {
+	key="$1"
+	if [ ${#key} -ne 44 ]; then
+		refuse "malformed public key"
+	fi
+	case "$key" in
+	*[!A-Za-z0-9+/=]*) refuse "malformed public key" ;;
+	esac
+	case "$key" in
+	*=) ;;
+	*) refuse "malformed public key" ;;
+	esac
+	case "${key%?}" in
+	*=*) refuse "malformed public key" ;;
+	esac
+}
+
+# validate_address accepts only a bare IPv4 address inside the tunnel network
+# and assignable to a Device. The host, network, and broadcast addresses are
+# refused, as is any prefix length: a Device holds exactly one address.
+validate_address() {
+	address="$1"
+	case "$address" in
+	"$network_prefix"*) ;;
+	*) refuse "address outside the tunnel network" ;;
+	esac
+	octet="${address#"$network_prefix"}"
+	case "$octet" in
+	'' | *[!0-9]*) refuse "malformed address" ;;
+	esac
+	if [ ${#octet} -gt 3 ]; then
+		refuse "malformed address"
+	fi
+	case "$octet" in
+	0?*) refuse "malformed address" ;;
+	esac
+	if [ "$octet" -lt "$first_device_octet" ] || [ "$octet" -gt "$last_device_octet" ]; then
+		refuse "address outside the assignable range"
+	fi
+}
+
+# require_config runs before the interface is touched: a membership change with
+# nowhere to persist would leave the running interface ahead of its own
+# configuration, which is the drift this helper exists to prevent.
+require_config() {
+	if [ ! -f "$config" ]; then
+		unavailable "interface configuration $config is missing"
+	fi
+	if [ ! -w "$config" ]; then
+		unavailable "interface configuration $config is not writable"
+	fi
+}
+
+require_interface() {
+	if ! ip link show dev "$interface" >/dev/null 2>&1; then
+		unavailable "tunnel interface $interface is not present"
+	fi
+}
+
+# persist_config rewrites the interface configuration from the running
+# interface: the [Interface] section of the existing file verbatim, then the
+# peer sections `wg showconf` reports.
+persist_config() {
+	tmp="$config.nightloch-tmp.$$"
+	dump="$config.nightloch-dump.$$"
+	trap 'rm -f "$tmp" "$dump"' EXIT HUP INT TERM
+
+	wg showconf "$interface" >"$dump"
+
+	: >"$tmp"
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+		*'[Peer]'*) break ;;
+		esac
+		printf '%s\n' "$line" >>"$tmp"
+	done <"$config"
+
+	in_peers=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+		*'[Peer]'*) in_peers=1 ;;
+		esac
+		if [ "$in_peers" -eq 1 ]; then
+			printf '%s\n' "$line" >>"$tmp"
+		fi
+	done <"$dump"
+
+	rm -f "$dump"
+	mv "$tmp" "$config"
+	trap - EXIT HUP INT TERM
+}
+
+cmd_add_peer() {
+	validate_public_key "$1"
+	validate_address "$2"
+	require_config
+	require_interface
+	wg set "$interface" peer "$1" allowed-ips "$2/32"
+	persist_config
+}
+
+cmd_remove_peer() {
+	validate_public_key "$1"
+	require_config
+	require_interface
+	wg set "$interface" peer "$1" remove
+	persist_config
+}
+
+# cmd_show prints public key, allowed IPs, and latest handshake per peer. The
+# first line of a dump describes the interface itself and carries its private
+# key; it is read and discarded rather than reported.
+cmd_show() {
+	require_interface
+	dump_output="$(wg show "$interface" dump)"
+	printf '%s\n' "$dump_output" | {
+		read -r _ || exit 0
+		while read -r public_key _preshared_key _endpoint allowed_ips latest_handshake _rest; do
+			printf '%s\t%s\t%s\n' "$public_key" "$allowed_ips" "$latest_handshake"
+		done
+	}
+}
+
+if [ $# -eq 0 ]; then
+	refuse "no subcommand"
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+add-peer)
+	if [ $# -ne 2 ]; then
+		refuse "add-peer takes a public key and an address"
+	fi
+	cmd_add_peer "$1" "$2"
+	;;
+remove-peer)
+	if [ $# -ne 1 ]; then
+		refuse "remove-peer takes a public key"
+	fi
+	cmd_remove_peer "$1"
+	;;
+show)
+	if [ $# -ne 0 ]; then
+		refuse "show takes no argument"
+	fi
+	cmd_show
+	;;
+*)
+	refuse "unknown subcommand"
+	;;
+esac
