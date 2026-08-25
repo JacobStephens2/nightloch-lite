@@ -450,10 +450,12 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 	return roster, nil
 }
 
-// activityURL is where a current Partner reads one Protectee's chronology.
-// An Action alert about somebody else's Partnership sends its reader there
-// rather than to their own dashboard, because the change they were told about
-// belongs to that Protectee's history.
+// activityURL is where a current Partner reads one Protectee's chronology. It
+// is the destination for the Action alerts whose approved copy offers Activity
+// alone — the invitation a Protectee sent, and its cancellation — because the
+// change those readers were told about belongs to that Protectee's history,
+// not to their own dashboard. Alerts offering the Roster as well keep
+// dashboardURL, which is where a Roster is read.
 func (s *Service) activityURL(protecteeID int64) string {
 	link := *s.baseURL
 	link.Path = "/activity/" + strconv.FormatInt(protecteeID, 10)

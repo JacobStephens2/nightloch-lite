@@ -343,3 +343,149 @@ func TestPartnerAlertsLinkToTheProtecteeChronology(t *testing.T) {
 		t.Fatalf("the alerted Partner cannot read the Activity they were sent to: %v", err)
 	}
 }
+
+// TestActivityWindowHoldsThroughCoolingOffAndClosesOnCompletion pins the other
+// boundary instant: a Partnership scheduled to end is still live, so its
+// Partner keeps reading right up to the deadline, and Nightloch's own
+// completion is where their access stops.
+func TestActivityWindowHoldsThroughCoolingOffAndClosesOnCompletion(t *testing.T) {
+	t.Parallel()
+	service, db, advance := newTimedService(t)
+	ctx := context.Background()
+	protectee := createUser(t, db, "protectee@example.com")
+	partner := createUser(t, db, "partner@example.com")
+	partnerUp(t, service, protectee, partner, "partner@example.com", false)
+	partnership := partnershipOf(t, service, protectee, partner)
+
+	advance(time.Hour)
+	request, err := service.StartCoolingOff(ctx, CoolingOffCommand{
+		PartnershipID: partnership, ProtecteeID: protectee,
+	})
+	if err != nil {
+		t.Fatalf("StartCoolingOff: %v", err)
+	}
+
+	// A Partner whose Partnership is scheduled to end keeps every power,
+	// including the reading of the request itself.
+	during := visibleActions(t, service, protectee, partner)
+	if !sameActions(during, []string{ActionCoolingOffStarted, ActionInvitationAccepted}) {
+		t.Fatalf("Activity during Cooling-off = %v", during)
+	}
+
+	// One second before the deadline nothing is due and nothing has changed.
+	at(service, request.EndsAt.Add(-time.Second))
+	if completed, err := service.CompleteDueCoolingOff(ctx, 10); err != nil || completed != 0 {
+		t.Fatalf("CompleteDueCoolingOff before the deadline = %d, %v", completed, err)
+	}
+	if got := visibleActions(t, service, protectee, partner); len(got) != 2 {
+		t.Fatalf("Activity one second before the deadline = %v", got)
+	}
+
+	// At the deadline Nightloch completes the ending, and the entry it appends
+	// is stamped on the deadline itself — the sharp case for a window whose
+	// closing is the ending instant.
+	at(service, request.EndsAt)
+	if completed, err := service.CompleteDueCoolingOff(ctx, 10); err != nil || completed != 1 {
+		t.Fatalf("CompleteDueCoolingOff on the deadline = %d, %v", completed, err)
+	}
+	refuseActivity(t, service, protectee, partner)
+
+	// The Protectee still reads the completion, attributed to Nightloch and
+	// naming the deadline they themselves requested.
+	view, err := service.Activity(ctx, protectee, protectee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := view.Entries[0]
+	if newest.Action != ActionPartnershipEndedAfterCoolingOff || newest.ActorEmail != "" {
+		t.Fatalf("the completion is misattributed: %+v", newest)
+	}
+	if !newest.OccurredAt.Equal(request.EndsAt) {
+		t.Fatalf("the completion is stamped %v, want the deadline %v", newest.OccurredAt, request.EndsAt)
+	}
+	if !strings.Contains(newest.Summary(), "Nightloch ended protectee@example.com’s Partnership") {
+		t.Fatalf("completion reads %q", newest.Summary())
+	}
+}
+
+// TestEndNowReadsApartFromAnIndependentEnding proves Activity keeps the
+// distinction the store already makes: a Partner's own ending and the **End
+// now** that waives a Protectee's Cooling-off share one action but are not the
+// same event (S3-08).
+func TestEndNowReadsApartFromAnIndependentEnding(t *testing.T) {
+	t.Parallel()
+	service, db, advance := newTimedService(t)
+	ctx := context.Background()
+	protectee := createUser(t, db, "protectee@example.com")
+	independent := createUser(t, db, "independent@example.com")
+	agreeing := createUser(t, db, "agreeing@example.com")
+	partnerUp(t, service, protectee, independent, "independent@example.com", false)
+	partnerUp(t, service, protectee, agreeing, "agreeing@example.com", false)
+
+	advance(time.Hour)
+	if _, err := service.EndPartnership(ctx, EndCommand{
+		PartnershipID: partnershipOf(t, service, protectee, independent),
+		PartnerID:     independent, Confirmation: "END",
+	}); err != nil {
+		t.Fatalf("independent ending: %v", err)
+	}
+
+	advance(time.Hour)
+	agreed := partnershipOf(t, service, protectee, agreeing)
+	if _, err := service.StartCoolingOff(ctx, CoolingOffCommand{
+		PartnershipID: agreed, ProtecteeID: protectee,
+	}); err != nil {
+		t.Fatalf("StartCoolingOff: %v", err)
+	}
+	advance(time.Hour)
+	if _, err := service.EndPartnership(ctx, EndCommand{
+		PartnershipID: agreed, PartnerID: agreeing, Confirmation: "END",
+	}); err != nil {
+		t.Fatalf("End now: %v", err)
+	}
+
+	view, err := service.Activity(ctx, protectee, protectee)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prose := map[string]string{}
+	for _, entry := range view.Entries {
+		if entry.Action == ActionPartnershipEndedByPartner {
+			prose[entry.TargetEmail+"|"+entry.ActorEmail] = entry.Summary()
+		}
+	}
+	independentProse := prose["protectee@example.com|independent@example.com"]
+	agreedProse := prose["protectee@example.com|agreeing@example.com"]
+	if !strings.Contains(independentProse, "ended their Partnership with protectee@example.com immediately.") {
+		t.Fatalf("independent ending reads %q", independentProse)
+	}
+	if !strings.Contains(agreedProse, "waiving the rest of the Cooling-off") {
+		t.Fatalf("End now reads %q", agreedProse)
+	}
+}
+
+// TestEveryStableActionHasItsOwnProse walks the actions this package can
+// append. The Summary fallback exists so no entry ever vanishes from a
+// chronology that claims to be complete; nothing Nightloch actually records
+// should reach it.
+func TestEveryStableActionHasItsOwnProse(t *testing.T) {
+	t.Parallel()
+	entry := ActivityEntry{
+		ProtecteeEmail: "protectee@example.com",
+		ActorEmail:     "actor@example.com",
+		TargetEmail:    "target@example.com",
+	}
+	fallback := ActivityEntry{ProtecteeEmail: entry.ProtecteeEmail, ActorEmail: entry.ActorEmail}
+	for _, action := range []string{
+		ActionInvitationSent, ActionInvitationResent, ActionInvitationAccepted,
+		ActionInvitationDeclined, ActionInvitationCanceled, ActionInvitationExpired,
+		ActionPartnershipEndedByPartner, ActionCoolingOffStarted, ActionCoolingOffCanceled,
+		ActionPartnershipEndedAfterCoolingOff, ActionCoolingOffBecameFinal,
+		ActionDeliveryDelayed, ActionDeliveryFailed, ActionDeliveryRecovered,
+	} {
+		entry.Action = action
+		if entry.Summary() == fallback.Summary() {
+			t.Fatalf("%s has no prose of its own", action)
+		}
+	}
+}

@@ -87,11 +87,22 @@ type ActivityEntry struct {
 	// consequence lands where those differ, such as a Cooling-off deadline.
 	OccurredAt  time.Time
 	EffectiveAt time.Time
+	// details is the decoded subset of the stored payload that the entry's own
+	// prose needs. It stays unexported: details inform what a viewer reads,
+	// they are never themselves what a viewer reads (S3-49).
+	details activityDetails
 }
 
-// ByNightloch reports whether Nightloch performed this action itself rather
-// than any User, which is how a scheduled completion is attributed (S3-18).
-func (e ActivityEntry) ByNightloch() bool { return e.ActorEmail == "" }
+// activityDetails is the typed view of a stored payload. It names only the
+// fields some entry's prose turns on, so widening it is a deliberate act
+// rather than a side effect of storing something new.
+type activityDetails struct {
+	// EndedReason separates the two endings a Partner performs on one action:
+	// their own independent ending, and the **End now** that waives a
+	// Cooling-off the Protectee requested. They are stored apart so they can
+	// be audited apart (S3-08), so Activity has to read them apart too.
+	EndedReason string `json:"ended_reason"`
+}
 
 // Effective reports whether this entry has a consequence instant distinct from
 // when it was recorded.
@@ -191,9 +202,13 @@ func (s *Service) Activity(ctx context.Context, protecteeID, viewerID int64) (Ac
 	// in the past — a sweep recording an expiry on the deadline it passed —
 	// are placed by when they occurred rather than by when they were written,
 	// which is why the instant leads and the id only settles ties.
+	// The read is deliberately unbounded for now: newest-first pagination and
+	// the category, actor, and date-range filters are their own ticket, and a
+	// silent cap here would let a screen claim a complete chronology while
+	// showing part of one.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, action, COALESCE(actor_email, ''), COALESCE(target_email, ''),
-		       occurred_at, COALESCE(effective_at, 0)
+		       occurred_at, COALESCE(effective_at, 0), details
 		FROM activity_entries
 		WHERE protectee_id = ?1
 		  AND (occurred_at > ?2 OR (occurred_at = ?2 AND id >= ?3))
@@ -208,9 +223,13 @@ func (s *Service) Activity(ctx context.Context, protecteeID, viewerID int64) (Ac
 	for rows.Next() {
 		entry := ActivityEntry{ProtecteeEmail: window.protecteeEmail}
 		var occurredAt, effectiveAt int64
+		var details []byte
 		if err := rows.Scan(&entry.ID, &entry.Action, &entry.ActorEmail,
-			&entry.TargetEmail, &occurredAt, &effectiveAt); err != nil {
+			&entry.TargetEmail, &occurredAt, &effectiveAt, &details); err != nil {
 			return ActivityView{}, fmt.Errorf("read Activity entry: %w", err)
+		}
+		if err := json.Unmarshal(details, &entry.details); err != nil {
+			return ActivityView{}, fmt.Errorf("decode Activity details: %w", err)
 		}
 		entry.OccurredAt = time.Unix(occurredAt, 0).UTC()
 		if effectiveAt != 0 {
@@ -253,6 +272,10 @@ func (e ActivityEntry) Summary() string {
 		return fmt.Sprintf("Nightloch expired %s’s Partner invitation to %s after seven days.",
 			e.ProtecteeEmail, e.TargetEmail)
 	case ActionPartnershipEndedByPartner:
+		if e.details.EndedReason == EndReasonPartnerAgreedNow {
+			return fmt.Sprintf("%s agreed to end their Partnership with %s now, waiving the rest of the Cooling-off %s requested.",
+				actor, e.TargetEmail, e.TargetEmail)
+		}
 		return fmt.Sprintf("%s ended their Partnership with %s immediately.", actor, e.TargetEmail)
 	case ActionCoolingOffStarted:
 		return fmt.Sprintf("%s requested to end their Partnership with %s after Cooling-off.",

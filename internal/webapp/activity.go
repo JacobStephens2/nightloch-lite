@@ -9,13 +9,13 @@ import (
 )
 
 // activityData is one Protectee's chronology as one viewer is authorized to
-// read it. Own separates the two framings the same screen serves: a Protectee
-// reading their complete history, and a Partner reading the window that opened
-// when they accepted.
+// read it. The screen serves two framings — a Protectee reading their complete
+// history, and a Partner reading the window that opened when they accepted —
+// and asks the view which one it is holding rather than deciding for itself,
+// because the audience rule belongs to the module (S3-14).
 type activityData struct {
 	User    githubauth.User
 	View    partnership.ActivityView
-	Own     bool
 	Version string
 }
 
@@ -57,7 +57,7 @@ func (a *App) renderActivity(w http.ResponseWriter, r *http.Request, user github
 		return
 	}
 	a.render(w, r, http.StatusOK, "activity", activityData{
-		User: user, View: view, Own: protecteeID == user.ID, Version: a.version,
+		User: user, View: view, Version: a.version,
 	})
 }
 
