@@ -355,12 +355,65 @@ func TestDeletionTreatsAlreadyDeliveredMailAsExternalHistory(t *testing.T) {
 		t.Fatalf("completion body = %q", body)
 	}
 
-	// Nightloch does not begin a new delivery to an address whose User no
-	// longer exists.
-	if queued := countRows(t, db,
-		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE recipient_email = ? AND state = 'queued'",
-		"protectee@example.com"); queued != 0 {
-		t.Fatalf("%d undispatched messages are still addressed to the deleted User", queued)
-	}
 	_ = partner
+}
+
+func TestDeletionLeavesTheDurableDeliveryLedgerAlone(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee, _, _ := firstPartnership(t, service, db, true)
+
+	// Every message queued before the deletion reported an event that really
+	// happened while the User existed. Those rows are the durable
+	// per-recipient ledger (ADR 0002), so the teardown neither prunes them nor
+	// rewrites what they say.
+	addressed := countRows(t, db,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE recipient_email = ?", "protectee@example.com")
+	if addressed == 0 {
+		t.Fatal("no message was queued to the Protectee before their deletion")
+	}
+	total := countRows(t, db, "SELECT COUNT(*) FROM mail_delivery_jobs")
+
+	deleteUser(t, service, protectee)
+
+	if after := countRows(t, db,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE recipient_email = ?",
+		"protectee@example.com"); after != addressed {
+		t.Fatalf("the teardown pruned %d messages from the delivery ledger", addressed-after)
+	}
+	// It only ever adds: the completion signal to the Partner who still
+	// protected them.
+	if after := countRows(t, db, "SELECT COUNT(*) FROM mail_delivery_jobs"); after != total+1 {
+		t.Fatalf("delivery ledger holds %d jobs, want %d", after, total+1)
+	}
+}
+
+func TestAReceiptKeepsItsOwnEndingCauseWhenTheProtecteeIsDeletedLater(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee, partner, partnership := firstPartnership(t, service, db, true)
+
+	// The Partner ends the Partnership first. The Protectee's later deletion
+	// pseudonymizes who the receipt is about; it does not rewrite how the
+	// Partnership actually ended.
+	if _, err := service.EndPartnership(context.Background(), EndCommand{
+		PartnershipID: partnership, PartnerID: partner, Confirmation: "END",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleteUser(t, service, protectee)
+
+	receipt, err := service.EndedPartnershipReceipt(context.Background(), partnership, partner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.ProtecteeDeleted || receipt.ProtecteeLabel() != DeletedUserLabel {
+		t.Fatalf("receipt still identifies the Protectee: %+v", receipt)
+	}
+	if receipt.EndedByUserDeletion() || !receipt.PartnerEnded() {
+		t.Fatalf("the later deletion rewrote the ending cause: %+v", receipt)
+	}
+	if !receipt.EndedAt.Equal(testClock) {
+		t.Fatalf("the later deletion moved the ending instant to %v", receipt.EndedAt)
+	}
 }

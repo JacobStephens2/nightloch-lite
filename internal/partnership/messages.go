@@ -617,7 +617,12 @@ func endingVariant(message endingMessage) (subject, opening string) {
 				message.ProtecteeEmail)
 	case EndReasonUserDeleted:
 		// A Partner whose own User was deleted is told factually, not as a
-		// generic Partner ending: the cause was the deletion (S3-72).
+		// generic Partner ending: the cause was the deletion (S3-72). The
+		// approved body for that event also says canceling the deletion will
+		// not restore the Partnership; that sentence belongs to the alert sent
+		// when the 72-hour Cooling-off starts, and by the time this ending is
+		// recorded the deletion has completed and there is nothing left to
+		// cancel, so repeating it here would describe a choice nobody has.
 		return fmt.Sprintf("[Nightloch] %s ended their Partnership with %s",
 				message.PartnerEmail, message.ProtecteeEmail),
 			fmt.Sprintf("%s deleted their Nightloch User.\nNightloch therefore ended their Partnership with %s\nimmediately.",
@@ -858,6 +863,12 @@ type userDeletionMessage struct {
 // happened, which is what makes it attributable real-time notice, and says
 // plainly that the retained receipt does not and that this message cannot be
 // taken back (S3-78).
+//
+// The approved body's Device sentence — "Nightloch revoked their enrolled
+// Devices and completed the account teardown" — is deliberately not here.
+// Devices arrive in Slice 4, and this hook tears down relationships only, so
+// the claim would be false the moment it was read. It goes back in with the
+// slice that can make it true.
 func renderUserDeleted(message userDeletionMessage, recipient string) preparedMessage {
 	text := fmt.Sprintf(`%[1]s’s Nightloch User was deleted on %[2]s.
 

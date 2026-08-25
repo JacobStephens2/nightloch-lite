@@ -32,7 +32,10 @@ const (
 	// actor filter alike. It is a name rather than an address, so it can
 	// never collide with a verified email, and it is stored rather than
 	// substituted at render time so no screen can reach the address by
-	// forgetting to substitute (S3-17, S3-78).
+	// forgetting to substitute (S3-17, S3-78). Every deleted User reads as
+	// this same pseudonym, including in the actor filter: two deleted people
+	// are deliberately indistinguishable there, because a per-person
+	// pseudonym would be a stable handle for the identity that was removed.
 	DeletedUserLabel = "Deleted User"
 )
 
@@ -73,11 +76,9 @@ type UserDeletion struct {
 // the deleted User's own chronology and Roster access are removed outright,
 // and a former Partner is left with the receipt alone (S3-71).
 //
-// Mail already handed to the provider is external history: it named the User
-// when the event occurred, it stays that way, and Nightloch does not claim
-// otherwise (S3-78). Mail not yet dispatched to their address is dropped
-// instead, because a deletion should not begin a new delivery to a User who no
-// longer exists.
+// Mail is external history: a message named the User when the event occurred,
+// it stays that way whether it has been dispatched yet or not, and Nightloch
+// does not claim it can be recalled or pseudonymized (S3-78).
 //
 // It is idempotent. A retried or replayed teardown reports AlreadyDeleted and
 // changes nothing: no second ending, no second Activity entry, no second
@@ -241,15 +242,20 @@ func (s *Service) queueDeletionCompletion(ctx context.Context, tx *sql.Tx,
 }
 
 // settleForDeletion closes what a deleted User can no longer be part of: their
-// own chronology, which nobody may read once it is nobody's (S3-71), the
+// own chronology, which nobody may read once it is nobody's (S3-71), and the
 // invitations either side of them, which must not stay acceptable into a
-// relationship with a User who is gone (S3-70), and any message still waiting
-// to be sent to their address.
+// relationship with a User who is gone (S3-70).
 //
 // The invitations are settled without alerts. Account deletion cancels pending
 // invitations and tells the entitled parties when its Cooling-off starts, 72
 // hours before this runs, so anything still pending here is a leftover rather
 // than news.
+//
+// Queued mail is left exactly where it is. Those rows are the durable
+// per-recipient delivery ledger (ADR 0002), each one reporting an event that
+// really happened while the User existed; pruning them here would erase a
+// delivery record to make a privacy claim the delivered copies already
+// disprove.
 func settleForDeletion(ctx context.Context, tx *sql.Tx, userID int64, email string, now time.Time) error {
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM activity_entries WHERE protectee_id = ?", userID); err != nil {
@@ -262,12 +268,6 @@ func settleForDeletion(ctx context.Context, tx *sql.Tx, userID int64, email stri
 		  AND (protectee_id = ? OR lower(invitee_email) = lower(?))`,
 		now.Unix(), userID, email); err != nil {
 		return fmt.Errorf("settle the deleted User's invitations: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM mail_delivery_jobs
-		WHERE lower(recipient_email) = lower(?) AND state = ? AND sent_at IS NULL`,
-		email, DeliveryQueued); err != nil {
-		return fmt.Errorf("drop undispatched messages to the deleted User: %w", err)
 	}
 	return nil
 }
@@ -309,9 +309,9 @@ func deletedUserEmail(userID int64) string {
 }
 
 // pseudonymizeDetails rewrites the stored payloads that name the deleted User.
-// Every value equal to their address becomes the pseudonym, whichever field
-// carries it, so a payload written before this operation existed is covered by
-// the same rule as one written after.
+// Every occurrence of their address becomes the pseudonym, wherever in a value
+// it sits and whichever field carries it, so a payload written before this
+// operation existed is covered by the same rule as one written after.
 func pseudonymizeDetails(ctx context.Context, tx *sql.Tx, email string) error {
 	rows, err := tx.QueryContext(ctx,
 		"SELECT id, details FROM activity_entries WHERE instr(lower(details), lower(?)) > 0", email)
@@ -336,8 +336,13 @@ func pseudonymizeDetails(ctx context.Context, tx *sql.Tx, email string) error {
 		}
 		changed := false
 		for field, value := range details {
-			if text, ok := value.(string); ok && strings.EqualFold(text, email) {
-				details[field] = DeletedUserLabel
+			text, ok := value.(string)
+			if !ok {
+				continue
+			}
+			scrubbed := replaceFold(text, email, DeletedUserLabel)
+			if scrubbed != text {
+				details[field] = scrubbed
 				changed = true
 			}
 		}
@@ -361,4 +366,25 @@ func pseudonymizeDetails(ctx context.Context, tx *sql.Tx, email string) error {
 		}
 	}
 	return nil
+}
+
+// replaceFold replaces every case-insensitive occurrence of old in text. A
+// stored payload holds identities Nightloch normalized, but a value that has
+// an address inside it rather than as the whole of it must be scrubbed too:
+// the pseudonym is worth nothing if one field can spell the address out.
+func replaceFold(text, old, replacement string) string {
+	if old == "" {
+		return text
+	}
+	var scrubbed strings.Builder
+	for {
+		at := strings.Index(strings.ToLower(text), strings.ToLower(old))
+		if at < 0 {
+			scrubbed.WriteString(text)
+			return scrubbed.String()
+		}
+		scrubbed.WriteString(text[:at])
+		scrubbed.WriteString(replacement)
+		text = text[at+len(old):]
+	}
 }
