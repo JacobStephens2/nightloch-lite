@@ -3,9 +3,11 @@ package enforcement
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,12 +133,16 @@ func TestMintDeviceRefusesTheSameDeviceTwiceRatherThanAllocatingAgain(t *testing
 	createUser(t, db, "protectee@example.com")
 	first := mint(t, service, "protectee@example.com", "Pixel")
 
-	_, err := service.MintDevice(context.Background(), MintCommand{
-		ProtecteeEmail: "protectee@example.com", DeviceName: "Pixel",
-	})
-
-	if !errors.Is(err, ErrDeviceExists) {
-		t.Fatalf("second mint error = %v, want ErrDeviceExists", err)
+	// A Device name is the only thing distinguishing one of a Protectee's
+	// phones from another, so a difference of case or padding is the same
+	// Device rather than a second one entitled to its own address.
+	for _, repeated := range []string{"Pixel", "pixel", "  PIXEL  "} {
+		_, err := service.MintDevice(context.Background(), MintCommand{
+			ProtecteeEmail: "protectee@example.com", DeviceName: repeated,
+		})
+		if !errors.Is(err, ErrDeviceExists) {
+			t.Fatalf("minting %q again returned %v, want ErrDeviceExists", repeated, err)
+		}
 	}
 	assertCalls(t, tunnel, []string{"add-peer " + first.Device.PublicKey + " 10.66.0.2"})
 	var devices int
@@ -331,11 +337,12 @@ func TestDevicesReportsRecordedDevicesWithTheirTunnelMembership(t *testing.T) {
 	handshake := testClock.Add(-30 * time.Second)
 	tunnel.Handshakes = map[string]time.Time{first.Device.PublicKey: handshake}
 
-	statuses, err := service.Devices(context.Background())
+	membership, err := service.Devices(context.Background())
 	if err != nil {
 		t.Fatalf("Devices: %v", err)
 	}
 
+	statuses := membership.Devices
 	if len(statuses) != 2 {
 		t.Fatalf("%d Devices reported, want 2", len(statuses))
 	}
@@ -348,19 +355,84 @@ func TestDevicesReportsRecordedDevicesWithTheirTunnelMembership(t *testing.T) {
 	if !statuses[1].OnTunnel || !statuses[1].LatestHandshake.IsZero() {
 		t.Fatalf("a Device that never handshook reported %v", statuses[1].LatestHandshake)
 	}
+	if len(membership.UnaccountedPeers) != 0 {
+		t.Fatalf("membership every Device explains reported %v as unaccounted", membership.UnaccountedPeers)
+	}
 
 	// A Device the tunnel is not carrying is a real disagreement, and is
 	// reported as one rather than hidden.
 	if err := tunnel.RemovePeer(context.Background(), second.Device.PublicKey); err != nil {
 		t.Fatal(err)
 	}
-	statuses, err = service.Devices(context.Background())
+	membership, err = service.Devices(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if statuses[1].OnTunnel {
+	if membership.Devices[1].OnTunnel {
 		t.Fatal("a Device absent from the tunnel reported as on it")
 	}
+}
+
+// Ordering is asserted past the ninth address because the column is text: a
+// database sort would put 10.66.0.10 before 10.66.0.2, and the two Devices a
+// smaller test mints would never show it.
+func TestDevicesAreOrderedByAddressRatherThanByItsSpelling(t *testing.T) {
+	t.Parallel()
+	service, _, db := newTestService(t)
+	createUser(t, db, "protectee@example.com")
+	var want []netip.Addr
+	for octet := firstDeviceOctet; octet <= 12; octet++ {
+		want = append(want, mint(t, service, "protectee@example.com", "Device "+strconv.Itoa(octet)).Device.Address)
+	}
+
+	membership, err := service.Devices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(membership.Devices) != len(want) {
+		t.Fatalf("%d Devices reported, want %d", len(membership.Devices), len(want))
+	}
+	for i, status := range membership.Devices {
+		if status.Device.Address != want[i] {
+			t.Fatalf("Device %d is %v, want %v (order: %v)", i, status.Device.Address, want[i], addresses(membership))
+		}
+	}
+}
+
+// A peer the tunnel carries that no record explains is membership nobody owns.
+// Minting commits the record and the peer in one ordering, but a process
+// killed between the two halves can still leave one behind, and an Operator
+// has to be able to see it.
+func TestMembershipNoDeviceExplainsIsReportedRatherThanIgnored(t *testing.T) {
+	t.Parallel()
+	service, tunnel, db := newTestService(t)
+	createUser(t, db, "protectee@example.com")
+	recorded := mint(t, service, "protectee@example.com", "Pixel")
+	stray := "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY="
+	if err := tunnel.AddPeer(context.Background(), stray, netip.MustParseAddr("10.66.0.9")); err != nil {
+		t.Fatal(err)
+	}
+
+	membership, err := service.Devices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(membership.Devices) != 1 || membership.Devices[0].Device.ID != recorded.Device.ID {
+		t.Fatalf("recorded Devices = %+v", membership.Devices)
+	}
+	if len(membership.UnaccountedPeers) != 1 || membership.UnaccountedPeers[0].PublicKey != stray {
+		t.Fatalf("unaccounted peers = %+v, want the one no record explains", membership.UnaccountedPeers)
+	}
+}
+
+func addresses(membership Membership) []string {
+	var got []string
+	for _, status := range membership.Devices {
+		got = append(got, status.Device.Address.String())
+	}
+	return got
 }
 
 // An unreadable tunnel is never an empty Device list. Each way of failing
@@ -380,13 +452,13 @@ func TestAnUnreadableTunnelIsAnErrorRatherThanAnEmptyDeviceList(t *testing.T) {
 			mint(t, service, "protectee@example.com", "Pixel")
 			tunnel.PeersError = failure
 
-			statuses, err := service.Devices(context.Background())
+			membership, err := service.Devices(context.Background())
 
 			if !errors.Is(err, failure) {
 				t.Fatalf("error = %v, want %v", err, failure)
 			}
-			if statuses != nil {
-				t.Fatalf("an unreadable tunnel still reported %d Devices", len(statuses))
+			if membership.Devices != nil || membership.UnaccountedPeers != nil {
+				t.Fatalf("an unreadable tunnel still reported membership: %+v", membership)
 			}
 		})
 	}
@@ -398,7 +470,7 @@ func TestMintingIsRefusedWhenTheAddressPoolIsExhausted(t *testing.T) {
 	protectee := createUser(t, db, "protectee@example.com")
 	for octet := firstDeviceOctet; octet <= lastDeviceOctet; octet++ {
 		if _, err := db.Exec(
-			`INSERT INTO devices(user_id, name, public_key, address, created_at)
+			`INSERT INTO devices(protectee_id, name, public_key, address, created_at)
 			 VALUES (?, ?, ?, ?, unixepoch())`,
 			protectee, "filler-"+deviceAddress(octet).String(), fillerKey(octet), deviceAddress(octet).String()); err != nil {
 			t.Fatal(err)
@@ -468,4 +540,34 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestGeneratedDeviceKeysAreDistinctWireGuardKeys(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for range 32 {
+		keys, err := generateKeyPair()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !IsPublicKey(keys.PublicKey) {
+			t.Fatalf("public key %q is not a WireGuard key", keys.PublicKey)
+		}
+		private, err := base64.StdEncoding.DecodeString(keys.PrivateKey)
+		if err != nil || len(private) != 32 {
+			t.Fatalf("private key %q is not 32 base64 bytes", keys.PrivateKey)
+		}
+		// wg's own clamping, so the key is byte-identical to one wg genkey
+		// would have produced.
+		if private[0]&7 != 0 || private[31]&128 != 0 || private[31]&64 == 0 {
+			t.Fatalf("private key %q is not clamped as WireGuard clamps", keys.PrivateKey)
+		}
+		if keys.PrivateKey == keys.PublicKey {
+			t.Fatal("the two halves of a Device key are the same value")
+		}
+		if seen[keys.PublicKey] {
+			t.Fatalf("key %q was generated twice", keys.PublicKey)
+		}
+		seen[keys.PublicKey] = true
+	}
 }

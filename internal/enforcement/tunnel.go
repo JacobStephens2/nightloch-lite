@@ -71,24 +71,28 @@ const HelperPath = "/usr/local/sbin/nightloch-wg"
 
 // HelperTunnel reaches the tunnel by invoking the privileged helper under
 // sudo, which is the whole of the application's escalation
-// (docs/adr/0004-reach-the-tunnel-through-a-root-helper.md). Path and Sudo are
-// empty in production and exist so the adapter's own error mapping can be
-// tested against stub programs.
+// (docs/adr/0004-reach-the-tunnel-through-a-root-helper.md). Its zero value is
+// the production adapter.
+//
+// The two overrides are unexported and have no exported setter, so no caller
+// outside this package can aim the escalation at a program the sudoers grant
+// was never written for. They exist for this package's own tests, which have
+// to produce each of the helper's documented exit codes on demand.
 type HelperTunnel struct {
-	Path string
-	Sudo string
+	path string
+	sudo string
 }
 
 func (t *HelperTunnel) helperPath() string {
-	if t.Path != "" {
-		return t.Path
+	if t.path != "" {
+		return t.path
 	}
 	return HelperPath
 }
 
 func (t *HelperTunnel) sudoPath() string {
-	if t.Sudo != "" {
-		return t.Sudo
+	if t.sudo != "" {
+		return t.sudo
 	}
 	return "sudo"
 }

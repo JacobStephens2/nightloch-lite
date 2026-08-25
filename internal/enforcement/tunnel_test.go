@@ -2,7 +2,6 @@ package enforcement
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"net/netip"
 	"os"
@@ -32,7 +31,7 @@ func newHelperTunnel(t *testing.T, script string) (*HelperTunnel, string) {
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &HelperTunnel{Path: helper, Sudo: sudo}, filepath.Join(root, "argv")
+	return &HelperTunnel{path: helper, sudo: sudo}, filepath.Join(root, "argv")
 }
 
 // stubSudo is a sudo that records the argv it was handed, emits stdout, and
@@ -61,17 +60,17 @@ func TestHelperTunnelPassesEachOperationThroughSudoToTheOneHelperPath(t *testing
 	if err := tunnel.AddPeer(ctx, serverPublicKey, netip.MustParseAddr("10.66.0.2")); err != nil {
 		t.Fatalf("AddPeer: %v", err)
 	}
-	assertArgv(t, argvPath, []string{tunnel.Path, "add-peer", serverPublicKey, "10.66.0.2"})
+	assertArgv(t, argvPath, []string{tunnel.path, "add-peer", serverPublicKey, "10.66.0.2"})
 
 	if err := tunnel.RemovePeer(ctx, serverPublicKey); err != nil {
 		t.Fatalf("RemovePeer: %v", err)
 	}
-	assertArgv(t, argvPath, []string{tunnel.Path, "remove-peer", serverPublicKey})
+	assertArgv(t, argvPath, []string{tunnel.path, "remove-peer", serverPublicKey})
 
 	if _, err := tunnel.Peers(ctx); err != nil {
 		t.Fatalf("Peers: %v", err)
 	}
-	assertArgv(t, argvPath, []string{tunnel.Path, "show"})
+	assertArgv(t, argvPath, []string{tunnel.path, "show"})
 }
 
 // Each documented exit code keeps its own identity all the way to the caller.
@@ -103,7 +102,7 @@ func TestHelperTunnelTranslatesEveryDocumentedExitCode(t *testing.T) {
 func TestHelperTunnelReportsAnUninstalledHelperBeforeInvokingSudo(t *testing.T) {
 	t.Parallel()
 	tunnel, argvPath := newHelperTunnel(t, stubSudo(0, ""))
-	if err := os.Remove(tunnel.Path); err != nil {
+	if err := os.Remove(tunnel.path); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,36 +164,6 @@ func TestHelperTunnelReadsPeersAndRefusesAnUnreadableLine(t *testing.T) {
 	}
 	if _, err := parsePeers(serverPublicKey + "\t10.66.0.2/32\tnot-a-timestamp\n"); err == nil {
 		t.Fatal("an unreadable handshake was accepted")
-	}
-}
-
-func TestGeneratedDeviceKeysAreDistinctWireGuardKeys(t *testing.T) {
-	t.Parallel()
-	seen := map[string]bool{}
-	for range 32 {
-		keys, err := generateKeyPair()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !IsPublicKey(keys.PublicKey) {
-			t.Fatalf("public key %q is not a WireGuard key", keys.PublicKey)
-		}
-		private, err := base64.StdEncoding.DecodeString(keys.PrivateKey)
-		if err != nil || len(private) != 32 {
-			t.Fatalf("private key %q is not 32 base64 bytes", keys.PrivateKey)
-		}
-		// wg's own clamping, so the key is byte-identical to one wg genkey
-		// would have produced.
-		if private[0]&7 != 0 || private[31]&128 != 0 || private[31]&64 == 0 {
-			t.Fatalf("private key %q is not clamped as WireGuard clamps", keys.PrivateKey)
-		}
-		if keys.PrivateKey == keys.PublicKey {
-			t.Fatal("the two halves of a Device key are the same value")
-		}
-		if seen[keys.PublicKey] {
-			t.Fatalf("key %q was generated twice", keys.PublicKey)
-		}
-		seen[keys.PublicKey] = true
 	}
 }
 
