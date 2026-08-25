@@ -49,6 +49,7 @@ var categoryOfAction = map[string]ActivityCategory{
 	ActionInvitationAccepted:              CategoryPartnerships,
 	ActionPartnershipEndedByPartner:       CategoryPartnerships,
 	ActionPartnershipEndedAfterCoolingOff: CategoryPartnerships,
+	ActionPartnershipEndedByUserDeletion:  CategoryPartnerships,
 	ActionCoolingOffStarted:               CategoryCoolingOff,
 	ActionCoolingOffCanceled:              CategoryCoolingOff,
 	ActionCoolingOffBecameFinal:           CategoryCoolingOff,

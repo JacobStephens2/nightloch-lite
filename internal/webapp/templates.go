@@ -106,7 +106,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 {{if .Ended}}
 <h2>Partnerships you ended</h2>
 <p class="lede">You keep a read-only receipt for each Partnership you no longer hold. A receipt shows nothing about that Protectee&rsquo;s remaining Partners or anything that happened after it ended.</p>
-<ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeEmail}}</strong> — ended {{utc .EndedAt}}.<br>
+<ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeLabel}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
 <div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
@@ -269,6 +269,13 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <title>Ended Partnership · Nightloch</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/local-time.js" defer></script></head>
 <body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
 <main class="dashboard"><section><h1>Ended Partnership</h1>
+{{if .Receipt.ProtecteeDeleted}}
+<p class="lede">Your Partnership with {{.Receipt.ProtecteeLabel}} ended on {{utc .Receipt.EndedAt}}.</p>
+<ul class="rows"><li>Protectee: {{.Receipt.ProtecteeLabel}}<br>
+Ended: {{utc .Receipt.EndedAt}}<br>
+How it ended: {{if .Receipt.EndedByUserDeletion}}They deleted their Nightloch User, so Nightloch ended the Partnership at that instant.{{else if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else if .Receipt.AgreedToEndNow}}You agreed to end the Partnership immediately after they requested Cooling-off.{{else if .Receipt.EndedAfterCoolingOff}}Nightloch ended the Partnership after the Cooling-off they requested completed.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
+<p class="lede">This is everything Nightloch retains about that Partnership. Their verified email, their Roster, and their Activity are gone, and no Partnership can be formed with a deleted User. Emails Nightloch already sent you still name the address that identified them when each event happened; a delivered message cannot be recalled or pseudonymized.</p>
+{{else}}
 {{if .JustEnded}}
 <p class="lede">{{if .Receipt.AgreedToEndNow}}You agreed to end your Partnership with {{.Receipt.ProtecteeEmail}} now, on {{utc .Receipt.EndedAt}}.{{else}}You ended your Partnership with {{.Receipt.ProtecteeEmail}} on {{utc .Receipt.EndedAt}}.{{end}} Nightloch has told them and their remaining Partners.</p>
 {{else}}
@@ -281,6 +288,7 @@ Ended: {{utc .Receipt.EndedAt}}<br>
 Log sharing while active: {{if .Receipt.LogSharing}}On{{else}}Off{{end}}<br>
 How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.{{else if .Receipt.AgreedToEndNow}}You agreed to end the Partnership immediately after {{.Receipt.ProtecteeEmail}} requested Cooling-off.{{else if .Receipt.EndedAfterCoolingOff}}Nightloch ended the Partnership after the Cooling-off {{.Receipt.ProtecteeEmail}} requested completed.{{else}}Nightloch ended the Partnership.{{end}}</li></ul>
 <p class="lede">You keep only this read-only receipt, and it covers only this ended Partnership. It shows nothing about {{.Receipt.ProtecteeEmail}}&rsquo;s remaining Partners or anything that happened afterwards. To protect them again, ask them to send a new Partner invitation.</p>
+{{end}}
 <p><a class="button-link" href="/">Go to Nightloch</a></p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"activity": `<!doctype html>

@@ -77,7 +77,10 @@ type resolvedInvitation struct {
 }
 
 // invitationQuery is the projection every lifecycle decision reads, up to and
-// including the WHERE keyword; each caller appends its own predicate.
+// including the WHERE keyword; each caller appends its own predicate. An
+// invitation whose Protectee has been deleted matches no row here, so a
+// leftover bearer link resolves to the same unavailable answer as an unknown
+// one rather than disclosing anything about a User who no longer exists.
 const invitationQuery = `
 	SELECT invitation.id, invitation.protectee_id, protectee.email,
 	       invitation.invitee_email, invitation.log_sharing, invitation.state,
@@ -86,6 +89,7 @@ const invitationQuery = `
 	       COALESCE(invitation.resolved_at, 0)
 	FROM partner_invitations invitation
 	JOIN users protectee ON protectee.id = invitation.protectee_id
+	     AND protectee.deleted_at IS NULL
 	WHERE `
 
 // resolveInvitation finds the invitation ref names, or ErrInvitationUnavailable.

@@ -218,3 +218,50 @@ func TestDeliveryEventMigrationLeavesExistingJobsCorrelatable(t *testing.T) {
 		t.Fatal("the schema allowed two jobs to share a provider message id")
 	}
 }
+
+// TestUserDeletionMigrationLeavesExistingUsersUndeleted exercises the upgrade
+// an existing deployment takes: every User that predates deletion is a User
+// who has not been deleted, and the pseudonymized state has to be reachable
+// only by writing it.
+func TestUserDeletionMigrationLeavesExistingUsersUndeleted(t *testing.T) {
+	t.Parallel()
+	db, err := Open(filepath.Join(t.TempDir(), "nightloch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+
+	applyMigrations(t, db, userDeletionMigration-1)
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO users(id, email, created_at) VALUES (1, 'protectee@example.com', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	var email string
+	var deletedAt sql.NullInt64
+	if err := db.QueryRowContext(ctx, "SELECT email, deleted_at FROM users WHERE id = 1").
+		Scan(&email, &deletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if email != "protectee@example.com" || deletedAt.Valid {
+		t.Fatalf("existing User after the migration = %q, deleted_at valid %v", email, deletedAt.Valid)
+	}
+	// A deleted User frees their address for a new registration, so the
+	// uniqueness that made that necessary still has to hold for the pseudonym.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET email = 'deleted-user-1', deleted_at = 2 WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO users(id, email, created_at) VALUES (2, 'protectee@example.com', 3)"); err != nil {
+		t.Fatalf("the freed address could not be registered again: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO users(id, email, created_at) VALUES (3, 'deleted-user-1', 4)"); err == nil {
+		t.Fatal("two Users share one pseudonymized identity")
+	}
+}
