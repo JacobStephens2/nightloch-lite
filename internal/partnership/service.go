@@ -406,20 +406,26 @@ func (s *Service) pendingInvitations(ctx context.Context, protecteeID int64) ([]
 // deny-closed: an unpartnered Protectee may loosen their own Policy, a
 // Protectee with any live Partnership may not, any live Partner of that
 // Protectee may act independently, and an error or unknown relationship state
-// never permits a loosen.
+// never permits a loosen. A Protectee who does not exist, or who has been
+// deleted, is such an unknown state rather than an unpartnered one — a stale
+// session must not read as freedom.
 func (s *Service) CanLoosen(ctx context.Context, actorID, protecteeID int64) (bool, error) {
 	if actorID <= 0 || protecteeID <= 0 {
 		return false, nil
 	}
-	var livePartnerships, actorPartnerships int
+	var liveProtectee, livePartnerships, actorPartnerships int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
+			(SELECT COUNT(*) FROM users WHERE id = ?1 AND deleted_at IS NULL),
 			(SELECT COUNT(*) FROM partnerships WHERE protectee_id = ?1 AND ended_at IS NULL),
 			(SELECT COUNT(*) FROM partnerships
 			  WHERE protectee_id = ?1 AND partner_id = ?2 AND ended_at IS NULL)`,
-		protecteeID, actorID).Scan(&livePartnerships, &actorPartnerships)
+		protecteeID, actorID).Scan(&liveProtectee, &livePartnerships, &actorPartnerships)
 	if err != nil {
 		return false, fmt.Errorf("read Partner lock state: %w", err)
+	}
+	if liveProtectee == 0 {
+		return false, nil
 	}
 	if actorID == protecteeID {
 		return livePartnerships == 0, nil
