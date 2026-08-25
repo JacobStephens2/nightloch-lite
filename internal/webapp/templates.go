@@ -106,7 +106,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeEmail}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Activity pagination and filters arrive later in Slice 3. Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+<div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -290,13 +290,35 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 {{else}}<h1>Activity for {{.View.ProtecteeEmail}}</h1>
 <p class="lede">Every change to {{.View.ProtecteeEmail}}&rsquo;s protection since you became their Partner, newest first. Your view begins at {{utc .View.VisibleFrom}}, when you accepted; nothing from before then is shown, and this view ends if the Partnership ends.</p>
 {{end}}
+{{if .FilterError}}<p class="error" role="alert">{{.FilterError}}</p>{{end}}
+<form class="filters" method="get" action="{{.BasePath}}">
+<label for="category">Category</label>
+<select id="category" name="category"><option value="">Everything</option>
+{{range .Categories}}<option value="{{.}}"{{if eq . $.View.Query.Category}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+<label for="actor">Who acted</label>
+<select id="actor" name="actor"><option value="">Anyone</option>
+{{range .View.Actors}}<option value="{{.}}"{{if eq . $.View.Query.Actor}} selected{{end}}>{{.}}</option>{{end}}</select>
+<label for="from">From (UTC date)</label><input id="from" name="from" type="date" value="{{.From}}">
+<label for="to">To (UTC date)</label><input id="to" name="to" type="date" value="{{.To}}">
+<button type="submit">Apply filters</button>
+{{if .View.Query.Filtered}}<a class="quiet-link" href="{{.ClearURL}}">Clear filters</a>{{end}}
+</form>
 {{if .View.Entries}}
-<ul class="rows">{{range .View.Entries}}<li>{{.Summary}}<br>
-<span class="muted">{{utc .OccurredAt}}{{if .Effective}} — takes effect {{utc .EffectiveAt}}{{end}}</span></li>{{end}}</ul>
+<ul class="rows">{{range .View.Entries}}<li id="entry-{{.ID}}">
+{{if .Delivery}}<span class="muted">Delivery</span> {{end}}{{.Summary}}<br>
+<span class="muted">{{utc .OccurredAt}}{{if .Effective}} — takes effect {{utc .EffectiveAt}}{{end}}</span>
+{{if .RequestEntryID}}<br><a href="#entry-{{.RequestEntryID}}">See the request Nightloch carried out</a>{{end}}
+{{if .Details}}<details><summary>Details</summary><ul class="rows">
+{{range .Details}}<li>{{.Label}}: {{if .Instant}}{{utc .At}}{{else}}{{.Text}}{{end}}</li>{{end}}
+</ul></details>{{end}}
+</li>{{end}}</ul>
+{{if .OlderURL}}<p class="actions"><a class="button-link" href="{{.OlderURL}}">Older entries</a></p>{{end}}
+{{else if .View.Query.Filtered}}
+<p class="lede">Nothing in this chronology matches those filters. <a href="{{.ClearURL}}">Clear them</a> to read it in full.</p>
 {{else}}
 <p class="lede">There is nothing to show yet.</p>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Pagination and category, actor, and date-range filters arrive later in Slice 3.</p></div>
+<p class="muted">Every time is shown in your browser&rsquo;s local timezone with UTC beside it. Activity has no free-text search and no export.</p>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"activity-unavailable": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -459,4 +481,4 @@ for (const element of document.querySelectorAll("time[data-utc]")) {
 }
 `
 
-const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn-inline{color:var(--accent);font-weight:700}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
+const stylesheet = `:root{color-scheme:dark;--ink:#f4f0e8;--muted:#aaa69d;--panel:#161b22;--line:#303741;--accent:#b9e769;--danger:#ffb4ab}*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);padding:36px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#18202a,var(--panel));box-shadow:0 24px 80px #0008}h1{font-size:clamp(2rem,8vw,3.2rem);line-height:1.05;margin:.2em 0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);font-size:1.08rem}label{display:block;font-weight:700;margin:26px 0 8px}input[type=email],input[type=text]{width:100%;border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:13px 14px}.turnstile{min-height:70px;margin:18px 0}button,.button-link{border:0;border-radius:10px;background:var(--accent);color:#111;font:inherit;font-weight:800;padding:12px 17px;cursor:pointer;text-decoration:none}a{color:var(--accent)}.error{border-left:3px solid var(--danger);color:var(--danger);padding-left:12px}.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 24px}.topbar form{margin:0}.quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 11px}.dashboard{width:min(900px,calc(100% - 40px));margin:10vh auto}.dashboard section{max-width:700px}.notice{margin-top:36px;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:20px}.notice p{margin-bottom:0;color:var(--muted)}h2{font-size:1.3rem;margin-top:36px}.rows{list-style:none;padding:0}.rows li{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:10px}.warn-inline{color:var(--accent);font-weight:700}.warn{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:14px 16px;color:var(--muted)}.consent{margin:22px 0}.inline{display:flex;gap:10px;align-items:flex-start;font-weight:400;margin:0}.inline input{margin-top:4px}.topbar a{text-decoration:none}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.actions form{margin:0}.muted{color:var(--muted);font-size:.92rem}.quiet-link{color:var(--muted)}.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px 16px;margin:24px 0}.filters label{margin:0 0 6px;font-size:.85rem}.filters select,.filters input[type=date]{border:1px solid var(--line);border-radius:10px;background:#0d1218;color:var(--ink);font:inherit;padding:9px 10px}.filters button{padding:9px 14px}details summary{color:var(--muted);cursor:pointer;font-size:.92rem;margin-top:8px}details .rows{margin:10px 0 0}details .rows li{background:#0d1218;padding:8px 12px;margin-bottom:6px;font-size:.92rem}footer{color:var(--muted);font-size:.8rem;margin-top:64px}`
