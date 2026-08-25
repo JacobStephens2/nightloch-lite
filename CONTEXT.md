@@ -104,6 +104,14 @@ _Avoid_: Invite-only (alone), beta list, device allowlist (confusable with Allow
 The Operator act of creating a Device from the command line: allocate its tunnel address, record it, add its tunnel peer, and hand over its configuration once. Distinct from **enroll**, which is a User doing it for themselves through the product once the Enrollment allowlist opens.
 _Avoid_: Provision, issue, generate a peer, enroll (when the Operator is the actor)
 
+**Remove** (a Device):
+The Operator act of ending a Device record and withdrawing its tunnel peer. The Device’s configuration stops working; its tunnel address goes into Quarantine rather than back into the pool.
+_Avoid_: Revoke, delete a peer, deactivate, unenroll
+
+**Quarantine** (of a tunnel address):
+The period after a Device is removed during which its tunnel address cannot be allocated to another Device. It runs from the removal instant for longer than the query-log retention, so a later occupant of the address can never resolve to the previous occupant’s retained queries. Applies to addresses only—never to people.
+_Avoid_: Cooldown, hold, reserved, grace period
+
 **Action alert**:
 An immediate integrity email about a discrete event (loosen, enroll, Partnership change, cooling-off start, etc.).
 _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity path)
