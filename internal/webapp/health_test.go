@@ -65,10 +65,10 @@ func TestHealthFailsWhenTheDatabaseIsNotWritable(t *testing.T) {
 
 // A Slice 4 enforcement fact reports its own state without deciding the
 // endpoint's, so only the checks that claim the status can fail the deploy gate.
+// The facts arrive through Options, which is how Slice 4 will add them.
 func TestHealthOnlyFailsOnChecksThatGovernTheStatus(t *testing.T) {
 	t.Parallel()
-	app, _, _ := newTestApp(t)
-	app.healthChecks = append(app.healthChecks,
+	env := newTestEnv(t,
 		HealthCheck{
 			Name:  "reporting_only",
 			Probe: func(context.Context) error { return errors.New("degraded") },
@@ -80,7 +80,7 @@ func TestHealthOnlyFailsOnChecksThatGovernTheStatus(t *testing.T) {
 		},
 	)
 
-	recorder, report := getHealth(t, app)
+	recorder, report := getHealth(t, env.app)
 
 	if recorder.Code != http.StatusOK || report.Status != "ok" {
 		t.Fatalf("GET /health with a failing non-governing check = %d %q", recorder.Code, recorder.Body.String())
@@ -91,14 +91,16 @@ func TestHealthOnlyFailsOnChecksThatGovernTheStatus(t *testing.T) {
 	if got := report.Checks["governing"]; got.Status != "ok" || !got.GovernsStatus {
 		t.Fatalf("governing check = %#v, want a passing check that governs the status", got)
 	}
+	if got := report.Checks[databaseWritableCheck]; got.Status != "ok" || !got.GovernsStatus {
+		t.Fatalf("%s check = %#v, want the default check still reported alongside the added ones", databaseWritableCheck, got)
+	}
 }
 
-func TestHealthChecksAreBoundedByTheirOwnTimeout(t *testing.T) {
+func TestHealthChecksAreBoundedByTheEndpointTimeout(t *testing.T) {
 	t.Parallel()
-	app, _, _ := newTestApp(t)
 	var deadlineIn time.Duration
-	app.healthChecks = []HealthCheck{{
-		Name:          "slow",
+	env := newTestEnv(t, HealthCheck{
+		Name:          "deadline_reader",
 		GovernsStatus: true,
 		Probe: func(ctx context.Context) error {
 			deadline, ok := ctx.Deadline()
@@ -108,14 +110,30 @@ func TestHealthChecksAreBoundedByTheirOwnTimeout(t *testing.T) {
 			deadlineIn = time.Until(deadline)
 			return nil
 		},
-	}}
+	})
 
-	recorder, _ := getHealth(t, app)
+	recorder, _ := getHealth(t, env.app)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET /health = %d %q", recorder.Code, recorder.Body.String())
 	}
 	if deadlineIn <= 0 || deadlineIn > healthCheckTimeout {
 		t.Fatalf("health check deadline in %s, want a positive bound no longer than %s", deadlineIn, healthCheckTimeout)
+	}
+}
+
+// A check with no probe reports no fact, so it must fail rather than panic —
+// and when it governs the status, take the endpoint down deliberately.
+func TestHealthCheckWithoutAProbeFails(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t, HealthCheck{Name: "unprobed", GovernsStatus: true})
+
+	recorder, report := getHealth(t, env.app)
+
+	if recorder.Code != http.StatusServiceUnavailable || report.Status != "unhealthy" {
+		t.Fatalf("GET /health with an unprobed governing check = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if got := report.Checks["unprobed"].Status; got != "unhealthy" {
+		t.Fatalf("unprobed check status = %q, want %q", got, "unhealthy")
 	}
 }

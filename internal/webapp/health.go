@@ -4,15 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
 )
 
-// healthCheckTimeout bounds each named check. The whole endpoint stays inside
-// one budget of this length, so no number of checks can outlast the timeout a
-// single inline check had before health became a collection.
+// healthCheckTimeout is the endpoint's whole budget, shared by every check, so
+// no number of checks can outlast the timeout the single inline check had
+// before health became a collection. Checks run in order under that one
+// deadline: a check that hangs spends the budget the later checks would have
+// had, and they fail on the exhausted deadline rather than being skipped. When
+// Slice 4 adds a probe that can actually hang, that is the point to decide on
+// per-check sub-budgets — an equal split would shorten the database check
+// below today's timeout, which the deploy gate should not absorb by accident.
 const healthCheckTimeout = 2 * time.Second
 
 // databaseWritableCheck is the check the Slice 9 deploy gate rides on: a
@@ -59,7 +65,7 @@ func (a *App) health(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, check := range a.healthChecks {
 		result := healthResult{Status: healthOK, GovernsStatus: check.GovernsStatus}
-		if err := a.runHealthCheck(ctx, check); err != nil {
+		if err := check.run(ctx); err != nil {
 			result.Status = healthUnhealthy
 			a.logger.Error("health check failed", "check", check.Name, "error", err)
 			if check.GovernsStatus {
@@ -75,12 +81,13 @@ func (a *App) health(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(report)
 }
 
-// runHealthCheck gives one check its own deadline inside the endpoint's budget,
-// so a check that hangs cannot spend the time the remaining checks need.
-func (a *App) runHealthCheck(ctx context.Context, check HealthCheck) error {
-	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
-	defer cancel()
-	return check.Probe(ctx)
+// run reports the check's state. A check without a probe cannot report a fact
+// about anything, so it reports failure rather than panicking mid-report.
+func (c HealthCheck) run(ctx context.Context) error {
+	if c.Probe == nil {
+		return errors.New("health check has no probe")
+	}
+	return c.Probe(ctx)
 }
 
 // defaultHealthChecks are the checks every App reports. The writable-database
