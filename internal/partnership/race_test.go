@@ -223,3 +223,31 @@ func TestDeletionRacingAnEndingEndsEachPartnershipExactlyOnce(t *testing.T) {
 		t.Fatalf("the former Partner was told %d times that the Partnership ended", endingJobs)
 	}
 }
+
+func TestARequestCancelledAndMadeAgainInTheSameSecondStillSends(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	ctx := context.Background()
+	protectee, _, partnership := firstPartnership(t, service, db, false)
+	command := CoolingOffCommand{PartnershipID: partnership, ProtecteeID: protectee}
+
+	startEnding(t, service, partnership, protectee)
+	if _, err := service.CancelCoolingOff(ctx, command); err != nil {
+		t.Fatalf("CancelCoolingOff: %v", err)
+	}
+	// The clock has not moved. The second request is a separate signal that
+	// owes the Partner their own envelope, so it must not collide with the
+	// first request's.
+	if _, err := service.StartCoolingOff(ctx, command); err != nil {
+		t.Fatalf("a re-request inside the same second: %v", err)
+	}
+
+	requests := countRows(t, db,
+		"SELECT COUNT(*) FROM activity_entries WHERE partnership_id = ? AND action = ?",
+		partnership, ActionCoolingOffStarted)
+	alerts := countRows(t, db,
+		"SELECT COUNT(*) FROM mail_delivery_jobs WHERE message_kind = ?", MessageCoolingOffStarted)
+	if requests != 2 || alerts != 2 {
+		t.Fatalf("requests=%d alerts=%d, want the Partner told about each one", requests, alerts)
+	}
+}
