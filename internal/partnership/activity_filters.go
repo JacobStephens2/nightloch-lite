@@ -58,8 +58,10 @@ var categoryOfAction = map[string]ActivityCategory{
 }
 
 // ActivityCategories is every category a viewer may filter by, in the order a
-// screen should offer them. It is derived from the same table the filter uses,
-// so a category can never be offered that matches nothing by construction.
+// screen should offer them. The order is stated here because no useful one
+// falls out of the action table; that the two agree — every category offered
+// covers actions, and every action's category is offered — is held by a test
+// rather than by construction.
 func ActivityCategories() []ActivityCategory {
 	return []ActivityCategory{
 		CategoryInvitations, CategoryPartnerships, CategoryCoolingOff, CategoryDelivery,

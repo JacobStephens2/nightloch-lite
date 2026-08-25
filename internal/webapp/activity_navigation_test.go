@@ -256,3 +256,89 @@ func TestActivityRendersLabelledTimesAndTypedDetails(t *testing.T) {
 		}
 	}
 }
+
+// TestTheTimerLinkReachesTheRequestOnItsOwnPage follows the link a completed
+// timer offers, from a chronology long enough that the request and the
+// completion cannot share a page. A bare fragment would resolve to nothing
+// here, which is the whole point of the test (S3-18).
+func TestTheTimerLinkReachesTheRequestOnItsOwnPage(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	session, csrf := signIn(t, env, "protectee@example.com")
+	protecteeID := userID(t, env, "protectee@example.com")
+
+	const requestedAt = 1750000000
+	result, err := env.db.Exec(`
+		INSERT INTO activity_entries(protectee_id, action, actor_email, target_email,
+			occurred_at, effective_at, details)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		protecteeID, partnership.ActionCoolingOffStarted, "protectee@example.com",
+		"partner@example.com", requestedAt, requestedAt+72*3600,
+		`{"log_sharing":false,"partner_count":0,"final_partnership":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// More than a page of chronology between the request and the deadline.
+	fillActivity(t, env, protecteeID, partnership.ActivityPageSize+5)
+	if _, err := env.db.Exec(`
+		INSERT INTO activity_entries(protectee_id, action, target_email, occurred_at, details)
+		VALUES (?, ?, ?, ?, ?)`,
+		protecteeID, partnership.ActionPartnershipEndedAfterCoolingOff, "partner@example.com",
+		requestedAt+72*3600, fmt.Sprintf(
+			`{"ended_reason":"cooling_off_completed","requested_by":"protectee@example.com","requested_at":%d,"requested_activity_id":%d,"partner_count":0,"partner_lock_active":false}`,
+			requestedAt, requestID)); err != nil {
+		t.Fatal(err)
+	}
+
+	first := get(t, env, "https://lite.nightloch.app/activity", session, csrf).Body.String()
+	if !strings.Contains(first, "Nightloch ended protectee@example.com’s Partnership") {
+		t.Fatalf("the completion is not on the newest page:\n%s", first)
+	}
+	if contains := entryIDs(first); slicesContain(contains, fmt.Sprint(requestID)) {
+		t.Fatal("the request shares the newest page with the completion, so this proves nothing")
+	}
+
+	marker := `<a href="/activity?after=`
+	start := strings.Index(first, marker)
+	if start < 0 {
+		t.Fatalf("the completion offers no link to the request it carried out:\n%s", first)
+	}
+	rest := first[start+len(`<a href="`):]
+	href := strings.ReplaceAll(rest[:strings.Index(rest, `"`)], "&amp;", "&")
+	if !strings.HasSuffix(href, fmt.Sprintf("#entry-%d", requestID)) {
+		t.Fatalf("the link does not anchor on the request: %q", href)
+	}
+
+	// A browser keeps the fragment to itself and sends only the path and
+	// query, so the test asks for exactly what the server would receive.
+	path, _, _ := strings.Cut(href, "#")
+	landing := get(t, env, "https://lite.nightloch.app"+path, session, csrf)
+	if landing.Code != http.StatusOK {
+		t.Fatalf("following the link = %d", landing.Code)
+	}
+	ids := entryIDs(landing.Body.String())
+	if len(ids) == 0 || ids[0] != fmt.Sprint(requestID) {
+		t.Fatalf("the link opened on %v, want the request %d at the top", ids, requestID)
+	}
+	if !strings.Contains(landing.Body.String(), "requested to end their Partnership with partner@example.com after Cooling-off.") {
+		t.Fatalf("the request is not on the page its own link opened:\n%s", landing.Body.String())
+	}
+	// A viewer several pages deep is given a way back rather than left to
+	// browser history.
+	if !strings.Contains(landing.Body.String(), "Back to the newest entries") {
+		t.Fatalf("a later page offers no way back to the newest:\n%s", landing.Body.String())
+	}
+}
+
+func slicesContain(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

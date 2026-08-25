@@ -38,6 +38,10 @@ type activityData struct {
 	OlderURL string
 	// ClearURL drops every filter without leaving the chronology.
 	ClearURL string
+	// NewestURL returns to the first page, which is the only way back for a
+	// viewer several pages deep who would otherwise depend on browser history.
+	// It is empty on the first page, where it would say nothing.
+	NewestURL string
 	// FilterError says a submitted filter could not be applied, shown above
 	// the unfiltered page it fell back to. A filter Nightloch cannot honour is
 	// never answered with an empty list, which would read as a claim that
@@ -126,9 +130,13 @@ func activityURL(basePath string, values url.Values, after partnership.ActivityC
 func (a *App) renderActivity(w http.ResponseWriter, r *http.Request, user githubauth.User, protecteeID int64, basePath string) {
 	values := r.URL.Query()
 	query, queryErr := activityQuery(values)
-	view, err := a.partnerships.Activity(r.Context(), protecteeID, user.ID, query)
-	if queryErr == nil && errors.Is(err, partnership.ErrActivityFilterInvalid) {
-		queryErr = err
+	var view partnership.ActivityView
+	var err error
+	if queryErr == nil {
+		view, err = a.partnerships.Activity(r.Context(), protecteeID, user.ID, query)
+		if errors.Is(err, partnership.ErrActivityFilterInvalid) {
+			queryErr = err
+		}
 	}
 	if queryErr != nil {
 		// Authorization is the module's answer and outranks the filter: a
@@ -161,6 +169,9 @@ func (a *App) renderActivity(w http.ResponseWriter, r *http.Request, user github
 	}
 	if view.More() {
 		data.OlderURL = activityURL(basePath, values, view.NextPage)
+	}
+	if values.Get("after") != "" {
+		data.NewestURL = activityURL(basePath, values, partnership.ActivityCursor{})
 	}
 	a.render(w, r, http.StatusOK, "activity", data)
 }
