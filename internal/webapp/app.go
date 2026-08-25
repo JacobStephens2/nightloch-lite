@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
-	"github.com/JacobStephens2/nightloch-lite/internal/database"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
@@ -45,8 +43,12 @@ type Options struct {
 	// Without it Nightloch could only guess at Partner reachability from its
 	// own send attempts, so it is required rather than optional.
 	DeliveryWebhookSecret string
-	TurnstileSite         string
-	Version               string
+	// HealthChecks are reported by /health alongside the writable-database
+	// check every App reports. Each one declares for itself whether it can
+	// fail the endpoint.
+	HealthChecks  []HealthCheck
+	TurnstileSite string
+	Version       string
 }
 
 // App is an http.Handler with explicit dependencies for integration testing.
@@ -58,6 +60,7 @@ type App struct {
 	deliveryVerifier mailmessage.WebhookVerifier
 	turnstileSite    string
 	version          string
+	healthChecks     []HealthCheck
 	now              func() time.Time
 	random           io.Reader
 	templates        map[string]*template.Template
@@ -84,6 +87,7 @@ func New(options Options) (*App, error) {
 		deliveryVerifier: mailmessage.WebhookVerifier{Secret: options.DeliveryWebhookSecret},
 		turnstileSite:    options.TurnstileSite,
 		version:          options.Version,
+		healthChecks:     append(defaultHealthChecks(options.DB), options.HealthChecks...),
 		now:              time.Now,
 		random:           rand.Reader,
 		templates:        templates,
@@ -391,21 +395,6 @@ func (a *App) clearSessionCookie(w http.ResponseWriter) {
 		Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1,
 		Expires: time.Unix(1, 0), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
-}
-
-func (a *App) health(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	status := http.StatusOK
-	payload := map[string]string{"status": "ok", "version": a.version}
-	if err := database.Writable(ctx, a.db); err != nil {
-		status = http.StatusServiceUnavailable
-		payload["status"] = "unhealthy"
-		a.logger.Error("database health check failed", "error", err)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (a *App) styles(w http.ResponseWriter, _ *http.Request) {
