@@ -57,6 +57,11 @@ func run(args []string) error {
 			return errors.New("usage: nightloch mint-device PROTECTEE-EMAIL DEVICE-NAME")
 		}
 		return runMintDevice(args[1], args[2])
+	case "remove-device":
+		if len(args) != 3 {
+			return errors.New("usage: nightloch remove-device PROTECTEE-EMAIL DEVICE-NAME")
+		}
+		return runRemoveDevice(args[1], args[2])
 	case "devices":
 		if len(args) != 1 {
 			return errors.New("usage: nightloch devices")
@@ -79,6 +84,7 @@ const usage = `usage: nightloch serve
        nightloch migrate
        nightloch backup DESTINATION
        nightloch mint-device PROTECTEE-EMAIL DEVICE-NAME
+       nightloch remove-device PROTECTEE-EMAIL DEVICE-NAME
        nightloch devices
        nightloch version`
 
@@ -188,6 +194,40 @@ func runMintDevice(protecteeEmail, deviceName string) error {
 	return nil
 }
 
+// runRemoveDevice removes one Device: the record ends and the tunnel peer is
+// withdrawn. The Device's tunnel address is not returned to the pool — it is
+// held in quarantine for longer than the query log retains anything, so a
+// later Device given the same address can never resolve to this Protectee's
+// retained queries. The command says when that is, because an Operator who
+// removes a Device to free an address needs to know they have not.
+func runRemoveDevice(protecteeEmail, deviceName string) error {
+	service, db, err := openEnforcement()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	removed, err := service.RemoveDevice(ctx, enforcement.RemoveCommand{
+		ProtecteeEmail: protecteeEmail, DeviceName: deviceName,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("removed Device %q for %s; its tunnel peer is withdrawn\n",
+		removed.Device.Name, protecteeEmail)
+	fmt.Printf("%s stays out of the address pool until %s, which outlasts the query log\n",
+		removed.Device.Address, removed.ReusableAt.Format(time.RFC3339))
+	// The Protectee's phone still holds a configuration that will no longer
+	// connect, and a full tunnel that cannot connect is a Device with no
+	// internet rather than one with no protection.
+	fmt.Println("tell the Protectee to delete the tunnel from their Device: it will not")
+	fmt.Println("connect again, and leaving it switched on takes the Device offline.")
+	return nil
+}
+
 // runDevices lists every Device with what the tunnel says about it. A tunnel
 // this command cannot read is an error rather than an empty list: "no Devices
 // are connected" and "nothing is known" are different answers.
@@ -220,6 +260,13 @@ func runDevices() error {
 	// show, and the half an Operator most needs to see.
 	for _, peer := range membership.UnaccountedPeers {
 		fmt.Printf("%s\t(no Device record)\tUNACCOUNTED PEER %s\n", peer.AllowedIPs, peer.PublicKey)
+	}
+	// Quarantined addresses are neither Devices nor free addresses, and an
+	// Operator who cannot see them cannot tell an exhausted pool they should
+	// wait out from one they should remove a Device from.
+	for _, held := range membership.Quarantined {
+		fmt.Printf("%s\t(removed Device)\tQUARANTINED until %s\n",
+			held.Address, held.ReusableAt.Format(time.RFC3339))
 	}
 	return nil
 }
