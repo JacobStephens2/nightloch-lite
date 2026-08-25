@@ -19,7 +19,7 @@
 | 1 | User-initiated partner edge end? | **Yes, with 72-hour cooling-off.** Partner-initiated end is **immediate**. |
 | 2 | Notify existing partners on new partner? See who else protects the Protectee? | **Yes** — email all Partners on the Protectee’s **Roster** on invite **sent** and **accepted**. They **see the Roster** (who protects the Protectee, since when); they **cannot** edit others’ Partnerships. |
 | 3 | Zero partners — can user loosen? | **Yes.** Self-loosen allowed when the protectee has **no active partner edges**. Restraint teeth come from cooling-off when leaving a partnered state, not permanent self-lock. |
-| 4 | User account deletion? | **Yes, via 72h cooling-off.** Send separate notices to related parties. Immediately end Partnerships in which the deleting User is the Partner, cancel all pending invitations involving them, and prohibit new sends or acceptances; canceling deletion restores none of these. Ordinary rules continue for the deleting User’s own Policy, Devices, and Log sharing, and only that User may cancel the fixed timer. Partnerships protecting the deleting User and their Partners’ powers remain active through Cooling-off. Final teardown is transactional: revoke all Devices from `wg0` + AGH, quarantine IPs, end remaining Partnerships with notice, then delete the User. |
+| 4 | User account deletion? | **Yes, via 72h cooling-off.** Send separate notices to related parties. Immediately end Partnerships in which the deleting User is the Partner, cancel all pending invitations involving them, and prohibit new sends or acceptances; canceling deletion restores none of these. Ordinary rules continue for the deleting User’s own Policy, Devices, and Log sharing, and only that User may cancel the fixed timer. Partnerships protecting the deleting User and their Partners’ powers remain active through Cooling-off. Final teardown is transactional: remove every Device from `wg0` + AGH, quarantine each tunnel address, end remaining Partnerships with notice, then delete the User. Removal quarantines the address rather than freeing it, and the User row must survive so those quarantines do. |
 | 5 | User revoke own device? | **All protectee-initiated device revokes are immediate** (including the last device). Stolen/lost phone must not wait 72h. Perimeter signal: **action alert + coverage → 0%** on next report ([R4](../reviews/slice-neg-1-review.md#r4)). |
 | 6 | Device enrollment gated? | **Yes for v1.** Operator allowlist (e.g. env `ENROLL_ALLOWLIST` emails). Signup and partner-accept stay open. Unauthorized: “Device enrollment is invite-only during beta.” **v2 follow-up:** `enrollment_allowed` on user row (UI toggle) so adding a user is not a deploy/restart ([R9](../reviews/slice-neg-1-review.md#r9)). |
 
@@ -263,7 +263,7 @@ Starting deletion requires typing `DELETE` after the UI names immediate and dela
 
 1. Enter Cooling-off; immediately end Partnerships in which the deleting User is the Partner, cancel every pending invitation involving them, prohibit new invitation sends or acceptances, and notify all related parties  
 2. Keep Partnerships protecting the deleting User active until expiry; canceling deletion does not restore already-ended Partnerships  
-3. On fire: revoke every Device (`wg` + AGH client); quarantine each IP  
+3. On fire: remove every Device (`wg` + AGH client); each tunnel address goes into quarantine  
 4. End remaining Partnerships; notify  
 5. Delete sessions/tokens; delete User row (or soft-delete)  
 6. Retain only pseudonymized former-Partner receipts; delete or pseudonymize other mappings as required  
@@ -322,7 +322,7 @@ Starting deletion requires typing `DELETE` after the UI names immediate and dela
 - Retention **explicitly 7 days** in AGH config  
 - App re-filters every row by **exact** client IP  
 - Bound by device `created_at`  
-- IP **quarantine** ≥ retention + 1 day before reuse  
+- IP **quarantine** ≥ retention + 1 day before reuse — derived from the removal instant, never stored ([ADR 0005](./adr/0005-derive-tunnel-address-quarantine-from-the-removal-instant.md))  
 
 ### Threat note
 

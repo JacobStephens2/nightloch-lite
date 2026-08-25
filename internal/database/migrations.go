@@ -10,6 +10,7 @@ const (
 	deliveryEventMigration = 4
 	userDeletionMigration  = 5
 	deviceMigration        = 6
+	deviceRemovalMigration = 7
 )
 
 var migrations = []string{
@@ -234,4 +235,56 @@ var migrations = []string{
 	CREATE UNIQUE INDEX devices_address_idx ON devices(address);
 	CREATE UNIQUE INDEX devices_public_key_idx ON devices(public_key);
 	CREATE UNIQUE INDEX devices_name_idx ON devices(protectee_id, name);`,
+	// Removing a Device ends its record and puts its tunnel address into
+	// quarantine. The row survives the ending because the address is the
+	// security principal AdGuard Home keys client rules and the query log on:
+	// handing it to a new occupant while the previous occupant's queries are
+	// still retained would disclose one Protectee's browsing to another
+	// (docs/adr/0005-derive-tunnel-address-quarantine-from-the-removal-instant.md).
+	//
+	// removed_at is the only thing recorded, and the whole quarantine window
+	// is derived from it and the retention in force. A second column holding
+	// the expiry would be a second source of truth, free to drift from the
+	// retention it is supposed to outlast.
+	//
+	// The table is rebuilt rather than altered because that row now carries a
+	// safety property, which changes what its foreign key has to do. Under
+	// ON DELETE CASCADE, deleting a users row would take every quarantine that
+	// Protectee's Devices were holding with it and return their addresses to
+	// the pool silently — the exact disclosure quarantine exists to prevent,
+	// arriving through the one path nobody would think to check. RESTRICT
+	// makes that a loud failure instead. Nothing in Nightloch hard-deletes a
+	// User (migration 5: the row survives, the identity on it does not), so
+	// the restriction costs nothing today and refuses to be quietly broken by
+	// the account-deletion teardown later.
+	`CREATE TABLE devices_quarantinable (
+		id INTEGER PRIMARY KEY,
+		protectee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+		name TEXT NOT NULL COLLATE NOCASE CHECK(length(trim(name)) > 0),
+		public_key TEXT NOT NULL CHECK(length(public_key) = 44 AND public_key LIKE '%='),
+		address TEXT NOT NULL CHECK(
+			address LIKE '10.66.0.%'
+			AND address NOT LIKE '%/%'
+			AND CAST(substr(address, 9) AS INTEGER) BETWEEN 2 AND 254
+			AND substr(address, 9) = CAST(CAST(substr(address, 9) AS INTEGER) AS TEXT)
+		),
+		created_at INTEGER NOT NULL,
+		-- A record cannot end before it began: an removed_at ahead of
+		-- created_at would derive a quarantine window from an instant that
+		-- never happened.
+		removed_at INTEGER CHECK(removed_at IS NULL OR removed_at >= created_at)
+	);
+	INSERT INTO devices_quarantinable(id, protectee_id, name, public_key, address, created_at)
+		SELECT id, protectee_id, name, public_key, address, created_at FROM devices;
+	DROP TABLE devices;
+	ALTER TABLE devices_quarantinable RENAME TO devices;
+	-- Uniqueness now speaks about live Devices. A Protectee may name a
+	-- replacement phone after the one it replaces on the same day, and an
+	-- address may be allocated again once its window has passed, so neither
+	-- constraint may be read against rows whose record has ended. A public key
+	-- stays unique across every row there has ever been: a withdrawn Device's
+	-- key is never reissued.
+	CREATE UNIQUE INDEX devices_address_idx ON devices(address) WHERE removed_at IS NULL;
+	CREATE UNIQUE INDEX devices_public_key_idx ON devices(public_key);
+	CREATE UNIQUE INDEX devices_name_idx ON devices(protectee_id, name) WHERE removed_at IS NULL;`,
 }
