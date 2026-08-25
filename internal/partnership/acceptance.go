@@ -404,9 +404,11 @@ func (s *Service) CanViewLogs(ctx context.Context, actorID, protecteeID int64) (
 }
 
 // roster is the Protectee's active Roster, identical for every entitled
-// viewer. Reachability reads the newest job with an actual outcome and skips
-// queued ones: having more to say to an address is not evidence that anything
-// reached it, so a fresh alert must not quiet a standing warning.
+// viewer. Reachability reads the newest job the provider has actually reported
+// on, and skips both queued jobs and merely accepted ones: having more to say
+// to an address, and a provider agreeing to carry it, are both short of
+// evidence that anything reached the mailbox, so neither may quiet a standing
+// warning. Only a reported delivery clears one.
 // Reciprocal state and reachability are derived here rather than by
 // the caller, so the Protectee and each of their Partners cannot disagree
 // about the same row. Reachability follows the address rather than this one
@@ -420,14 +422,14 @@ func (s *Service) roster(ctx context.Context, protecteeID int64) ([]RosterEntry,
 		       `+reciprocalOfPartnership+`, `+partnersAfterDeadlineProjection+`,
 		       COALESCE((SELECT job.state FROM mail_delivery_jobs job
 		                  WHERE job.recipient_email = users.email
-		                    AND job.state <> ?
+		                    AND job.state NOT IN (?, ?)
 		                  ORDER BY COALESCE(job.last_event_at, job.sent_at, job.created_at) DESC,
 		                           job.id DESC
 		                  LIMIT 1), ?)
 		FROM partnerships JOIN users ON users.id = partnerships.partner_id
 		WHERE partnerships.protectee_id = ? AND partnerships.ended_at IS NULL
 		ORDER BY partnerships.accepted_at, partnerships.id`,
-		DeliveryQueued, DeliveryQueued, protecteeID)
+		DeliveryQueued, DeliverySent, DeliveryQueued, protecteeID)
 	if err != nil {
 		return nil, fmt.Errorf("read Roster: %w", err)
 	}
