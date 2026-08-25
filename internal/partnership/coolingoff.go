@@ -314,7 +314,12 @@ func (s *Service) queueCoolingOffMessages(ctx context.Context, tx *sql.Tx, messa
 			recipients = append(recipients, email)
 		}
 	}
-	scope := partnershipScope(messages.partnership.id, messages.at)
+	// The scope is this event's own Activity entry rather than the instant it
+	// happened. A Protectee may request an ending, cancel it, and request it
+	// again inside one second, and those are two separate signals that owe
+	// the same Partner two envelopes; keyed on the instant they would collide
+	// and the second request would fail rather than send.
+	scope := activityScope(messages.activityID)
 	for sequence, recipient := range recipients {
 		message := messages.render(recipient)
 		message.IdempotencyKey = idempotencyKey(message.Kind, message.To, scope, sequence+1)
@@ -506,7 +511,11 @@ func (s *Service) announceFinalCoolingOff(ctx context.Context, tx *sql.Tx,
 		EndsAt:            final.coolingOffEndsAt,
 		DashboardURL:      s.dashboardURL(),
 	}
-	scope := partnershipScope(final.id, at)
+	// Keyed on this transition's own Activity entry for the same reason the
+	// request and cancellation signals are: a Roster change can make the same
+	// Partnership final more than once, and two announcements in one second
+	// must not collide on one key.
+	scope := activityScope(activityID)
 	for sequence, recipient := range []string{final.protecteeEmail, final.partnerEmail} {
 		envelope := renderCoolingOffBecameFinal(message, recipient)
 		envelope.IdempotencyKey = idempotencyKey(envelope.Kind, envelope.To, scope, sequence+1)

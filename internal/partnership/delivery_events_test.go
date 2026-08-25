@@ -556,3 +556,64 @@ func TestUndeterminedBounceIsTerminalRatherThanDelayed(t *testing.T) {
 		t.Fatalf("undetermined bounce reads as %q", got.Label())
 	}
 }
+
+// A provider accepting the next message says nothing about the mailbox that
+// rejected the last one. Only a reported delivery is a recovery, so an
+// unreachable Partner stays unreachable through every send in between (S3-47).
+func TestASentMessageDoesNotClearAnUnreachablePartner(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	ctx := context.Background()
+	protectee, _, partnership := firstPartnership(t, service, db, false)
+
+	sender := &mailmessage.RecordingSender{}
+	if _, err := service.DispatchDue(ctx, sender, 20); err != nil {
+		t.Fatal(err)
+	}
+	bounced := providerMessageIDFor(t, db, "partner@example.com")
+	if err := service.RecordDeliveryEvent(ctx, DeliveryEvent{
+		ProviderEventID: "evt-bounce", ProviderMessageID: bounced,
+		Type: EventBounced, Permanent: true, OccurredAt: testClock.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityUnreachable {
+		t.Fatalf("the bounce did not render: %v", row.Reachability)
+	}
+
+	// A later alert is queued and the provider accepts it. Nothing has reached
+	// the mailbox, so the warning must still stand.
+	at(service, testClock.Add(time.Hour))
+	invite(t, service, protectee, "another@example.com", false)
+	if _, err := service.DispatchDue(ctx, sender, 20); err != nil {
+		t.Fatal(err)
+	}
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityUnreachable {
+		t.Fatalf("provider acceptance quieted a standing warning: %v", row.Reachability)
+	}
+
+	// The provider reporting an actual delivery is the recovery.
+	delivered := providerMessageIDFor(t, db, "partner@example.com")
+	if err := service.RecordDeliveryEvent(ctx, DeliveryEvent{
+		ProviderEventID: "evt-delivered", ProviderMessageID: delivered,
+		Type: EventDelivered, OccurredAt: testClock.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if row := rosterRow(t, service, protectee, partnership); row.Reachability != ReachabilityOK {
+		t.Fatalf("a reported delivery did not clear the warning: %v", row.Reachability)
+	}
+}
+
+// providerMessageIDFor is the newest message the provider accepted for one
+// recipient, which is what a delivery callback names.
+func providerMessageIDFor(t *testing.T, db *sql.DB, recipient string) string {
+	t.Helper()
+	var id string
+	if err := db.QueryRow(`SELECT COALESCE(provider_message_id, '') FROM mail_delivery_jobs
+		WHERE recipient_email = ? AND provider_message_id IS NOT NULL
+		ORDER BY id DESC LIMIT 1`, recipient).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
