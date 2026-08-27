@@ -302,10 +302,24 @@ func runServe() error {
 		settings.BaseURL,
 	)
 	partnerships := partnership.NewService(db, settings.BaseURL)
+
+	// The serving process reports the enforcement plane rather than acting on
+	// it: it reads the same root helper Devices are minted through and AdGuard
+	// Home's administration endpoint, and changes neither. Neither fact
+	// governs /health's status — the Slice 9 deploy gate may only fail on what
+	// a new binary can have broken — so a resolver that is refusing to answer
+	// here is loud in the payload and rolls nothing back.
+	resolver, err := enforcement.NewAdGuardHome(settings.Resolver)
+	if err != nil {
+		return err
+	}
+	plane := enforcement.NewPlane(&enforcement.HelperTunnel{}, resolver)
+
 	app, err := webapp.New(webapp.Options{
 		Auth: authService, DB: db, Logger: logger, Partnerships: partnerships,
 		TurnstileSite: settings.TurnstileSite, Version: version,
 		DeliveryWebhookSecret: settings.ResendWebhookSecret,
+		HealthChecks:          webapp.EnforcementHealthChecks(plane),
 	})
 	if err != nil {
 		return err
