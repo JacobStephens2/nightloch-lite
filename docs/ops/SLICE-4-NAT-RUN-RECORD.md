@@ -9,9 +9,10 @@ The Slice 1 droplet now exists at `134.209.165.82`. The host-side portion of the
 run completed on **2026-08-30**: the Operator confirmed the out-of-band DigitalOcean
 Recovery Console, approved and personally ran activation, and the host posture survived an
 unattended reboot.
-There is not yet a Device, so the three checks that can only be answered from a Device
-remain blocked rather than inferred from the host.  Issue #41's Resolver posture is now
-live and its observations are recorded in
+There is now one live macOS Device at `10.66.0.2`.  Its tunnel-on, tunnel-off, forced-DNS,
+and unattended-reboot observations are recorded below.  Android strict Private DNS and a
+dual-stack IPv6 path remain unobserved rather than inferred from this Mac.  Issue #41's
+Resolver posture is live and its observations are recorded in
 [SLICE-4-RESOLVER-RUN-RECORD.md](./SLICE-4-RESOLVER-RUN-RECORD.md).
 
 ## Done
@@ -78,16 +79,46 @@ live and its observations are recorded in
       the verifier passed, HTTPS served, and off-host port 53 still gave no answer. This did
       not satisfy the separate checklist drill that requires a Device on the tunnel.
 
-## Not done - blocked on a live Device
+## Live Device run - macOS
 
-`wg show wg0 peers` still returns no peers. AdGuard Home now listens on `10.66.0.1:53`,
-but these checks need an enrolled Device; the host cannot answer them honestly. Carry the
-Device-only observations into issue #42.
+- [x] The official WireGuard macOS app imported a newly minted Device at `10.66.0.2`.
+      macOS reported the tunnel's `OnDemandEnabled` value as `FALSE`, preserving the
+      documented manual recovery path.
+- [x] Before activation, the OISD sample `ss.0001.xyz` resolved publicly. With the tunnel
+      active, IPv4 exited through `134.209.165.82`, ordinary HTTPS browsing worked, the
+      sample returned `0.0.0.0` through both the ordinary resolver and an explicit
+      `dig @8.8.8.8`, and `use-application-dns.net` returned `NXDOMAIN` through that same
+      explicit public-resolver address.
+- [x] Tailscale remained connected during the drill. Its DNS acceptance initially outranked
+      WireGuard's resolver, so an ordinary lookup escaped through `100.100.100.100` even
+      though the explicit `8.8.8.8` lookup was redirected correctly. Setting Tailscale's
+      `accept-dns` preference to false removed that resolver while leaving Tailscale
+      connected; three repeated ordinary lookups and the macOS native lookup then returned
+      `0.0.0.0`.
+- [x] Deactivating the tunnel restored the Mac's original exit route, the sample's public
+      answer, and ordinary HTTPS browsing. Reactivating it restored the Nightloch exit and
+      blocked answer. The Mac was left connected.
+- [x] The droplet reboot began at 23:43:34 UTC with the Device on the tunnel. The Mac saw a
+      real connectivity outage and stayed logically connected rather than falling open.
+      On the new boot, `wg-quick@wg0`, `nightloch-nat`, and `AdGuardHome` returned without an
+      interactive command, and the Device had a fresh handshake when read back.
+- [x] AdGuard Home did not bind `10.66.0.1:53` until about 20 seconds after its service
+      started because its startup PTR lookup timed out. During that interval a new HTTPS
+      name could not resolve; after the listener appeared, HTTPS browsing, ordinary DNS,
+      forced DNS to `8.8.8.8`, and the Firefox canary all passed. A second untouched host
+      verification reported every named fact as `PASS`.
 
-- [ ] Reboot the droplet with a Device on the tunnel; verify that the Device reconnects and
-      browsing works.
-- [ ] From a Device, DNS aimed at `8.8.8.8` is redirected to the Resolver and blocked.
+This macOS run satisfies the NAT checklist's Device-on-tunnel reboot and public-resolver
+redirect steps. It does not satisfy issue #42's narrower phone-reboot criterion.
+
+## Remaining Device-only observation
+
 - [ ] From a Device, strict Private DNS fails visibly rather than hanging.
+
+That last step requires Android's hostname-mode **Private DNS** control. This Mac cannot
+answer it. The current Mac network also had no public IPv6 before activation, so it cannot
+stand in for issue #42's separate dual-stack IPv6 drill. Carry both observations into
+issue #42 without checking them off.
 
 ## What an agent may do next without approval
 
