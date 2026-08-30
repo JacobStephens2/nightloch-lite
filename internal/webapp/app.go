@@ -139,6 +139,10 @@ func New(options Options) (*App, error) {
 	// what authorizes them, so they bypass the CSRF check by path (see
 	// verifyCSRF) rather than by having a token to present.
 	mux.HandleFunc("POST "+deliveryWebhookPath, app.deliveryWebhook)
+	// The Device enroll screen ships its copy before Slice 5 ships the action,
+	// so it is a GET with no counterpart: it changes nothing and offers
+	// nothing to submit.
+	mux.HandleFunc("GET /devices/enroll", app.deviceEnroll)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
