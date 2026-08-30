@@ -552,6 +552,20 @@ func TestResolverVerifierReportsEveryNamedFactOnAHealthyHost(t *testing.T) {
 	)
 }
 
+func TestResolverVerifierAcceptsAdGuardDurationNormalization(t *testing.T) {
+	env := installedHealthyResolver(t)
+	path := "etc/AdGuardHome/AdGuardHome.yaml"
+	config := strings.Replace(env.installed(path), "interval: 168h", "interval: 7d", 1)
+	env.writeRootFile(path, config, 0o600)
+
+	run := env.runWith(resolverVerifyPath, healthyResolverVerifyEnvironment())
+
+	if run.exitCode != 0 {
+		t.Fatalf("verify: exit = %d, stdout = %q, stderr = %q", run.exitCode, run.stdout, run.stderr)
+	}
+	requireContains(t, "the Resolver verifier's report", run.stdout, "PASS query_log_retention")
+}
+
 func TestResolverVerifierFailsEachBrokenAcceptanceFactByName(t *testing.T) {
 	tests := []struct {
 		name     string
