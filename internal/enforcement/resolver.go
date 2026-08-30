@@ -40,6 +40,25 @@ type ResolverStatus struct {
 	FilteringEnabled  bool
 }
 
+// Enforcing reports whether this state filters a Device's DNS, and names every
+// setting that is off when it does not. It sits on the state rather than on
+// the reader so the list of settings is stated once, next to the fields it
+// reads: a fourth fact added above would otherwise be reportable and still
+// silently absent from the answer.
+func (s ResolverStatus) Enforcing() (bool, []string) {
+	var off []string
+	if !s.Running {
+		off = append(off, "not running")
+	}
+	if !s.ProtectionEnabled {
+		off = append(off, "protection off")
+	}
+	if !s.FilteringEnabled {
+		off = append(off, "filtering off")
+	}
+	return len(off) == 0, off
+}
+
 // The two ways the resolver fails, kept distinct for the same reason the
 // tunnel's three are: a resolver Nightloch cannot reach is an unknown, and a
 // resolver that answers while enforcing nothing is a Protectee browsing
@@ -56,7 +75,7 @@ var (
 // ResolverSettings is the deployment's AdGuard Home administration endpoint.
 // Nightloch holds AdGuard Home's admin credentials rather than a scoped token,
 // because AdGuard Home issues no scoped tokens (docs/SECURITY-POLICY-DESIGN.md
-// §7), which is why they may not be sent in the clear.
+// §4), which is why they may not be sent in the clear.
 type ResolverSettings struct {
 	// BaseURL is the administration origin. In the deployment this is the
 	// loopback address Caddy also proxies behind basic auth; the app talks to

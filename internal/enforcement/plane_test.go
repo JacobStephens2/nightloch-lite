@@ -10,7 +10,7 @@ import (
 func TestPlaneReportsTheTunnelUpWhenTheHelperAnswers(t *testing.T) {
 	t.Parallel()
 	tunnel := &RecordingTunnel{}
-	plane := NewPlane(tunnel, &RecordingResolver{Reported: enforcingResolver})
+	plane := NewPlane(tunnel, EnforcingResolver())
 
 	if err := plane.TunnelUp(context.Background()); err != nil {
 		t.Fatalf("TunnelUp with a readable tunnel: %v", err)
@@ -26,7 +26,7 @@ func TestPlaneReportsTheTunnelUpWhenTheHelperAnswers(t *testing.T) {
 func TestPlaneReportsTheTunnelDownForEveryUnreadableTunnel(t *testing.T) {
 	t.Parallel()
 	for _, cause := range []error{ErrTunnelUnavailable, ErrHelperMissing, ErrHelperRefused} {
-		plane := NewPlane(&RecordingTunnel{PeersError: cause}, &RecordingResolver{Reported: enforcingResolver})
+		plane := NewPlane(&RecordingTunnel{PeersError: cause}, EnforcingResolver())
 		err := plane.TunnelUp(context.Background())
 		if !errors.Is(err, cause) {
 			t.Fatalf("TunnelUp with %v = %v, want an error carrying the cause", cause, err)
@@ -36,7 +36,7 @@ func TestPlaneReportsTheTunnelDownForEveryUnreadableTunnel(t *testing.T) {
 
 func TestPlaneReportsTheResolverEnforcingWhenItIsReachableAndFiltering(t *testing.T) {
 	t.Parallel()
-	resolver := &RecordingResolver{Reported: enforcingResolver}
+	resolver := EnforcingResolver()
 	plane := NewPlane(&RecordingTunnel{}, resolver)
 
 	if err := plane.ResolverEnforcing(context.Background()); err != nil {
