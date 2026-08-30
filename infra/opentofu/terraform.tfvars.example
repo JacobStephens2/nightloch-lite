@@ -1,7 +1,8 @@
 # Copy to terraform.tfvars (gitignored) and fill in.
 #   cp terraform.tfvars.example terraform.tfvars
 
-# Required: path to your SSH public key
+# Required: path to an SSH public key already registered on the DigitalOcean
+# account. The droplet reuses that key; this stack never owns or deletes it.
 ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 
 # Required: Cloudflare zone ID for nightloch.app (Dashboard → domain → Overview)

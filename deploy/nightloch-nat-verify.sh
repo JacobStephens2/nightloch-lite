@@ -160,6 +160,7 @@ check_listeners() {
 		esac
 		case "$local_address" in
 		"$host_address:53") on_tunnel="yes" ;;
+		127.*:53) ;;
 		*) exposed="$exposed $local_address" ;;
 		esac
 	done
