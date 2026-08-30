@@ -89,12 +89,26 @@ After DNS readiness, both complete verifier suites passed, ordinary DNS
 resolved, public DNS still gave no answer, the Resolver route still returned
 `401`, and the staging origin still returned `200`.
 
+## Device-minting preparation
+
+After the Resolver verification, the already-reviewed `nightloch-wg` helper
+and its exact-path sudoers grant were installed.  `visudo` accepted the grant,
+an invocation as the unprivileged `nightloch` User returned the empty tunnel
+membership successfully, and the helper remains `0755 root:root` with the
+grant `0440 root:root`.
+
+The public tunnel endpoint, port, and `wg0` public key were added to the
+root-owned environment without reading or printing the Resolver password.  An
+empty database was migrated at `/opt/nightloch/data/nightloch.db` with mode
+`0600 nightloch:nightloch`.  It contains zero Users, and `wg0` still contains
+zero Device peers.
+
 ## Still blocked on a real Device
 
-The host has no `nightloch-wg` helper, application database/service, User, or
-WireGuard Device peer.  Consequently this run does **not** claim any Device
-criterion from issue #42.  The following still require a real phone and
-dual-stack Mac on the tunnel:
+The application service and its mail/challenge secrets are not deployed, so
+there is no registered User for the Operator CLI to mint a Device for.
+Consequently this run does **not** claim any Device criterion from issue #42.
+The following still require a real phone and dual-stack Mac on the tunnel:
 
 - tunnel-on/tunnel-off blocking and ordinary browsing;
 - recovery observed from a connected phone during a droplet reboot;

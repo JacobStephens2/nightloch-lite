@@ -50,9 +50,11 @@ live and its observations are recorded in
 - [x] `stage` installed the posture and generated the interface key without enabling a
       unit, loading a rule, or changing forwarding. `/etc/wireguard/wg0.conf` was
       `0600 root:root`; the only other key artifact was the public `wg0.pub`.
-- [ ] Put `TUNNEL_PUBLIC_KEY` in `/etc/nightloch/nightloch.env` and restart
-      `nightloch.service`. Neither the environment file nor the unit exists on this host
-      yet; Slice 2/9 must install them before any Device is minted.
+- [x] Put `TUNNEL_PUBLIC_KEY` and the published endpoint in
+      `/etc/nightloch/nightloch.env`. The value was read from the live interface and only
+      the public half was stored.
+- [ ] Restart `nightloch.service` after the service and its remaining mail/challenge
+      secrets are deployed. The unit still does not exist, so no restart is claimed.
 - [x] A live verifier defect was reproduced before activation: Ubuntu 24.04's
       loopback-only `systemd-resolved` listeners (`127.0.0.53%lo:53` and
       `127.0.0.54:53`) were mislabeled public. A regression test now carries the real
