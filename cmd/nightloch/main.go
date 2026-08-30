@@ -67,6 +67,12 @@ func run(args []string) error {
 			return errors.New("usage: nightloch devices")
 		}
 		return runDevices()
+	case "resolver-query-log-retention":
+		if len(args) != 1 {
+			return errors.New("usage: nightloch resolver-query-log-retention")
+		}
+		fmt.Println(enforcement.ResolverQueryLogRetention())
+		return nil
 	case "serve":
 		if len(args) > 1 {
 			return errors.New("usage: nightloch serve")
@@ -86,6 +92,7 @@ const usage = `usage: nightloch serve
        nightloch mint-device PROTECTEE-EMAIL DEVICE-NAME
        nightloch remove-device PROTECTEE-EMAIL DEVICE-NAME
        nightloch devices
+       nightloch resolver-query-log-retention
        nightloch version`
 
 func runBackup(destination string) error {
