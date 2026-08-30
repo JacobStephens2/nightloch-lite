@@ -1,0 +1,24 @@
+[Unit]
+Description=Nightloch tunnel NAT and DNS posture
+Documentation=https://github.com/JacobStephens2/nightloch-lite/blob/main/docs/ops/NAT-CHECKLIST.md
+# ufw reapplies its own tables when it starts. This posture lives in a table of
+# its own, so the two do not conflict, but ordering after ufw keeps them from
+# racing to be last over a boot.
+After=network-pre.target ufw.service
+Wants=network-pre.target
+# The rules match wg0 by name, so they load whether or not the interface
+# exists. Loading first means a Device that reconnects the instant the tunnel
+# comes back never sees a window with forwarding but no DNS redirect.
+Before=wg-quick@wg0.service
+ConditionPathExists=/etc/nightloch/nightloch-nat.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nightloch/nightloch-nat.nft
+ExecReload=/usr/sbin/nft -f /etc/nightloch/nightloch-nat.nft
+# A stop with no table loaded is not a failure; the posture is already gone.
+ExecStop=-/usr/sbin/nft delete table inet nightloch
+
+[Install]
+WantedBy=multi-user.target

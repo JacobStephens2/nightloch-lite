@@ -1,0 +1,21 @@
+# The tunnel interface, as nightloch-host-posture.sh renders it on first stage.
+#
+# __PRIVATE_KEY__ is replaced with a key generated on the host. The private key
+# is never in this repository and never leaves /etc/wireguard/wg0.conf, which
+# only root reads. The public half is written beside it as wg0.pub, so an
+# Operator can fill in TUNNEL_PUBLIC_KEY without reading the private one.
+#
+# NAT and the DNS posture are deliberately not here. They are
+# nightloch-nat.nft, loaded by nightloch-nat.service, so that bringing the
+# interface down does not take the host's forwarding rules with it and a
+# reboot restores both independently:
+# docs/adr/0006-keep-the-nat-posture-in-its-own-nftables-table.md
+#
+# Peers are managed by nightloch-wg (add-peer / remove-peer) as Devices are
+# minted and removed. Do not add a [Peer] section by hand: the helper rewrites
+# this file, and a peer nobody minted is a Device with no record behind it.
+
+[Interface]
+Address = 10.66.0.1/24
+ListenPort = 51820
+PrivateKey = __PRIVATE_KEY__
