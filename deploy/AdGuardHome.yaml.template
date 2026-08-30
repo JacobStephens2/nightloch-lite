@@ -1,4 +1,4 @@
-# AdGuard Home v0.107.79 configuration for Nightloch's global Baseline.
+# AdGuard Home v0.107.79 configuration for Nightloch's global Baseline lists.
 #
 # nightloch-resolver-posture.sh renders the two placeholders on first install.
 # AdGuard Home owns the rendered file after that; reinstalling the posture
@@ -38,9 +38,9 @@ dns:
 filtering:
   protection_enabled: true
   filtering_enabled: true
-  # Zero disables automatic refresh in AdGuard Home.  The Operator refreshes
-  # the lists explicitly after reviewing the upstream change, then runs the
-  # resolver verifier and Device checks from the runbook.
+  # Zero disables automatic refresh in AdGuard Home.  The installer fetches
+  # and records the first list snapshot; every later refresh is an explicit
+  # Operator action followed by the verifier and the runbook's Device checks.
   filters_update_interval: 0
   blocking_mode: default
   blocked_response_ttl: 10
@@ -55,7 +55,7 @@ filtering:
     ids: []
 
 # These are global subscriptions.  They contain no Device address and no
-# Protectee Policy; every Device receives the same always-on Baseline.
+# Protectee Policy; every Device receives the same always-on Baseline lists.
 filters:
   - url: https://nsfw.oisd.nl/
     name: OISD NSFW Baseline list

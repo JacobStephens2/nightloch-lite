@@ -75,12 +75,12 @@ valid, so the same file works before and after the Resolver site exists.
 ```bash
 sudo install -m 0644 deploy/Caddyfile.example /etc/caddy/Caddyfile
 sudo ./deploy/nightloch-resolver-posture.sh install
-sudo install -m 0755 deploy/nightloch-resolver-posture.sh /usr/local/sbin/nightloch-resolver-posture.sh
 sudo install -m 0755 deploy/nightloch-resolver-verify.sh /usr/local/sbin/nightloch-resolver-verify.sh
 ```
 
 `install` downloads and checksum-verifies the pinned release, creates the matched
-`adguardhome` system user/group when needed, and installs:
+`adguardhome` system user/group when needed, atomically fetches both initial Baseline list
+caches, records their SHA-256 digests, and installs:
 
 | Artifact | Installed path |
 |---|---|
@@ -90,6 +90,7 @@ sudo install -m 0755 deploy/nightloch-resolver-verify.sh /usr/local/sbin/nightlo
 | Caddy site | `/etc/caddy/sites/nightloch-agh.caddy` |
 | Caddy service drop-in | `/etc/systemd/system/caddy.service.d/nightloch.conf` |
 | Caddy hash environment | `/etc/nightloch/caddy.env` |
+| Filter update receipt | `/var/lib/AdGuardHome/nightloch-filter-updates.log` |
 
 The first install renders the config.  A later install never overwrites it, because later
 slices add generated `user_rules` through AdGuard Home's API.  It also refuses if the hash
@@ -99,6 +100,8 @@ splitting the two credential layers.
 - [ ] The command says nothing was started or enabled.
 - [ ] `systemctl is-enabled AdGuardHome.service` is still `disabled` before first start.
 - [ ] The rendered config is `0600 adguardhome:adguardhome`.
+- [ ] Both files under `/var/lib/AdGuardHome/data/filters/` are nonempty, and their current
+      SHA-256 digests match the `initial` rows in `nightloch-filter-updates.log`.
 - [ ] Review the non-secret portions: tunnel-only DNS bind, loopback HTTP bind, two global
       subscriptions, manual filter updates, and the Firefox canary rule.
 - [ ] Do not add a `$client` rule, persistent client, Device address, or Protectee Policy.
@@ -106,7 +109,7 @@ splitting the two credential layers.
 ## Validate and start
 
 ```bash
-sudo /usr/local/sbin/nightloch-resolver-posture.sh start
+sudo ./deploy/nightloch-resolver-posture.sh start
 ```
 
 `start` refuses unless `wg0` is active.  It asks both the pinned AdGuard Home binary and
@@ -118,17 +121,17 @@ The unit has `Requires=` and `After=` on `wg-quick@wg0.service`, is enabled unde
 capability is `CAP_NET_BIND_SERVICE` for port 53.  The command line includes
 `--no-check-update`, so the admin UI cannot silently replace the pinned binary.
 
-On first start the two subscribed lists must download before their cache files are nonempty.
-Watch without printing configuration or credentials:
+The start command refuses before enablement if either list cache or its update receipt is
+missing.  Watch the first service start without printing configuration or credentials:
 
 ```bash
 sudo journalctl -u AdGuardHome.service --since=-5m
 sudo /usr/local/sbin/nightloch-resolver-verify.sh
 ```
 
-If the first verifier run reports empty Baseline subscriptions while the download is still
-in progress, read the journal and rerun it after the downloads finish.  Do not turn filtering
-off to make the check pass.
+If the first verifier run reports a Baseline list or digest failure, stop: the prepared caches
+were not loaded exactly as recorded.  Read the journal and repair the staged posture; do not
+turn filtering off or enable automatic refresh to make the check pass.
 
 The verifier is read-only and reports these governing named facts:
 
@@ -138,7 +141,7 @@ The verifier is read-only and reports these governing named facts:
 | `dns_listener` | TCP and UDP 53 on `10.66.0.1`, nowhere public |
 | `admin_listener` | loopback port 3000 plus the authenticated Caddy route |
 | `baseline_subscriptions` | both global lists enabled with nonempty loaded files |
-| `filter_updates_manual` | `filters_update_interval: 0` |
+| `filter_updates_manual` | automatic refresh is off and each loaded cache matches its latest recorded SHA-256 digest |
 | `query_log_retention` | persisted interval equals the application's Quarantine-owned value |
 | `firefox_canary` | a live query returns `NXDOMAIN` |
 
@@ -169,16 +172,22 @@ enforcement.  The tradeoff is an Operator-owned maintenance action.
 For an explicit refresh:
 
 1. Read the OISD and HaGeZi upstream change notes or list metadata.
-2. Record the date, old/new list metadata, and why the refresh is being taken.  Record no
-   browsing history and no credential.
+2. Record the date, old/new list metadata, and why the refresh is being taken in the Operator
+   change record.  Record no browsing history and no credential.
 3. Use the authenticated AdGuard Home UI to refresh the two DNS blocklists manually.
-4. Run `nightloch-resolver-verify.sh`, `/health`, the off-host port-53 check, and the Device
-   Baseline/ordinary-browsing checks immediately afterwards.
-5. If enforcement regresses, restore the known-good host snapshot or cached filter files;
+4. From the checked-out release, run
+   `sudo ./deploy/nightloch-resolver-posture.sh record-filter-update`.  It appends the UTC
+   instant, list id, URL, and current SHA-256 digest to
+   `/var/lib/AdGuardHome/nightloch-filter-updates.log`; it does not fetch or enable anything.
+5. Run `nightloch-resolver-verify.sh`, `/health`, the off-host port-53 check, and the Device
+   Baseline-list and ordinary-browsing checks immediately afterwards.  The verifier fails if
+   the loaded bytes do not match the latest receipt for either list.
+6. If enforcement regresses, restore the known-good host snapshot or cached filter files;
    do not disable global filtering.
 
 Binary upgrades are separate and equally explicit: update the pinned version and published
-digest in the repository, pass review/tests, run `install`, then `start` and this complete
+digest in the repository, pass review/tests, then run the checked-out
+`sudo ./deploy/nightloch-resolver-posture.sh install` and `start` commands and this complete
 verification again.
 
 ## Coordinated credential rotation
@@ -194,8 +203,9 @@ diverge.
    unauthenticated backend while AdGuard Home is stopped.
 3. With a root-only editor, put the new plaintext in `nightloch.env`, the exact new hash in
    AdGuard Home's `users.password`, and replace `adguard-password.bcrypt` with that same hash.
-4. Run `nightloch-resolver-posture.sh install`, then `start`, restart `nightloch.service`, and
-   run every named fact plus the unauthenticated `401` check.
+4. From the checked-out release, run `sudo ./deploy/nightloch-resolver-posture.sh install`,
+   then the same script's `start` command, restart `nightloch.service`, and run every named
+   fact plus the unauthenticated `401` check.
 
 Never rotate only one layer and never paste either plaintext value into an issue or run
 record.
