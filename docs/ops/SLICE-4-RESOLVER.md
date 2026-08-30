@@ -140,7 +140,7 @@ The verifier is read-only and reports these governing named facts:
 | `resolver_service` | active, enabled, and ordered after `wg0` |
 | `dns_listener` | TCP and UDP 53 on `10.66.0.1`, nowhere public |
 | `admin_listener` | loopback port 3000 plus the authenticated Caddy route |
-| `baseline_subscriptions` | both global lists enabled with nonempty loaded files |
+| `baseline_list_subscriptions` | both global lists enabled with nonempty loaded files |
 | `filter_updates_manual` | automatic refresh is off and each loaded cache matches its latest recorded SHA-256 digest |
 | `query_log_retention` | persisted interval equals the application's Quarantine-owned value |
 | `firefox_canary` | a live query returns `NXDOMAIN` |
