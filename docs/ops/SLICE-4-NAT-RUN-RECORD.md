@@ -9,10 +9,10 @@ The Slice 1 droplet now exists at `134.209.165.82`. The host-side portion of the
 run completed on **2026-08-30**: the Operator confirmed the out-of-band DigitalOcean
 Recovery Console, approved and personally ran activation, and the host posture survived an
 unattended reboot.
-There is not yet a Device or live Resolver, so the three checks that can only be answered
-from a Device remain blocked rather than inferred from the host.  Issue #41's Resolver
-artifacts and [runbook](./SLICE-4-RESOLVER.md) are prepared in the repository; they have not
-been installed on this host, and this record does not turn prepared work into an observation.
+There is not yet a Device, so the three checks that can only be answered from a Device
+remain blocked rather than inferred from the host.  Issue #41's Resolver posture is now
+live and its observations are recorded in
+[SLICE-4-RESOLVER-RUN-RECORD.md](./SLICE-4-RESOLVER-RUN-RECORD.md).
 
 ## Done
 
@@ -65,8 +65,9 @@ been installed on this host, and this record does not turn prepared work into an
 - [x] The second SSH session responded, a fresh key-authenticated SSH connection from the
       laptop succeeded, and `https://lite.nightloch.app` still served before the revert
       timer was cancelled.
-- [x] Every governing named fact passed on the live host. `resolver_listening` reported the
-      expected non-governing warning because AdGuard Home is not installed.
+- [x] Every governing named fact passed on the live host. Before issue #41,
+      `resolver_listening` reported the expected non-governing warning; after the live
+      Resolver install it reports `PASS`.
 - [x] Off-host `dig +time=3 +tries=1 @134.209.165.82 example.com` timed out with no answer.
 - [x] The revert timer was stopped only after all preceding checks passed and was confirmed
       inactive.
@@ -75,12 +76,11 @@ been installed on this host, and this record does not turn prepared work into an
       the verifier passed, HTTPS served, and off-host port 53 still gave no answer. This did
       not satisfy the separate checklist drill that requires a Device on the tunnel.
 
-## Not done - blocked on a live Device and Resolver
+## Not done - blocked on a live Device
 
-`wg show wg0 peers` returned no peers before the reboot. These checks need an enrolled
-Device and AdGuard Home listening on `10.66.0.1:53`; the host cannot answer them honestly.
-Install and verify the Resolver through `SLICE-4-RESOLVER.md`, then carry the Device-only
-observations into issue #42.
+`wg show wg0 peers` still returns no peers. AdGuard Home now listens on `10.66.0.1:53`,
+but these checks need an enrolled Device; the host cannot answer them honestly. Carry the
+Device-only observations into issue #42.
 
 - [ ] Reboot the droplet with a Device on the tunnel; verify that the Device reconnects and
       browsing works.

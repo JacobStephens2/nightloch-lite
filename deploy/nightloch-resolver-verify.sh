@@ -157,6 +157,25 @@ check_baseline_lists() {
 	fi
 }
 
+duration_hours() {
+	value="$1"
+	case "$value" in
+	*h)
+		amount="${value%h}"
+		multiplier=1
+		;;
+	*d)
+		amount="${value%d}"
+		multiplier=24
+		;;
+	*) return 1 ;;
+	esac
+	case "$amount" in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$((amount * multiplier))"
+}
+
 check_retention() {
 	if [ ! -x "$nightloch_binary" ] || [ ! -r "$config" ]; then
 		fail query_log_retention "the Nightloch binary or AdGuard Home configuration is unreadable"
@@ -172,8 +191,10 @@ check_retention() {
 			exit
 		}
 	' "$config")"
-	if [ -n "$retention" ] && [ "$configured_retention" = "$retention" ]; then
-		pass query_log_retention "query history retention is $retention, derived from the address-quarantine rule"
+	retention_hours="$(duration_hours "$retention" 2>/dev/null || true)"
+	configured_hours="$(duration_hours "$configured_retention" 2>/dev/null || true)"
+	if [ -n "$retention_hours" ] && [ "$configured_hours" = "$retention_hours" ]; then
+		pass query_log_retention "query history retention is $configured_retention, equivalent to the address-quarantine rule's $retention"
 	else
 		fail query_log_retention "AdGuard Home does not retain query history for Nightloch's configured $retention"
 	fi
