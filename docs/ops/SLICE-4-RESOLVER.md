@@ -3,6 +3,8 @@
 This runbook installs Nightloch's global **Baseline list** posture on AdGuard Home.  The
 checked-in posture is prepared and tested without a droplet; none of the live boxes below
 is complete until an Operator has run it and recorded the observed result.
+The first live run is recorded separately in
+[SLICE-4-RESOLVER-RUN-RECORD.md](./SLICE-4-RESOLVER-RUN-RECORD.md).
 
 The posture is deliberately narrow:
 
