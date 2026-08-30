@@ -9,9 +9,7 @@ lite.nightloch.app {
 	}
 }
 
-# agh.nightloch.app {
-# 	basicauth {
-# 		# operator hash
-# 	}
-# 	reverse_proxy 127.0.0.1:3000
-# }
+# Resolver administration is a separate site artifact so the posture installer
+# can own it without rewriting this control-plane site.  The glob may be empty
+# before Slice 4 is installed.
+import /etc/caddy/sites/*.caddy

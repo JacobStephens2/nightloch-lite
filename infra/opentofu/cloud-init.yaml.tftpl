@@ -95,6 +95,10 @@ write_files:
       	}
       }
 
+      # An empty glob is valid Caddy configuration.  The Resolver installer
+      # adds its authenticated agh.nightloch.app site here in Slice 4.
+      import /etc/caddy/sites/*.caddy
+
   - path: /usr/local/sbin/nightloch-firstboot.sh
     permissions: "0755"
     content: |

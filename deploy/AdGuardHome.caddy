@@ -1,0 +1,16 @@
+# The Resolver's administration UI.  AdGuard Home itself listens only on
+# loopback; this is the sole public route, and it has an independent Caddy
+# Basic-auth gate in front of AdGuard Home's own operator login.
+agh.nightloch.app {
+	encode zstd gzip
+	basic_auth {
+		operator {$ADGUARD_PASSWORD_HASH}
+	}
+	reverse_proxy 127.0.0.1:3000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+	}
+}

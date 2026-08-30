@@ -136,9 +136,13 @@ cmd_stage() {
 	done
 	require_root
 
-	install -D -m 0644 "$source_dir/nightloch-nat.nft" "$ruleset_dest"
-	install -D -m 0644 "$source_dir/nightloch-nat.service" "$unit_dest"
-	install -D -m 0644 "$source_dir/99-nightloch-forward.conf" "$sysctl_dest"
+	# Create parents explicitly instead of relying on GNU install's -D.  The
+	# script is then exercised faithfully by the same BSD install available to
+	# the macOS development suite while retaining identical Linux behaviour.
+	install -d -m 0755 "$(dirname "$ruleset_dest")" "$(dirname "$unit_dest")" "$(dirname "$sysctl_dest")"
+	install -m 0644 "$source_dir/nightloch-nat.nft" "$ruleset_dest"
+	install -m 0644 "$source_dir/nightloch-nat.service" "$unit_dest"
+	install -m 0644 "$source_dir/99-nightloch-forward.conf" "$sysctl_dest"
 
 	# The interface configuration is generated, never shipped. Its private key
 	# is the tunnel's identity: it is made here and never leaves the host.

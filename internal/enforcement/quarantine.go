@@ -1,6 +1,7 @@
 package enforcement
 
 import (
+	"fmt"
 	"net/netip"
 	"time"
 )
@@ -44,6 +45,14 @@ const (
 // retention and every quarantine in flight moves with it.
 func ReusableAt(removedAt time.Time) time.Time {
 	return removedAt.Add(QuarantineWindow).UTC()
+}
+
+// ResolverQueryLogRetention is the AdGuard Home duration Nightloch renders
+// into the Resolver's configuration.  Keeping this translation here makes
+// QueryLogRetention the only source of the value: the deployment posture asks
+// the application for it instead of restating seven days in shell or YAML.
+func ResolverQueryLogRetention() string {
+	return fmt.Sprintf("%dh", QueryLogRetention/time.Hour)
 }
 
 // quarantineOf reports the hold a Device removed at removedAt still has on its
