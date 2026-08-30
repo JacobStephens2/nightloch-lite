@@ -8,9 +8,7 @@ package enforcement
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -62,35 +60,18 @@ const dumpOutput = interfacePrivateKey + "\tcHVibGljcHVibGljcHVibGljcHVibGljcHVi
 // Asserting the script against the caller's own constants is how the two are
 // kept from drifting apart.
 
-type helperRun struct {
-	exitCode int
-	stdout   string
-	stderr   string
-}
-
-// helperEnv is one isolated invocation environment: a stub PATH, a scratch
-// interface configuration, and the log every stub appends its argv to.
+// helperEnv is the shared stub harness plus the one thing only the root helper
+// has: a scratch interface configuration to rewrite.
 type helperEnv struct {
-	t          *testing.T
-	binDir     string
+	*stubEnv
 	configPath string
-	logPath    string
 }
 
 func newHelperEnv(t *testing.T) *helperEnv {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the root helper is a POSIX shell script")
-	}
-	root := t.TempDir()
 	env := &helperEnv{
-		t:          t,
-		binDir:     filepath.Join(root, "bin"),
-		configPath: filepath.Join(root, "wg0.conf"),
-		logPath:    filepath.Join(root, "stub.log"),
-	}
-	if err := os.MkdirAll(env.binDir, 0o755); err != nil {
-		t.Fatal(err)
+		stubEnv:    newStubEnv(t),
+		configPath: filepath.Join(t.TempDir(), "wg0.conf"),
 	}
 	env.writeStub("wg", wgStub)
 	env.writeStub("ip", ipStub)
@@ -119,13 +100,6 @@ fi
 exit 0
 `
 
-func (e *helperEnv) writeStub(name, body string) {
-	e.t.Helper()
-	if err := os.WriteFile(filepath.Join(e.binDir, name), []byte(body), 0o755); err != nil {
-		e.t.Fatal(err)
-	}
-}
-
 func (e *helperEnv) writeConfig(body string) {
 	e.t.Helper()
 	if err := os.WriteFile(e.configPath, []byte(body), 0o600); err != nil {
@@ -142,24 +116,6 @@ func (e *helperEnv) config() string {
 	return string(body)
 }
 
-// invocations is every argv the stubs saw, in order. An empty slice is the
-// assertion that a refusal reached nothing.
-func (e *helperEnv) invocations() []string {
-	e.t.Helper()
-	body, err := os.ReadFile(e.logPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	trimmed := strings.TrimSuffix(string(body), "\n")
-	if trimmed == "" {
-		return nil
-	}
-	return strings.Split(trimmed, "\n")
-}
-
 func (e *helperEnv) run(args ...string) helperRun {
 	e.t.Helper()
 	return e.runWith(nil, args...)
@@ -167,31 +123,11 @@ func (e *helperEnv) run(args ...string) helperRun {
 
 func (e *helperEnv) runWith(extraEnv []string, args ...string) helperRun {
 	e.t.Helper()
-	abs, err := filepath.Abs(helperPath)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	cmd := exec.Command(abs, args...)
-	cmd.Env = append([]string{
-		"PATH=" + e.binDir + ":/usr/sbin:/usr/bin:/sbin:/bin",
+	return e.runScript(helperPath, append([]string{
 		"NIGHTLOCH_WG_INTERFACE=wg0",
 		"NIGHTLOCH_WG_CONFIG=" + e.configPath,
-		"NIGHTLOCH_STUB_LOG=" + e.logPath,
 		"NIGHTLOCH_STUB_DUMP=" + dumpOutput,
-	}, extraEnv...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	run := helperRun{stdout: stdout.String(), stderr: stderr.String()}
-	if err != nil {
-		exit, ok := err.(*exec.ExitError)
-		if !ok {
-			e.t.Fatalf("running helper: %v", err)
-		}
-		run.exitCode = exit.ExitCode()
-	}
-	return run
+	}, extraEnv...), args...)
 }
 
 func assertInvocations(t *testing.T, got, want []string) {

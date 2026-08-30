@@ -26,7 +26,11 @@ touched by this work.
 | Activation cannot happen by accident | `TestActivationRefusesWithoutTheChecklistConfirmation` | Refused, exit 2, no command invoked and ufw's forward policy still `DROP` |
 | The way back exists and needs no operator | `TestRevertTakesTheHostBackToWhereItWasBeforeForwarding` | `revert` takes no argument, turns forwarding off first, and leaves `wg0` up |
 | Verifier is read-only | `TestTheVerifierIsReadOnly` | Every invocation is a read; the script is safe to run against a live host by anyone, including an agent |
-| Verifier catches each failure by name | Four failure tests | Forwarding off, 853 dropped rather than rejected, DNS listening on `0.0.0.0`, and a posture that would not survive a reboot each fail by their own named fact |
+| Verifier catches each failure by name | Six failure tests | Forwarding off, 853 dropped rather than rejected, DNS listening on `0.0.0.0`, a posture that would not survive a reboot, DNS not redirected, and listeners it could not read at all each fail by their own named fact |
+| A missing resolver is reported, not hidden and not fatal | `TestTheVerifierReportsAMissingResolverWithoutFailingACorrectPosture` | `resolver_listening` warns while AdGuard Home has not landed. A redirect to a port nothing answers on is worth saying and is not this posture being wrong, so it governs nothing - the shape `/health` already uses for a non-governing check |
+| The interface key never reaches an argument list | `TestStagingNeverPutsThePrivateKeyInAnArgumentList` | Every local user can read every argv on the host; the substitution is shell builtins over a `0600` file |
+| Activation's claimed order is the order it runs in | `TestActivationTurnsThePostureOnAndMakesItSurviveAReboot` | The rules load before `ufw reload`, and `sysctl --system` runs after it, so ufw's own `/etc/ufw/sysctl.conf` pass cannot be what decides whether the host forwards |
+| Revert puts back what was there | `TestRevertRestoresTheForwardPolicyTheHostActuallyHad`, `TestRevertTakesTheHostBackToWhereItWasBeforeForwarding` | The wg0 DNS allowances are withdrawn, and the recorded prior forward policy is restored rather than `DROP` assumed |
 
 ## Not done - blocked on the Slice 1 apply
 
