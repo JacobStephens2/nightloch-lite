@@ -39,6 +39,14 @@ fail() {
 	failures=$((failures + 1))
 }
 
+# warn reports a named fact that is real but not this posture's to satisfy, in
+# the shape /health already uses for a check that does not govern its status.
+# A resolver that has not been installed yet must not make a correct NAT
+# posture read as broken.
+warn() {
+	printf 'WARN %s - %s\n' "$1" "$2"
+}
+
 # read_kernel returns a /proc value, or the empty string when it cannot be
 # read. An unreadable fact is never reported as a good one.
 read_kernel() {
@@ -80,42 +88,38 @@ check_interface() {
 	esac
 }
 
+# rules_have reports whether the loaded table contains a rule matching a
+# fragment. One reader for five questions, so the questions read as a list of
+# what the posture must say rather than five copies of the same case.
+rules_have() {
+	case "$rules" in
+	*"$1"*) return 0 ;;
+	esac
+	return 1
+}
+
 check_rules() {
 	rules="$(nft list table inet nightloch 2>/dev/null || true)"
 
-	case "$rules" in
-	*"ip saddr $tunnel_network"*masquerade*)
+	if rules_have "ip saddr $tunnel_network" && rules_have masquerade; then
 		pass masquerade "tunnel traffic leaves under the host's address"
-		;;
-	*)
+	else
 		fail masquerade "no masquerade for $tunnel_network in table inet nightloch"
-		;;
-	esac
+	fi
 
-	redirects=0
-	case "$rules" in *"udp dport 53 redirect"*) redirects=$((redirects + 1)) ;; esac
-	case "$rules" in *"tcp dport 53 redirect"*) redirects=$((redirects + 1)) ;; esac
-	if [ "$redirects" -eq 2 ]; then
+	if rules_have "udp dport 53 redirect" && rules_have "tcp dport 53 redirect"; then
 		pass dns_redirect "DNS from the tunnel reaches the resolver on both transports"
 	else
 		fail dns_redirect "port 53 from the tunnel is not redirected on both TCP and UDP; a Device could resolve elsewhere"
 	fi
 
-	rejects=0
-	case "$rules" in *"tcp dport 853 reject"*) rejects=$((rejects + 1)) ;; esac
-	case "$rules" in *"udp dport 853 reject"*) rejects=$((rejects + 1)) ;; esac
-	case "$rules" in
-	*"dport 853 drop"*)
+	if rules_have "dport 853 drop"; then
 		fail dot_rejected "port 853 is dropped, so a Device on strict Private DNS hangs instead of failing visibly"
-		;;
-	*)
-		if [ "$rejects" -eq 2 ]; then
-			pass dot_rejected "DNS-over-TLS from the tunnel fails fast on both transports"
-		else
-			fail dot_rejected "port 853 from the tunnel is not rejected on both TCP and UDP"
-		fi
-		;;
-	esac
+	elif rules_have "tcp dport 853 reject" && rules_have "udp dport 853 reject"; then
+		pass dot_rejected "DNS-over-TLS from the tunnel fails fast on both transports"
+	else
+		fail dot_rejected "port 853 from the tunnel is not rejected on both TCP and UDP"
+	fi
 }
 
 check_persistence() {
@@ -128,12 +132,24 @@ check_persistence() {
 	fi
 }
 
-# check_public_resolver reads what is listening rather than what is configured.
+# check_listeners reads what is listening for DNS rather than what is
+# configured, and answers two different questions from the one reading.
+#
 # An open recursive resolver on the public address is the one failure of this
-# posture that harms people who are not using it at all.
-check_public_resolver() {
-	listeners="$(ss -H -lntu 2>/dev/null || true)"
+# posture that harms people who are not using it at all, so that one is fatal.
+# Whether anything answers on the tunnel address at all is the AdGuard Home
+# ticket's business - a redirect to a resolver that has not landed yet is a
+# correct NAT posture and a blackhole at the same time - so it is reported and
+# does not govern the exit code.
+check_listeners() {
+	if ! listeners="$(ss -H -lntu 2>/dev/null)"; then
+		fail no_public_resolver "cannot read what is listening; an unread port is not a closed one"
+		warn resolver_listening "cannot read what is listening"
+		return
+	fi
+
 	exposed=""
+	on_tunnel=""
 	IFS='
 '
 	for line in $listeners; do
@@ -143,15 +159,22 @@ check_public_resolver() {
 		*) continue ;;
 		esac
 		case "$local_address" in
-		"$host_address:53") ;;
+		"$host_address:53") on_tunnel="yes" ;;
 		*) exposed="$exposed $local_address" ;;
 		esac
 	done
 	unset IFS
+
 	if [ -z "$exposed" ]; then
 		pass no_public_resolver "nothing answers DNS outside the tunnel address"
 	else
 		fail no_public_resolver "DNS is listening on$exposed; the public address must answer nothing on 53"
+	fi
+
+	if [ -n "$on_tunnel" ]; then
+		pass resolver_listening "something answers DNS on $host_address:53, so the redirect lands somewhere"
+	else
+		warn resolver_listening "nothing answers DNS on $host_address:53 yet, so redirected queries go nowhere; that is the AdGuard Home ticket, not this posture"
 	fi
 }
 
@@ -159,7 +182,7 @@ check_forwarding
 check_interface
 check_rules
 check_persistence
-check_public_resolver
+check_listeners
 
 if [ "$failures" -ne 0 ]; then
 	printf '\n%s named fact(s) failed. The posture does not hold.\n' "$failures"

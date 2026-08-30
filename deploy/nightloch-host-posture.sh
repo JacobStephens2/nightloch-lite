@@ -23,8 +23,8 @@
 #              forwarding change. It refuses without the confirmation flag that
 #              says docs/ops/NAT-CHECKLIST.md has been run.
 #   revert     put the host back. Takes no argument and needs no confirmation,
-#              because it is what the checklist's self-cancelling `at` job runs
-#              when nobody is there to answer a prompt.
+#              because it is what the checklist's self-cancelling `systemd-run`
+#              timer runs when nobody is there to answer a prompt.
 #
 # Exit codes match the nightloch-wg helper's, so a caller reads them the same
 # way: 0 success, 2 refusal (unknown subcommand, or activation without the
@@ -48,6 +48,10 @@ sysctl_dest="$etc/sysctl.d/99-nightloch-forward.conf"
 wg_dest="$etc/wireguard/wg0.conf"
 wg_pub_dest="$etc/wireguard/wg0.pub"
 ufw_defaults="$etc/default/ufw"
+
+# The forward policy ufw had before activation, so revert can put back what was
+# there rather than assuming everyone starts at ufw's default.
+saved_policy="$etc/nightloch/ufw-forward-policy.before"
 
 # The host's address inside the tunnel. The same fact internal/enforcement
 # reserves and the nightloch-wg helper validates against; asserted to agree in
@@ -84,6 +88,21 @@ require_root() {
 	fi
 }
 
+# read_forward_policy reports ufw's current forward policy without its quotes,
+# or the empty string when the file does not say.
+read_forward_policy() {
+	if [ ! -f "$ufw_defaults" ]; then
+		return 0
+	fi
+	awk -F= '
+		/^[[:space:]]*DEFAULT_FORWARD_POLICY=/ {
+			gsub(/["\047[:space:]]/, "", $2)
+			print $2
+			exit
+		}
+	' "$ufw_defaults"
+}
+
 # set_forward_policy rewrites one directive in ufw's defaults in place, keeping
 # the file's own mode and every other line. ufw's forward policy is deny out of
 # the box and it hooks alongside this posture rather than under it, so leaving
@@ -94,6 +113,7 @@ set_forward_policy() {
 		unavailable "$ufw_defaults is missing; is ufw installed?"
 	fi
 	pending="$ufw_defaults.nightloch-pending.$$"
+	trap 'rm -f "$pending"' EXIT HUP INT TERM
 	awk -v policy="$policy" '
 		/^[[:space:]]*DEFAULT_FORWARD_POLICY=/ {
 			print "DEFAULT_FORWARD_POLICY=\"" policy "\""
@@ -105,6 +125,7 @@ set_forward_policy() {
 	' "$ufw_defaults" >"$pending"
 	cat "$pending" >"$ufw_defaults"
 	rm -f "$pending"
+	trap - EXIT HUP INT TERM
 }
 
 cmd_stage() {
@@ -127,15 +148,35 @@ cmd_stage() {
 	# Device anyone has minted.
 	if [ ! -f "$wg_dest" ]; then
 		install -d -m 0700 "$(dirname "$wg_dest")"
-		private_key="$(wg genkey)"
-		pending="$wg_dest.nightloch-pending.$$"
-		( umask 077 && : >"$pending" )
-		sed "s|__PRIVATE_KEY__|$private_key|" "$source_dir/wg0.conf.template" >"$pending"
-		chmod 0600 "$pending"
-		mv "$pending" "$wg_dest"
-		printf '%s\n' "$private_key" | wg pubkey >"$wg_pub_dest.nightloch-pending.$$"
-		chmod 0644 "$wg_pub_dest.nightloch-pending.$$"
-		mv "$wg_pub_dest.nightloch-pending.$$" "$wg_pub_dest"
+		key_pending="$wg_dest.nightloch-key.$$"
+		config_pending="$wg_dest.nightloch-pending.$$"
+		trap 'rm -f "$key_pending" "$config_pending"' EXIT HUP INT TERM
+
+		# The key never reaches an argument list. `ps` is readable by every
+		# local user, so a key substituted through `sed "s|...|$key|"` would be
+		# the tunnel's identity in plain sight for as long as sed runs. The
+		# substitution below is entirely shell builtins over a 0600 file.
+		( umask 077 && wg genkey >"$key_pending" )
+		private_key="$(cat "$key_pending")"
+
+		( umask 077 && : >"$config_pending" )
+		while IFS= read -r line || [ -n "$line" ]; do
+			case "$line" in
+			*__PRIVATE_KEY__*)
+				printf '%s\n' "${line%%__PRIVATE_KEY__*}$private_key${line#*__PRIVATE_KEY__}"
+				;;
+			*)
+				printf '%s\n' "$line"
+				;;
+			esac
+		done <"$source_dir/wg0.conf.template" >>"$config_pending"
+
+		wg pubkey <"$key_pending" >"$wg_pub_dest"
+		chmod 0644 "$wg_pub_dest"
+		chmod 0600 "$config_pending"
+		mv "$config_pending" "$wg_dest"
+		rm -f "$key_pending"
+		trap - EXIT HUP INT TERM
 	fi
 
 	systemctl daemon-reload
@@ -159,16 +200,24 @@ cmd_activate() {
 	done
 	require_root
 
-	# Order is the whole safety of this sequence. The redirect and the
-	# masquerade are in force before the kernel forwards a single packet, so
-	# there is no window in which the tunnel routes to the internet with DNS
-	# still free to go anywhere.
+	# Order is the whole safety of this sequence. The redirect, the reject, and
+	# the masquerade are loaded before anything can make the kernel forward,
+	# so there is no instant in which the tunnel routes to the internet with
+	# DNS still free to go anywhere. ufw's reload comes next because ufw
+	# applies its own /etc/ufw/sysctl.conf as it goes, and `sysctl --system`
+	# last so this posture's forwarding value is the one left standing.
+	systemctl enable --now nightloch-nat.service
+
+	# What ufw had before this, so revert restores it rather than assuming
+	# every host started at ufw's own default.
+	install -d -m 0755 "$(dirname "$saved_policy")"
+	printf '%s\n' "$(read_forward_policy)" >"$saved_policy"
+
 	set_forward_policy ACCEPT
 	ufw allow in on "$tunnel_interface" to "$host_address" port 53 proto udp
 	ufw allow in on "$tunnel_interface" to "$host_address" port 53 proto tcp
 	ufw reload
 
-	systemctl enable --now nightloch-nat.service
 	sysctl --system
 	systemctl enable --now "wg-quick@$tunnel_interface.service"
 
@@ -188,13 +237,28 @@ cmd_revert() {
 	sysctl -w net.ipv4.ip_forward=0 || true
 	systemctl disable --now nightloch-nat.service || true
 	nft delete table inet nightloch || true
-	set_forward_policy DROP
+
+	# Withdraw what activation opened, so a reverted host is not left with the
+	# allowances for a redirect that no longer exists. Whatever ufw's forward
+	# policy was before activation goes back; DROP is the fallback only when
+	# nothing was recorded, which is ufw's own default.
+	ufw delete allow in on "$tunnel_interface" to "$host_address" port 53 proto udp || true
+	ufw delete allow in on "$tunnel_interface" to "$host_address" port 53 proto tcp || true
+	previous_policy="DROP"
+	if [ -s "$saved_policy" ]; then
+		recorded="$(cat "$saved_policy")"
+		if [ -n "$recorded" ]; then
+			previous_policy="$recorded"
+		fi
+	fi
+	set_forward_policy "$previous_policy"
 	ufw reload || true
 
 	# The tunnel itself is not the forwarding change, and taking wg0 down
 	# would disconnect anyone reverting from inside it.
 	cat <<'EOF'
-Reverted. Forwarding is off and the posture is unloaded; wg0 is untouched.
+Reverted. Forwarding is off, the posture is unloaded, and the wg0 DNS
+allowances are withdrawn; wg0 itself is untouched.
 The staged files are still in place, so 'activate' can turn it back on.
 EOF
 }

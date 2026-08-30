@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -268,28 +267,16 @@ func TestTheRenderedInterfaceConfigurationIsOneTheHelperWillManage(t *testing.T)
 // The posture installer, run against a scratch root with stub executables.
 // ---------------------------------------------------------------------------
 
+// postureEnv is the shared stub harness plus the scratch root the posture
+// scripts install into and read the kernel's answers from.
 type postureEnv struct {
-	t       *testing.T
-	root    string
-	binDir  string
-	logPath string
+	*stubEnv
+	root string
 }
 
 func newPostureEnv(t *testing.T) *postureEnv {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the posture scripts are POSIX shell")
-	}
-	base := t.TempDir()
-	env := &postureEnv{
-		t:       t,
-		root:    filepath.Join(base, "root"),
-		binDir:  filepath.Join(base, "bin"),
-		logPath: filepath.Join(base, "stub.log"),
-	}
-	if err := os.MkdirAll(env.binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	env := &postureEnv{stubEnv: newStubEnv(t), root: filepath.Join(t.TempDir(), "root")}
 	if err := os.MkdirAll(env.root, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -306,20 +293,15 @@ func newPostureEnv(t *testing.T) *postureEnv {
 // change and revert has something to put back.
 func (e *postureEnv) seedUFWDefaults() {
 	e.t.Helper()
-	const defaults = `IPV6=yes
+	e.writeFile("etc/default/ufw", ufwDefaults)
+}
+
+const ufwDefaults = `IPV6=yes
 DEFAULT_INPUT_POLICY="DROP"
 DEFAULT_OUTPUT_POLICY="ACCEPT"
 DEFAULT_FORWARD_POLICY="DROP"
 DEFAULT_APPLICATION_POLICY="SKIP"
 `
-	full := filepath.Join(e.root, "etc/default/ufw")
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		e.t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(defaults), 0o644); err != nil {
-		e.t.Fatal(err)
-	}
-}
 
 // recordingStub records its argv and succeeds. Behaviour a test needs is
 // planted per command in NIGHTLOCH_STUB_<COMMAND>_OUT / _FAILS.
@@ -350,13 +332,6 @@ const stubPrivateKey = "c3R1YnByaXZhdGVrZXlzdHVicHJpdmF0ZWtleXN0dWI="
 
 const stubPublicKey = "c3R1YnB1YmxpY2tleXN0dWJwdWJsaWNrZXlzdHVicHU="
 
-func (e *postureEnv) writeStub(name, body string) {
-	e.t.Helper()
-	if err := os.WriteFile(filepath.Join(e.binDir, name), []byte(body), 0o755); err != nil {
-		e.t.Fatal(err)
-	}
-}
-
 func (e *postureEnv) run(script string, args ...string) helperRun {
 	e.t.Helper()
 	return e.runWith(script, nil, args...)
@@ -364,50 +339,25 @@ func (e *postureEnv) run(script string, args ...string) helperRun {
 
 func (e *postureEnv) runWith(script string, extraEnv []string, args ...string) helperRun {
 	e.t.Helper()
-	abs, err := filepath.Abs(script)
-	if err != nil {
-		e.t.Fatal(err)
-	}
 	source, err := filepath.Abs("../../deploy")
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	cmd := exec.Command(abs, args...)
-	cmd.Env = append([]string{
-		"PATH=" + e.binDir + ":/usr/sbin:/usr/bin:/sbin:/bin",
+	return e.runScript(script, append([]string{
 		"NIGHTLOCH_POSTURE_ROOT=" + e.root,
 		"NIGHTLOCH_POSTURE_SOURCE=" + source,
-		"NIGHTLOCH_STUB_LOG=" + e.logPath,
-	}, extraEnv...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	run := helperRun{stdout: stdout.String(), stderr: stderr.String()}
-	if err != nil {
-		exit, ok := err.(*exec.ExitError)
-		if !ok {
-			e.t.Fatalf("running %s: %v", script, err)
-		}
-		run.exitCode = exit.ExitCode()
-	}
-	return run
+	}, extraEnv...), args...)
 }
 
-func (e *postureEnv) invocations() []string {
+func (e *postureEnv) writeFile(path, body string) {
 	e.t.Helper()
-	body, err := os.ReadFile(e.logPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+	full := filepath.Join(e.root, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		e.t.Fatal(err)
 	}
-	trimmed := strings.TrimSuffix(string(body), "\n")
-	if trimmed == "" {
-		return nil
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		e.t.Fatal(err)
 	}
-	return strings.Split(trimmed, "\n")
 }
 
 func (e *postureEnv) installed(path string) string {
@@ -426,25 +376,6 @@ func (e *postureEnv) mode(path string) os.FileMode {
 		e.t.Fatalf("stat installed %s: %v", path, err)
 	}
 	return info.Mode().Perm()
-}
-
-func requireInvoked(t *testing.T, got []string, want string) {
-	t.Helper()
-	for _, line := range got {
-		if line == want {
-			return
-		}
-	}
-	t.Errorf("no invocation %q in %q", want, got)
-}
-
-func requireNotInvoked(t *testing.T, got []string, unwanted string) {
-	t.Helper()
-	for _, line := range got {
-		if strings.HasPrefix(line, unwanted) {
-			t.Errorf("invoked %q, which staging must not do: %q", line, got)
-		}
-	}
 }
 
 func TestStagingInstallsThePostureWithoutTurningAnythingOn(t *testing.T) {
@@ -496,6 +427,23 @@ func TestStagingInstallsThePostureWithoutTurningAnythingOn(t *testing.T) {
 	requireNotInvoked(t, invocations, "nft -f")
 }
 
+func TestStagingNeverPutsThePrivateKeyInAnArgumentList(t *testing.T) {
+	env := newPostureEnv(t)
+
+	if run := env.run(posturePath, "stage"); run.exitCode != 0 {
+		t.Fatalf("stage: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+
+	// Every local user can read every argument list on the host. A key
+	// substituted through `sed "s|...|$key|"` would be the tunnel's own
+	// identity in plain sight for as long as sed ran.
+	for _, line := range env.invocations() {
+		if strings.Contains(line, stubPrivateKey) {
+			t.Errorf("the interface private key reached an argument list: %q", line)
+		}
+	}
+}
+
 func TestStagingNeverOverwritesAnInterfaceConfigurationThatAlreadyExists(t *testing.T) {
 	env := newPostureEnv(t)
 	if run := env.run(posturePath, "stage"); run.exitCode != 0 {
@@ -520,9 +468,7 @@ func TestActivationRefusesWithoutTheChecklistConfirmation(t *testing.T) {
 	if run := env.run(posturePath, "stage"); run.exitCode != 0 {
 		t.Fatalf("stage: exit = %d, stderr = %q", run.exitCode, run.stderr)
 	}
-	if err := os.Truncate(env.logPath, 0); err != nil {
-		t.Fatal(err)
-	}
+	env.forget()
 
 	run := env.run(posturePath, "activate")
 
@@ -542,9 +488,7 @@ func TestActivationTurnsThePostureOnAndMakesItSurviveAReboot(t *testing.T) {
 	if run := env.run(posturePath, "stage"); run.exitCode != 0 {
 		t.Fatalf("stage: exit = %d, stderr = %q", run.exitCode, run.stderr)
 	}
-	if err := os.Truncate(env.logPath, 0); err != nil {
-		t.Fatal(err)
-	}
+	env.forget()
 
 	run := env.run(posturePath, "activate", "--i-have-run-the-nat-checklist")
 
@@ -568,6 +512,16 @@ func TestActivationTurnsThePostureOnAndMakesItSurviveAReboot(t *testing.T) {
 	requireInvoked(t, invocations, "ufw allow in on wg0 to "+HostAddress.String()+" port 53 proto udp")
 	requireInvoked(t, invocations, "ufw allow in on wg0 to "+HostAddress.String()+" port 53 proto tcp")
 	requireInvoked(t, invocations, "ufw reload")
+
+	// Order, not just presence. The redirect and the masquerade have to be
+	// loaded before anything can make the kernel forward, or there is an
+	// instant in which the tunnel routes to the internet with DNS still free
+	// to go anywhere - which is the one thing this posture exists to prevent.
+	// ufw's reload is in between on purpose: it applies ufw's own
+	// /etc/ufw/sysctl.conf, so `sysctl --system` has to come after it for this
+	// posture's forwarding value to be the one left standing.
+	requireInvokedBefore(t, invocations, "systemctl enable --now nightloch-nat.service", "ufw reload")
+	requireInvokedBefore(t, invocations, "ufw reload", "sysctl --system")
 }
 
 func TestActivationRefusesBeforeThePostureHasBeenStaged(t *testing.T) {
@@ -591,9 +545,7 @@ func TestRevertTakesTheHostBackToWhereItWasBeforeForwarding(t *testing.T) {
 	if run := env.run(posturePath, "activate", "--i-have-run-the-nat-checklist"); run.exitCode != 0 {
 		t.Fatalf("activate: exit = %d, stderr = %q", run.exitCode, run.stderr)
 	}
-	if err := os.Truncate(env.logPath, 0); err != nil {
-		t.Fatal(err)
-	}
+	env.forget()
 
 	// This is what the checklist's self-cancelling `at` job runs, so it must
 	// need no argument and no confirmation: it is the way back.
@@ -609,9 +561,33 @@ func TestRevertTakesTheHostBackToWhereItWasBeforeForwarding(t *testing.T) {
 	requireInvoked(t, invocations, "ufw reload")
 	requireContains(t, "the ufw defaults", env.installed("etc/default/ufw"), `DEFAULT_FORWARD_POLICY="DROP"`)
 
+	// The allowances activation opened are withdrawn with it. Leaving them
+	// behind would be an opening for a redirect that no longer exists.
+	requireInvoked(t, invocations, "ufw delete allow in on wg0 to "+HostAddress.String()+" port 53 proto udp")
+	requireInvoked(t, invocations, "ufw delete allow in on wg0 to "+HostAddress.String()+" port 53 proto tcp")
+
 	// The tunnel itself is not the forwarding change, and dropping it would
 	// disconnect the session doing the reverting.
 	requireNotInvoked(t, invocations, "systemctl disable --now wg-quick@wg0.service")
+}
+
+func TestRevertRestoresTheForwardPolicyTheHostActuallyHad(t *testing.T) {
+	env := newPostureEnv(t)
+	// Not every host starts at ufw's default. Putting back DROP unconditionally
+	// would be this script deciding a setting it was never asked about.
+	env.writeFile("etc/default/ufw", strings.Replace(ufwDefaults, `DEFAULT_FORWARD_POLICY="DROP"`, `DEFAULT_FORWARD_POLICY="ACCEPT"`, 1))
+	if run := env.run(posturePath, "stage"); run.exitCode != 0 {
+		t.Fatalf("stage: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+	if run := env.run(posturePath, "activate", "--i-have-run-the-nat-checklist"); run.exitCode != 0 {
+		t.Fatalf("activate: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+
+	if run := env.run(posturePath, "revert"); run.exitCode != 0 {
+		t.Fatalf("revert: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+
+	requireContains(t, "the ufw defaults", env.installed("etc/default/ufw"), `DEFAULT_FORWARD_POLICY="ACCEPT"`)
 }
 
 func TestAnUnknownSubcommandIsRefusedAndDoesNothing(t *testing.T) {
@@ -665,13 +641,7 @@ func (e *postureEnv) forwardingFacts(ipv4, ipv6 string) {
 
 func (e *postureEnv) writeProc(path, value string) {
 	e.t.Helper()
-	full := filepath.Join(e.root, path)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		e.t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(value+"\n"), 0o644); err != nil {
-		e.t.Fatal(err)
-	}
+	e.writeFile(path, value+"\n")
 }
 
 func (e *postureEnv) verify(overrides ...string) helperRun {
@@ -699,7 +669,36 @@ func TestTheVerifierPassesOnAHostWhereThePostureHolds(t *testing.T) {
 		"PASS dot_rejected",
 		"PASS reboot_persistence",
 		"PASS no_public_resolver",
+		"PASS resolver_listening",
 	)
+}
+
+func TestTheVerifierReportsAMissingResolverWithoutFailingACorrectPosture(t *testing.T) {
+	env := newPostureEnv(t)
+	env.forwardingFacts("1", "0")
+
+	// AdGuard Home is a later ticket. Until it lands, a correct NAT posture
+	// redirects DNS to a port nothing answers on, which is worth saying and is
+	// not this posture being wrong - so the fact is reported and governs
+	// nothing, the way /health's non-governing checks already work.
+	run := env.verify("NIGHTLOCH_STUB_SS_OUT=udp LISTEN 0 0 127.0.0.1:5353 *:*")
+
+	if run.exitCode != 0 {
+		t.Fatalf("exit = %d, stdout = %q", run.exitCode, run.stdout)
+	}
+	requireContains(t, "the verifier's report", run.stdout, "WARN resolver_listening")
+}
+
+func TestTheVerifierWillNotCallAnUnreadablePortAClosedOne(t *testing.T) {
+	env := newPostureEnv(t)
+	env.forwardingFacts("1", "0")
+
+	run := env.verify("NIGHTLOCH_STUB_SS_FAILS=1")
+
+	if run.exitCode == 0 {
+		t.Fatal("the verifier passed a host whose listeners it could not read")
+	}
+	requireContains(t, "the verifier's report", run.stdout, "FAIL no_public_resolver")
 }
 
 func TestTheVerifierIsReadOnly(t *testing.T) {

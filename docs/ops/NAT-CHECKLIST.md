@@ -91,6 +91,9 @@ the wg0 DNS allowances first, then the rules, then forwarding, then the interfac
       ```bash
       sudo /usr/local/sbin/nightloch-nat-verify.sh
       ```
+      `resolver_listening` reports **WARN** until the AdGuard Home ticket lands and binds
+      DNS to `10.66.0.1`. That is expected here and does not fail the run: the redirect is
+      correct, and until something answers on that address a Device resolves nothing.
 - [ ] **From somewhere that is not the droplet**, the public address answers nothing on 53:
       ```bash
       dig +time=3 +tries=1 @<public-ip> example.com     # expect no answer
@@ -121,7 +124,8 @@ sudo /usr/local/sbin/nightloch-host-posture.sh revert
 ```
 
 Off the host, from the DO console, the same command. Revert turns forwarding off, unloads the
-table, and puts ufw's forward policy back. It leaves `wg0` up on purpose: the tunnel is not
+table, withdraws the wg0 DNS allowances, and puts back whatever ufw's forward policy was
+before activation rather than assuming it was ufw's default. It leaves `wg0` up on purpose: the tunnel is not
 the forwarding change, and dropping it would disconnect anyone reverting from inside it. The
 staged files stay in place, so `activate` turns it back on.
 

@@ -136,6 +136,18 @@ _Avoid_: Anonymous user, removed user, former user, redacted
 The fixed vocabulary Activity is filtered by — **Invitations**, **Partnerships**, **Cooling-off**, and **Delivery** — assigned per stable action rather than per sentence, so wording can change without changing what a filter means.
 _Avoid_: Type, tag, event class, log level
 
+**Host posture**:
+The host's persistent forwarding and DNS configuration - the nftables table, the forwarding sysctl, the unit that loads them at boot, and the wg0 interface configuration - as opposed to any command typed to produce the same effect once. Posture is a property of the files, so an unattended reboot restores it. [ADR 0006](./docs/adr/0006-keep-the-nat-posture-in-its-own-nftables-table.md).
+_Avoid_: Firewall rules (alone), iptables config, network setup
+
+**Stage / Activate / Revert**:
+The three acts of `deploy/nightloch-host-posture.sh`, deliberately separate. **Stage** installs the posture and generates the interface key while enabling and forwarding nothing, and an agent may do it. **Activate** is the first forwarding change on a live host, is a human's, and refuses without the checklist confirmation. **Revert** puts the host back and needs no operator, so a self-cancelling timer can run it.
+_Avoid_: Deploy / enable / rollback (for this posture), install (for activate)
+
+**Named fact**:
+One thing `deploy/nightloch-nat-verify.sh` or `/health` reads back and reports by name with its cause, rather than folding into a single pass or a status code. A named fact may govern the outcome or deliberately not - a resolver that has not been installed yet is reported without failing a correct posture.
+_Avoid_: Check (alone, where governance matters), assertion, probe
+
 **Coverage report**:
 A periodic summary of Coverage for a Protectee’s Devices, sent to Partners (and useful as a deliverability heartbeat).
 _Avoid_: Digest (unless meaning this report), weekly email (alone)
