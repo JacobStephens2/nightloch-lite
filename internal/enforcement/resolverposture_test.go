@@ -135,8 +135,9 @@ func newResolverPostureEnv(t *testing.T) *resolverPostureEnv {
 		env.writeStub(name, recordingStub)
 	}
 	env.writeStub("curl", resolverCurlStub)
+	env.writeStub("date", resolverDateStub)
 	env.writeStub("dig", recordingStub)
-	env.writeStub("sha256sum", recordingStub)
+	env.writeStub("sha256sum", resolverSHA256Stub)
 	env.writeStub("ss", recordingStub)
 	env.writeStub("systemctl", resolverSystemctlStub)
 	env.writeStub("tar", resolverTarStub)
@@ -159,12 +160,25 @@ const resolverCurlStub = `#!/bin/sh
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "--output" ]; then
 		shift
-		: > "$1"
+		printf '||downloaded-filter.example^\n' > "$1"
 		exit 0
 	fi
 	shift
 done
 exit 1
+`
+
+const resolverDateStub = `#!/bin/sh
+{ printf 'date'; for arg in "$@"; do printf ' %s' "$arg"; done; printf '\n'; } >> "$NIGHTLOCH_STUB_LOG"
+printf '2026-08-30T18:00:00Z\n'
+`
+
+const resolverSHA256Stub = `#!/bin/sh
+{ printf 'sha256sum'; for arg in "$@"; do printf ' %s' "$arg"; done; printf '\n'; } >> "$NIGHTLOCH_STUB_LOG"
+if [ "${1:-}" = "--check" ]; then
+	exit 0
+fi
+printf '%s  %s\n' "${NIGHTLOCH_STUB_SHA256_OUT:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "$1"
 `
 
 const resolverTarStub = `#!/bin/sh
@@ -284,13 +298,28 @@ func TestInstallingResolverPostureStagesFilesWithoutStartingAnything(t *testing.
 	if mode := env.mode("etc/nightloch/caddy.env"); mode != 0o600 {
 		t.Errorf("caddy.env mode = %o, want 600", mode)
 	}
+	for _, id := range []string{"1", "2"} {
+		if got := env.installed("var/lib/AdGuardHome/data/filters/" + id + ".txt"); got == "" {
+			t.Errorf("initial filter %s is empty", id)
+		}
+	}
+	receipt := env.installed("var/lib/AdGuardHome/nightloch-filter-updates.log")
+	requireContains(t, "the initial filter update receipt", receipt,
+		"2026-08-30T18:00:00Z\tinitial\tid=1\tsha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\turl=https://nsfw.oisd.nl/",
+		"2026-08-30T18:00:00Z\tinitial\tid=2\tsha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\turl=https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt",
+	)
 
 	invocations := env.invocations()
 	requireInvoked(t, invocations, "nightloch resolver-query-log-retention")
+	requireContains(t, "the initial downloads", strings.Join(invocations, "\n"),
+		"https://nsfw.oisd.nl/",
+		"https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt",
+	)
 	requireInvoked(t, invocations,
 		"chown adguardhome:adguardhome "+filepath.Join(env.root, "etc/AdGuardHome")+" "+
-			filepath.Join(env.root, "etc/AdGuardHome/AdGuardHome.yaml")+" "+
-			filepath.Join(env.root, "var/lib/AdGuardHome"))
+			filepath.Join(env.root, "etc/AdGuardHome/AdGuardHome.yaml"))
+	requireInvoked(t, invocations,
+		"chown -R adguardhome:adguardhome "+filepath.Join(env.root, "var/lib/AdGuardHome"))
 	requireInvoked(t, invocations, "systemctl daemon-reload")
 	requireNotInvoked(t, invocations, "systemctl enable")
 	requireNotInvoked(t, invocations, "systemctl start")
@@ -344,6 +373,54 @@ func TestStartingResolverValidatesBothConfigurationsBeforeEnablingAnything(t *te
 	requireInvokedBefore(t, invocations, enable, restart)
 }
 
+func TestStartingResolverRefusesWithoutLoadedBaselineListsOrTheirUpdateRecord(t *testing.T) {
+	tests := []string{
+		"var/lib/AdGuardHome/data/filters/1.txt",
+		"var/lib/AdGuardHome/data/filters/2.txt",
+		"var/lib/AdGuardHome/nightloch-filter-updates.log",
+	}
+	for _, missing := range tests {
+		t.Run(missing, func(t *testing.T) {
+			env := newResolverPostureEnv(t)
+			if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
+				t.Fatalf("install: exit = %d, stderr = %q", run.exitCode, run.stderr)
+			}
+			if err := os.Remove(filepath.Join(env.root, missing)); err != nil {
+				t.Fatal(err)
+			}
+			env.forget()
+
+			run := env.run(resolverInstallerPath, "start")
+
+			if run.exitCode != 3 {
+				t.Fatalf("start exit = %d, want 3; stdout = %q, stderr = %q", run.exitCode, run.stdout, run.stderr)
+			}
+			requireContains(t, "the refusal", run.stderr, "missing or empty")
+			requireNotInvoked(t, env.invocations(), "systemctl enable")
+			requireNotInvoked(t, env.invocations(), "systemctl restart")
+		})
+	}
+}
+
+func TestStartingResolverRefusesUnrecordedFilterBytes(t *testing.T) {
+	env := newResolverPostureEnv(t)
+	if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
+		t.Fatalf("install: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+	env.forget()
+
+	run := env.runWith(resolverInstallerPath, []string{
+		"NIGHTLOCH_STUB_SHA256_OUT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}, "start")
+
+	if run.exitCode != 3 {
+		t.Fatalf("start exit = %d, want 3; stdout = %q, stderr = %q", run.exitCode, run.stdout, run.stderr)
+	}
+	requireContains(t, "the refusal", run.stderr, "does not match its latest Operator record")
+	requireNotInvoked(t, env.invocations(), "systemctl enable")
+	requireNotInvoked(t, env.invocations(), "systemctl restart")
+}
+
 func TestRepeatedResolverInstallPreservesThePersistedConfiguration(t *testing.T) {
 	env := newResolverPostureEnv(t)
 	if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
@@ -352,6 +429,9 @@ func TestRepeatedResolverInstallPreservesThePersistedConfiguration(t *testing.T)
 	configPath := "etc/AdGuardHome/AdGuardHome.yaml"
 	withLaterRules := env.installed(configPath) + "# later generated Policy projection\n"
 	env.writeRootFile(configPath, withLaterRules, 0o600)
+	filterPath := "var/lib/AdGuardHome/data/filters/1.txt"
+	env.writeRootFile(filterPath, "||known-good-filter.example^\n", 0o600)
+	env.forget()
 
 	if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
 		t.Fatalf("second install: exit = %d, stderr = %q", run.exitCode, run.stderr)
@@ -359,6 +439,13 @@ func TestRepeatedResolverInstallPreservesThePersistedConfiguration(t *testing.T)
 	if got := env.installed(configPath); got != withLaterRules {
 		t.Error("a repeated install overwrote AdGuard Home's persisted configuration")
 	}
+	if got := env.installed(filterPath); got != "||known-good-filter.example^\n" {
+		t.Error("a repeated install silently refreshed a Baseline list")
+	}
+	requireAbsent(t, "the repeated install's invocations", strings.Join(env.invocations(), "\n"),
+		"https://nsfw.oisd.nl/",
+		"https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt",
+	)
 }
 
 func TestRepeatedResolverInstallRefusesADivergentPasswordHash(t *testing.T) {
@@ -385,6 +472,30 @@ func TestRepeatedResolverInstallRefusesADivergentPasswordHash(t *testing.T) {
 	if got := env.invocations(); got != nil {
 		t.Errorf("a refused password-hash change invoked %q", got)
 	}
+}
+
+func TestRecordingAFilterUpdateAppendsCurrentDigestsWithoutRefreshingAnything(t *testing.T) {
+	env := newResolverPostureEnv(t)
+	if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
+		t.Fatalf("install: exit = %d, stderr = %q", run.exitCode, run.stderr)
+	}
+	env.forget()
+
+	run := env.run(resolverInstallerPath, "record-filter-update")
+
+	if run.exitCode != 0 {
+		t.Fatalf("record: exit = %d, stdout = %q, stderr = %q", run.exitCode, run.stdout, run.stderr)
+	}
+	receipt := env.installed("var/lib/AdGuardHome/nightloch-filter-updates.log")
+	requireContains(t, "the filter update receipt", receipt,
+		"2026-08-30T18:00:00Z\tmanual\tid=1\tsha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\turl=https://nsfw.oisd.nl/",
+		"2026-08-30T18:00:00Z\tmanual\tid=2\tsha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\turl=https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt",
+	)
+	invocations := strings.Join(env.invocations(), "\n")
+	requireAbsent(t, "record-filter-update invocations", invocations,
+		"curl ",
+		"systemctl ",
+	)
 }
 
 func TestResolverBinaryDownloadIsVersionedAndChecksumPinned(t *testing.T) {
@@ -489,6 +600,24 @@ func TestResolverVerifierFailsEachBrokenAcceptanceFactByName(t *testing.T) {
 			},
 		},
 		{
+			name:     "missing filter update record",
+			wantFact: "filter_updates_manual",
+			breakIt: func(env *resolverPostureEnv) []string {
+				if err := os.Remove(filepath.Join(env.root, "var/lib/AdGuardHome/nightloch-filter-updates.log")); err != nil {
+					env.t.Fatal(err)
+				}
+				return healthyResolverVerifyEnvironment()
+			},
+		},
+		{
+			name:     "unrecorded filter bytes",
+			wantFact: "filter_updates_manual",
+			breakIt: func(_ *resolverPostureEnv) []string {
+				return append(healthyResolverVerifyEnvironment(),
+					"NIGHTLOCH_STUB_SHA256_OUT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+			},
+		},
+		{
 			name:     "vendor-default query retention",
 			wantFact: "query_log_retention",
 			breakIt: func(env *resolverPostureEnv) []string {
@@ -534,6 +663,8 @@ func TestResolverVerifierIsReadOnly(t *testing.T) {
 		"systemctl is-enabled AdGuardHome.service",
 		"systemctl is-active AdGuardHome.service",
 		"ss -H -lntu",
+		"sha256sum " + filepath.Join(env.root, "var/lib/AdGuardHome/data/filters/1.txt"),
+		"sha256sum " + filepath.Join(env.root, "var/lib/AdGuardHome/data/filters/2.txt"),
 		"nightloch resolver-query-log-retention",
 		"dig +time=2 +tries=1 @10.66.0.1 use-application-dns.net A",
 	}

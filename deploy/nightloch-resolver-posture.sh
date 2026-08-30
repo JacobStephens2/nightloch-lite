@@ -3,8 +3,10 @@
 # Install and start Nightloch's AdGuard Home Resolver posture.
 #
 # `install` writes the pinned binary and every persistent artifact, renders a
-# first configuration, and starts nothing.  `start` validates both AdGuard Home
-# and Caddy before enabling the Resolver for this boot and future reboots.
+# first configuration, fetches and records the first list caches, and starts
+# nothing.  `start` validates both AdGuard Home and Caddy before enabling the
+# Resolver for this boot and future reboots.  `record-filter-update` records
+# the bytes an Operator explicitly refreshed without fetching anything itself.
 #
 # NIGHTLOCH_RESOLVER_ROOT and NIGHTLOCH_RESOLVER_SOURCE let the Go tests run
 # the real script against a scratch root.  They grant no privilege on a host;
@@ -30,6 +32,11 @@ caddyfile="$etc/caddy/Caddyfile"
 binary_dest="$opt/AdGuardHome/AdGuardHome"
 nightloch_binary="$opt/nightloch/bin/nightloch"
 work_dest="$var/lib/AdGuardHome"
+filters_dest="$work_dest/data/filters"
+filter_receipt="$work_dest/nightloch-filter-updates.log"
+
+oisd_url="https://nsfw.oisd.nl/"
+hagezi_url="https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt"
 
 # A release is an explicit host change, not something AdGuard Home performs
 # from its UI.  The checksum is the linux/amd64 asset digest published with
@@ -43,6 +50,7 @@ usage() {
 	cat >&2 <<'USAGE'
 usage: nightloch-resolver-posture.sh install
        nightloch-resolver-posture.sh start
+       nightloch-resolver-posture.sh record-filter-update
 USAGE
 }
 
@@ -66,6 +74,12 @@ require_root() {
 require_file() {
 	if [ ! -f "$1" ]; then
 		unavailable "$1 is missing"
+	fi
+}
+
+require_nonempty_file() {
+	if [ ! -s "$1" ]; then
+		unavailable "$1 is missing or empty"
 	fi
 }
 
@@ -143,6 +157,67 @@ write_caddy_environment() {
 	trap - EXIT HUP INT TERM
 }
 
+filter_digest() {
+	digest_line="$(sha256sum "$1")"
+	digest="${digest_line%% *}"
+	case "$digest" in
+	????????????????????????????????????????????????????????????????)
+		case "$digest" in *[!0-9a-f]*) unavailable "could not record the SHA-256 digest of $1" ;; esac
+		;;
+	*) unavailable "could not record the SHA-256 digest of $1" ;;
+	esac
+	printf '%s\n' "$digest"
+}
+
+recorded_filter_digest() {
+	id="$1"
+	awk -v wanted="id=$id" '
+		$3 == wanted { digest = $4 }
+		END {
+			sub(/^sha256=/, "", digest)
+			print digest
+		}
+	' "$filter_receipt"
+}
+
+require_recorded_filter() {
+	id="$1"
+	filter_file="$2"
+	current_digest="$(filter_digest "$filter_file")"
+	recorded_digest="$(recorded_filter_digest "$id")"
+	if [ -z "$recorded_digest" ] || [ "$current_digest" != "$recorded_digest" ]; then
+		unavailable "$filter_file does not match its latest Operator record"
+	fi
+}
+
+record_filter_snapshot() {
+	reason="$1"
+	require_nonempty_file "$filters_dest/1.txt"
+	require_nonempty_file "$filters_dest/2.txt"
+	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	oisd_digest="$(filter_digest "$filters_dest/1.txt")"
+	hagezi_digest="$(filter_digest "$filters_dest/2.txt")"
+	( umask 077 && {
+		printf '%s\t%s\tid=1\tsha256=%s\turl=%s\n' "$timestamp" "$reason" "$oisd_digest" "$oisd_url"
+		printf '%s\t%s\tid=2\tsha256=%s\turl=%s\n' "$timestamp" "$reason" "$hagezi_digest" "$hagezi_url"
+	} >>"$filter_receipt" )
+}
+
+fetch_initial_filters() {
+	oisd_pending="$filters_dest/.1.txt.nightloch-pending.$$"
+	hagezi_pending="$filters_dest/.2.txt.nightloch-pending.$$"
+	trap 'rm -f "$oisd_pending" "$hagezi_pending"' EXIT HUP INT TERM
+	curl --fail --location --silent --show-error --output "$oisd_pending" "$oisd_url"
+	curl --fail --location --silent --show-error --output "$hagezi_pending" "$hagezi_url"
+	require_nonempty_file "$oisd_pending"
+	require_nonempty_file "$hagezi_pending"
+	chmod 0600 "$oisd_pending" "$hagezi_pending"
+	mv "$oisd_pending" "$filters_dest/1.txt"
+	mv "$hagezi_pending" "$filters_dest/2.txt"
+	trap - EXIT HUP INT TERM
+	record_filter_snapshot initial
+}
+
 cmd_install() {
 	for artifact in AdGuardHome.yaml.template AdGuardHome.service AdGuardHome.caddy caddy-nightloch.service.conf; do
 		require_file "$source_dir/$artifact"
@@ -151,6 +226,13 @@ cmd_install() {
 	read_password_hash
 	if [ -f "$config_dest" ] && ! grep -Fq -f "$password_hash_file" "$config_dest"; then
 		unavailable "the password hash does not match the persisted Resolver configuration; follow the credential-rotation runbook rather than changing one layer alone"
+	fi
+	if [ -f "$config_dest" ]; then
+		require_nonempty_file "$filters_dest/1.txt"
+		require_nonempty_file "$filters_dest/2.txt"
+		require_nonempty_file "$filter_receipt"
+		require_recorded_filter 1 "$filters_dest/1.txt"
+		require_recorded_filter 2 "$filters_dest/2.txt"
 	fi
 	read_query_log_retention
 	require_file "$caddyfile"
@@ -163,7 +245,7 @@ cmd_install() {
 	fi
 
 	install -d -m 0755 "$opt/AdGuardHome" "$etc/systemd/system" "$etc/caddy/sites" "$etc/systemd/system/caddy.service.d"
-	install -d -m 0750 "$etc/AdGuardHome" "$work_dest" "$etc/nightloch"
+	install -d -m 0750 "$etc/AdGuardHome" "$work_dest" "$filters_dest" "$etc/nightloch"
 	install_binary
 	install -m 0644 "$source_dir/AdGuardHome.service" "$unit_dest"
 	install -m 0644 "$source_dir/AdGuardHome.caddy" "$caddy_site_dest"
@@ -174,18 +256,23 @@ cmd_install() {
 	# generated per-Protectee rules a later slice adds.  A repeated install
 	# updates the binary and units but never erases that state.
 	if [ ! -f "$config_dest" ]; then
+		# With periodic updates disabled, AdGuard Home will not populate a
+		# fresh subscription on its own.  Fetch both caches as one explicit
+		# initial change and record exactly which bytes enforcement starts on.
+		fetch_initial_filters
 		render_initial_config
 	fi
 	# The service validates the config as its unprivileged user before systemd
 	# gets a chance to apply ConfigurationDirectory ownership.  It therefore
 	# needs traversal on the directory as well as ownership of the file.
-	chown adguardhome:adguardhome "$etc/AdGuardHome" "$config_dest" "$work_dest"
+	chown adguardhome:adguardhome "$etc/AdGuardHome" "$config_dest"
+	chown -R adguardhome:adguardhome "$work_dest"
 	systemctl daemon-reload
 
 	cat <<EOF
 Installed AdGuard Home $adguard_version and staged the Resolver posture.
 Nothing was started or enabled.  Review the rendered configuration, then run:
-  nightloch-resolver-posture.sh start
+  $0 start
 EOF
 }
 
@@ -194,6 +281,11 @@ cmd_start() {
 	for staged in "$binary_dest" "$config_dest" "$unit_dest" "$caddy_site_dest" "$caddy_dropin_dest" "$caddy_env_dest" "$caddyfile"; do
 		require_file "$staged"
 	done
+	require_nonempty_file "$filters_dest/1.txt"
+	require_nonempty_file "$filters_dest/2.txt"
+	require_nonempty_file "$filter_receipt"
+	require_recorded_filter 1 "$filters_dest/1.txt"
+	require_recorded_filter 2 "$filters_dest/2.txt"
 	if ! systemctl is-active --quiet wg-quick@wg0.service; then
 		unavailable "wg-quick@wg0.service is not active; the Resolver has no address to bind"
 	fi
@@ -215,6 +307,14 @@ The Resolver is active and enabled for reboot.  Verify the live facts with:
 EOF
 }
 
+cmd_record_filter_update() {
+	require_root
+	require_file "$config_dest"
+	record_filter_snapshot manual
+	chown adguardhome:adguardhome "$filter_receipt"
+	printf 'Recorded the current Baseline list cache digests in %s.\n' "$filter_receipt"
+}
+
 if [ "$#" -ne 1 ]; then
 	refuse "exactly one subcommand is required"
 fi
@@ -222,5 +322,6 @@ fi
 case "$1" in
 install) cmd_install ;;
 start) cmd_start ;;
+record-filter-update) cmd_record_filter_update ;;
 *) refuse "unknown subcommand '$1'" ;;
 esac

@@ -14,6 +14,7 @@ caddy_site="$root/etc/caddy/sites/nightloch-agh.caddy"
 caddy_env="$root/etc/nightloch/caddy.env"
 nightloch_binary="$root/opt/nightloch/bin/nightloch"
 filters_dir="$root/var/lib/AdGuardHome/data/filters"
+filter_receipt="$root/var/lib/AdGuardHome/nightloch-filter-updates.log"
 
 host_address="10.66.0.1"
 admin_address="127.0.0.1:3000"
@@ -119,6 +120,22 @@ filter_enabled() {
 	' "$config"
 }
 
+filter_digest_matches_receipt() {
+	id="$1"
+	filter_file="$2"
+	[ -s "$filter_receipt" ] || return 1
+	digest_line="$(sha256sum "$filter_file" 2>/dev/null)" || return 1
+	current_digest="${digest_line%% *}"
+	recorded_digest="$(awk -v wanted="id=$id" '
+		$3 == wanted { digest = $4 }
+		END {
+			sub(/^sha256=/, "", digest)
+			print digest
+		}
+	' "$filter_receipt")"
+	[ -n "$current_digest" ] && [ "$current_digest" = "$recorded_digest" ]
+}
+
 check_baseline() {
 	oisd_url="https://nsfw.oisd.nl/"
 	hagezi_url="https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt"
@@ -127,13 +144,16 @@ check_baseline() {
 		[ -s "$filters_dir/1.txt" ] && [ -s "$filters_dir/2.txt" ]; then
 		pass baseline_subscriptions "the OISD NSFW and HaGeZi global lists are enabled and loaded"
 	else
-		fail baseline_subscriptions "one or both global Baseline subscriptions are disabled, absent, or have no loaded rules"
+		fail baseline_subscriptions "one or both global Baseline list subscriptions are disabled, absent, or have no loaded rules"
 	fi
 
-	if [ -r "$config" ] && grep -Eq '^[[:space:]]*filters_update_interval:[[:space:]]*0[[:space:]]*$' "$config"; then
-		pass filter_updates_manual "automatic filter refresh is disabled; updates require an explicit Operator action"
+	if [ -r "$config" ] &&
+		grep -Eq '^[[:space:]]*filters_update_interval:[[:space:]]*0[[:space:]]*$' "$config" &&
+		filter_digest_matches_receipt 1 "$filters_dir/1.txt" &&
+		filter_digest_matches_receipt 2 "$filters_dir/2.txt"; then
+		pass filter_updates_manual "automatic refresh is disabled and both loaded list digests have an Operator record"
 	else
-		fail filter_updates_manual "filters_update_interval is not zero, so an upstream change can land silently"
+		fail filter_updates_manual "automatic refresh is enabled, or a loaded list digest has no matching Operator record"
 	fi
 }
 
