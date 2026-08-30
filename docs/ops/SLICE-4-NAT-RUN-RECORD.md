@@ -5,10 +5,12 @@ What follows is the state of every step of [NAT-CHECKLIST.md](./NAT-CHECKLIST.md
 what it showed, or it is not done, with what it is waiting on. Nothing is marked done
 because it was prepared.
 
-**There is no droplet.** Slice 1's `tofu apply` has not been run, so every step that reads or
-changes a live host is blocked on that, and then on an explicit human go-ahead for the
-forwarding change itself. No forwarding was enabled, no rule was loaded, and no host was
-touched by this work.
+The Slice 1 droplet now exists at `134.209.165.82`. The host-side portion of the first live
+run completed on **2026-08-30**: the Operator confirmed the out-of-band DigitalOcean
+Recovery Console, approved and personally ran activation, and the host posture survived an
+unattended reboot.
+There is not yet a Device or Resolver, so the three checks that can only be answered from a
+Device remain blocked rather than inferred from the host.
 
 ## Done
 
@@ -32,29 +34,58 @@ touched by this work.
 | Activation's claimed order is the order it runs in | `TestActivationTurnsThePostureOnAndMakesItSurviveAReboot` | The rules load before `ufw reload`, and `sysctl --system` runs after it, so ufw's own `/etc/ufw/sysctl.conf` pass cannot be what decides whether the host forwards |
 | Revert puts back what was there | `TestRevertRestoresTheForwardPolicyTheHostActuallyHad`, `TestRevertTakesTheHostBackToWhereItWasBeforeForwarding` | The wg0 DNS allowances are withdrawn, and the recorded prior forward policy is restored rather than `DROP` assumed |
 
-## Not done - blocked on the Slice 1 apply
+## Live host-side run
 
-Every one of these needs a host. None of them can be honestly recorded any other way.
+- [x] DigitalOcean Recovery Console login confirmed for `nightloch`; `whoami` returned
+      `nightloch`. This was the out-of-band QEMU console, not the network-dependent Web
+      Console.
+- [x] Snapshot `nightloch-lite-pre-nat-2026-08-30` completed before staging: 4.51 GB in
+      NYC3. Automated backups were enabled but none existed yet.
+- [x] Two SSH sessions were opened from the Operator laptop and left open through
+      activation.
+- [x] The untouched verifier result was recorded: forwarding, `wg0`, the NAT rules, and
+      reboot persistence were absent; IPv6 forwarding was off; no Resolver was listening.
+- [x] `stage` installed the posture and generated the interface key without enabling a
+      unit, loading a rule, or changing forwarding. `/etc/wireguard/wg0.conf` was
+      `0600 root:root`; the only other key artifact was the public `wg0.pub`.
+- [ ] Put `TUNNEL_PUBLIC_KEY` in `/etc/nightloch/nightloch.env` and restart
+      `nightloch.service`. Neither the environment file nor the unit exists on this host
+      yet; Slice 2/9 must install them before any Device is minted.
+- [x] A live verifier defect was reproduced before activation: Ubuntu 24.04's
+      loopback-only `systemd-resolved` listeners (`127.0.0.53%lo:53` and
+      `127.0.0.54:53`) were mislabeled public. A regression test now carries the real
+      `ss` output, the verifier ignores IPv4 loopback listeners, every verifier test
+      passes, and the corrected script was installed before proceeding.
+- [x] `nightloch-nat-revert.timer` was scheduled for ten minutes and confirmed active
+      before activation.
+- [x] The Operator explicitly approved the first forwarding change and personally ran
+      `activate --i-have-run-the-nat-checklist`. Activation completed without error.
+- [x] The second SSH session responded, a fresh key-authenticated SSH connection from the
+      laptop succeeded, and `https://lite.nightloch.app` still served before the revert
+      timer was cancelled.
+- [x] Every governing named fact passed on the live host. `resolver_listening` reported the
+      expected non-governing warning because AdGuard Home is not installed.
+- [x] Off-host `dig +time=3 +tries=1 @134.209.165.82 example.com` timed out with no answer.
+- [x] The revert timer was stopped only after all preceding checks passed and was confirmed
+      inactive.
+- [x] A host-only reboot ran at 20:48 UTC. Without an interactive command after boot,
+      `ip_forward`, `wg0`, the Nightloch nftables table, and both enabled units returned;
+      the verifier passed, HTTPS served, and off-host port 53 still gave no answer. This did
+      not satisfy the separate checklist drill that requires a Device on the tunnel.
 
-- [ ] DigitalOcean web console login confirmed working for `nightloch`
-- [ ] Droplet snapshot taken, or backups confirmed green
-- [ ] Second session open alongside the first
-- [ ] `stage` run on the host; interface key generated; `TUNNEL_PUBLIC_KEY` filled in
-- [ ] Self-cancelling revert scheduled with `systemd-run --on-active=10min`
-- [ ] **Explicit human go-ahead obtained for the first forwarding change**
-- [ ] `activate --i-have-run-the-nat-checklist` run by a human
-- [ ] SSH still works after the change
-- [ ] `https://lite.nightloch.app` still serves after the change
-- [ ] `nightloch-nat-verify.sh` passes on the host
-- [ ] The public address answers nothing on port 53, asked from off the host
-- [ ] Revert timer cancelled after the checks passed
-- [ ] Reboot drill with a Device on the tunnel; the posture returns unattended
-- [ ] From a Device: DNS aimed at `8.8.8.8` still reaches the resolver
-- [ ] From a Device: strict Private DNS fails visibly rather than hanging
+## Not done - blocked on a Device and Resolver
+
+`wg show wg0 peers` returned no peers before the reboot. These checks need an enrolled
+Device and AdGuard Home listening on `10.66.0.1:53`; the host cannot answer them honestly.
+
+- [ ] Reboot the droplet with a Device on the tunnel; verify that the Device reconnects and
+      browsing works.
+- [ ] From a Device, DNS aimed at `8.8.8.8` is redirected to the Resolver and blocked.
+- [ ] From a Device, strict Private DNS fails visibly rather than hanging.
 
 ## What an agent may do next without approval
 
-`sudo ./deploy/nightloch-host-posture.sh stage` and `sudo nightloch-nat-verify.sh`. Neither
-enables forwarding, loads a rule, or starts a unit; the tests assert that rather than the
-comments claiming it. Everything past staging is the human's, and the `activate` subcommand
-refuses without the checklist confirmation flag rather than trusting anyone to remember.
+`sudo nightloch-nat-verify.sh` remains read-only. `stage` remains safe to run again: it
+reinstalls the posture files without replacing the existing interface configuration or its
+key. A future activation is still the human Operator's and still refuses without the
+checklist confirmation flag.

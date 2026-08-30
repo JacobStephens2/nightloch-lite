@@ -236,11 +236,25 @@ func TestCloudInitInstallsWhatThePostureNeedsToExist(t *testing.T) {
 	// First boot brings the packages; it does not bring forwarding up. The
 	// first forwarding change is the human's, under docs/ops/NAT-CHECKLIST.md.
 	requireContains(t, cloudInitPath, cloudInit, "  - wireguard\n", "  - nftables\n")
+	requireContains(t, cloudInitPath, cloudInit, "ssh_authorized_keys:")
 	requireAbsent(t, cloudInitPath, cloudInit,
 		"ip_forward",
 		"MASQUERADE",
 		"nightloch-nat.service",
 	)
+}
+
+func TestCloudInitUserDataIsASCII(t *testing.T) {
+	// Cloud-init's PyYAML rejects C1 bytes and then treats the whole
+	// user-data as empty. An em dash in the first comment is how the
+	// first droplet came up with no nightloch user, no Caddy, and no
+	// firstboot. Comments and HTML in this file have to stay ASCII.
+	body := readArtifact(t, cloudInitPath)
+	for i := 0; i < len(body); i++ {
+		if body[i] >= 128 {
+			t.Fatalf("%s has a non-ASCII byte at offset %d; cloud-init will drop the file", cloudInitPath, i)
+		}
+	}
 }
 
 // The rendered interface configuration must be one the root helper accepts,
@@ -687,6 +701,28 @@ func TestTheVerifierReportsAMissingResolverWithoutFailingACorrectPosture(t *test
 		t.Fatalf("exit = %d, stdout = %q", run.exitCode, run.stdout)
 	}
 	requireContains(t, "the verifier's report", run.stdout, "WARN resolver_listening")
+}
+
+func TestTheVerifierDoesNotCallUbuntuStubResolversPublic(t *testing.T) {
+	env := newPostureEnv(t)
+	env.forwardingFacts("1", "0")
+
+	// Ubuntu 24.04's systemd-resolved listens on these loopback-only addresses
+	// before AdGuard Home is installed. Neither is reachable from the internet,
+	// including the scoped address form that ss prints with its interface name.
+	listeners := `udp UNCONN 0 0 127.0.0.54:53 0.0.0.0:*
+udp UNCONN 0 0 127.0.0.53%lo:53 0.0.0.0:*
+tcp LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*
+tcp LISTEN 0 4096 127.0.0.54:53 0.0.0.0:*`
+	run := env.verify("NIGHTLOCH_STUB_SS_OUT=" + listeners)
+
+	if run.exitCode != 0 {
+		t.Fatalf("exit = %d, stdout = %q", run.exitCode, run.stdout)
+	}
+	requireContains(t, "the verifier's report", run.stdout,
+		"PASS no_public_resolver",
+		"WARN resolver_listening",
+	)
 }
 
 func TestTheVerifierWillNotCallAnUnreadablePortAClosedOne(t *testing.T) {
