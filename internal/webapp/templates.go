@@ -448,7 +448,7 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <span class="warn-inline">Recovery:</span> {{.Recovery}}</li>{{end}}</ul>
 {{end}}
 <h2>What this does not protect you from</h2>
-<p>With the tunnel off, you are not protected. Nothing is filtered and nothing is logged; your Partners see your coverage fall, which is a signal to them rather than a control over you. Turning the tunnel off stays available to you by design - Nightloch restrains what you may loosen, not whether you may disconnect.</p>
+<p>With the tunnel off, you are not protected. Nothing is filtered and nothing is logged; your Partners see your Coverage fall, which is a signal to them rather than a control over you. Turning the tunnel off stays available to you by design - Nightloch restrains what you may loosen, not whether you may disconnect.</p>
 <p>Nightloch filters DNS domains. On hardware you own, a determined bypass - encrypted DNS to a resolver Nightloch does not control, a second network path, a device that was never enrolled as a Device - is not fully preventable. Nightloch closes the routes it can reach, tells your Partners what it observes, and does not claim a guarantee it cannot keep.</p>
 <h2>Enrollment is not open yet</h2>
 <p>This page offers no way to enroll, which is the current state rather than a fault. Device enrollment is gated behind the Operator&rsquo;s Enrollment allowlist, so the tunnel is not an open VPN that any signed-in stranger can use as a free exit. Until that allowlist ships, the Operator mints a Device on the server and hands you its configuration once.</p>

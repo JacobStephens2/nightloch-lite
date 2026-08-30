@@ -12,7 +12,7 @@ const enrollPath = "https://lite.nightloch.app/devices/enroll"
 
 // The screen's recovery detail says exactly which setting takes a phone off
 // the internet and how to undo it. That is written for a Protectee who is
-// about to enrol, not for anyone who finds the address, so an anonymous
+// about to enroll, not for anyone who finds the address, so an anonymous
 // visitor is sent to sign in and reads none of it.
 func TestDeviceEnrollScreenRequiresASession(t *testing.T) {
 	t.Parallel()
@@ -27,19 +27,25 @@ func TestDeviceEnrollScreenRequiresASession(t *testing.T) {
 	}
 }
 
-// The blackhole is the one thing the product must not let a Protectee meet
-// unprepared: the Device stops reaching the internet rather than falling open,
-// and the screen says so before anyone enrols.
-func TestDeviceEnrollScreenStatesTheBlackholeAndItsRecovery(t *testing.T) {
-	t.Parallel()
+// enrollBody is the enroll screen as a signed-in Protectee reads it, which is
+// the only way any of this copy is reachable.
+func enrollBody(t *testing.T) string {
+	t.Helper()
 	env := newTestEnv(t)
 	session, csrf := signIn(t, env, "protectee@example.com")
-
 	recorder := get(t, env, enrollPath, session, csrf)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET /devices/enroll = %d", recorder.Code)
 	}
-	body := recorder.Body.String()
+	return recorder.Body.String()
+}
+
+// The blackhole is the one thing the product must not let a Protectee meet
+// unprepared: the Device stops reaching the internet rather than falling open,
+// and the screen says so before anyone enrolls.
+func TestDeviceEnrollScreenStatesTheBlackholeAndItsRecovery(t *testing.T) {
+	t.Parallel()
+	body := enrollBody(t)
 	for _, want := range []string{
 		"stops reaching the internet",
 		"deliberate",
@@ -95,10 +101,7 @@ func TestEverySupportedPlatformCarriesRecoveryAndANamedTrap(t *testing.T) {
 // settings a Protectee would actually look for, not as a general warning.
 func TestDeviceEnrollScreenNamesTheAndroidAndMacOSTraps(t *testing.T) {
 	t.Parallel()
-	env := newTestEnv(t)
-	session, csrf := signIn(t, env, "protectee@example.com")
-
-	body := get(t, env, enrollPath, session, csrf).Body.String()
+	body := enrollBody(t)
 	for _, want := range []string{
 		"Always-on VPN",
 		"Block connections without VPN",
@@ -115,10 +118,7 @@ func TestDeviceEnrollScreenNamesTheAndroidAndMacOSTraps(t *testing.T) {
 // Protectee owns is not fully preventable.
 func TestDeviceEnrollScreenStatesTheLimitsOfProtection(t *testing.T) {
 	t.Parallel()
-	env := newTestEnv(t)
-	session, csrf := signIn(t, env, "protectee@example.com")
-
-	body := get(t, env, enrollPath, session, csrf).Body.String()
+	body := enrollBody(t)
 	for _, want := range []string{
 		"you are not protected",
 		"encrypted DNS",
@@ -130,13 +130,49 @@ func TestDeviceEnrollScreenStatesTheLimitsOfProtection(t *testing.T) {
 	}
 }
 
+// The settled wording, pinned literally. The table-driven test above proves
+// the screen renders whatever the platform table holds; this one proves what
+// the table holds, so Slice 5 adds its action to copy that cannot be quietly
+// weakened on the way (#39).
+func TestDeviceEnrollScreenShipsTheSettledRecoveryWording(t *testing.T) {
+	t.Parallel()
+	body := enrollBody(t)
+	for _, want := range []string{
+		"Open the WireGuard app and turn the Nightloch tunnel off. The internet comes back as soon as the tunnel stops.",
+		"the recovery is in Android&#39;s own settings rather than in the WireGuard app",
+		"Android brings the tunnel straight back up every time you turn it off in the WireGuard app",
+		"Turn Always-on VPN off under Settings, Network &amp; internet, VPN, and the gear beside WireGuard.",
+		"Android drops every packet that is not going through the tunnel",
+		"Turn Block connections without VPN off on that same VPN settings screen, then turn Always-on VPN off, then turn the tunnel off.",
+		"Set Private DNS to Off or Automatic under Settings, Network &amp; internet, Private DNS.",
+		"Open the WireGuard app, select the Nightloch tunnel, and click Deactivate.",
+		"macOS reconnects the tunnel within seconds of every Deactivate",
+		"Turn On-Demand off first: in the WireGuard app select the Nightloch tunnel, click Edit, clear the On-Demand setting, save, and then click Deactivate.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("enroll screen no longer ships the settled wording %q:\n%s", want, body)
+		}
+	}
+}
+
+// Recovery cannot claim an enforcement rule Nightloch has not built. Port 853
+// is rejected from inside the tunnel by a later Slice 4 ticket, so the Private
+// DNS trap says what will happen rather than what already does.
+func TestDeviceEnrollScreenClaimsNoEnforcementThatIsNotBuiltYet(t *testing.T) {
+	t.Parallel()
+	body := enrollBody(t)
+	if strings.Contains(body, "Nightloch rejects encrypted DNS") {
+		t.Fatalf("enroll screen states an unbuilt :853 reject as fact:\n%s", body)
+	}
+	if !strings.Contains(body, "will not be carried out of the tunnel") {
+		t.Fatalf("enroll screen dropped the Private DNS consequence:\n%s", body)
+	}
+}
+
 // A screen with no action must say why there is none, or it reads as broken.
 func TestDeviceEnrollScreenExplainsWhyEnrollmentIsNotOpenYet(t *testing.T) {
 	t.Parallel()
-	env := newTestEnv(t)
-	session, csrf := signIn(t, env, "protectee@example.com")
-
-	body := get(t, env, enrollPath, session, csrf).Body.String()
+	body := enrollBody(t)
 	for _, want := range []string{
 		"not open yet",
 		"Enrollment allowlist",

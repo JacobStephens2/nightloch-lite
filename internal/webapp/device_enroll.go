@@ -51,7 +51,7 @@ var enrollPlatforms = []enrollPlatform{
 			},
 			{
 				Setting:     "Private DNS set to a hostname",
-				Consequence: "Nightloch rejects encrypted DNS on port 853 from inside the tunnel and Android's strict Private DNS mode has no plaintext fallback, so names stop resolving and the phone reads as offline even though the tunnel is up.",
+				Consequence: "Encrypted DNS on port 853 will not be carried out of the tunnel, and Android's strict Private DNS mode has no plaintext fallback, so names stop resolving and the phone reads as offline even though the tunnel is up.",
 				Recovery:    "Set Private DNS to Off or Automatic under Settings, Network & internet, Private DNS.",
 			},
 		},
