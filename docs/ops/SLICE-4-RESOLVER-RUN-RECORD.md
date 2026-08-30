@@ -50,6 +50,10 @@ Off-host observations:
 - `dig @134.209.165.82 example.com` timed out with no DNS answer.
 - Public TCP port 3000 was closed.
 - Unauthenticated `https://agh.nightloch.app/` returned Caddy `401`.
+- The Operator then passed Caddy Basic auth and AdGuard Home's own login in a
+  browser and reached the live dashboard, which showed protection `ON`.  The
+  supplied screenshot is not committed because it contains incidental browser
+  and query-log detail.
 - `https://lite.nightloch.app/` continued to return `200` from the staging
   static site.
 - `https://lite.nightloch.app/health` returned `404`, not a fabricated health
