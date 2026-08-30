@@ -19,6 +19,11 @@ const defaultResendFrom = "Nightloch <alerts@nightloch.app>"
 // defaultTunnelPort is the port Slice 1's cloud firewall already opens.
 const defaultTunnelPort = 51820
 
+// defaultResolverURL is where AdGuard Home's administration listens on the
+// droplet. The app reaches it directly on loopback; the Caddy site of the same
+// name is the Operator's way in, behind basic auth (deploy/Caddyfile.example).
+const defaultResolverURL = "http://127.0.0.1:3000"
+
 // Config contains the configuration required by the HTTP control plane.
 type Config struct {
 	BaseURL      *url.URL
@@ -32,6 +37,13 @@ type Config struct {
 	ResendWebhookSecret string
 	TurnstileSecret     string
 	TurnstileSite       string
+	// Resolver is AdGuard Home's administration endpoint, which health reads
+	// to report whether the enforcement plane is filtering. It is required
+	// rather than optional: a serving process that cannot say whether the
+	// Baseline list is being enforced is exactly the dishonesty this reporting
+	// exists to remove, and an absent credential is a deployment that is not
+	// finished rather than a resolver that is down.
+	Resolver enforcement.ResolverSettings
 }
 
 // DatabasePath returns the configured SQLite path for commands that only need
@@ -116,9 +128,17 @@ func Load() (Config, error) {
 		ResendWebhookSecret: strings.TrimSpace(os.Getenv("RESEND_WEBHOOK_SECRET")),
 		TurnstileSecret:     strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
 		TurnstileSite:       strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
+		Resolver: enforcement.ResolverSettings{
+			BaseURL:  strings.TrimSpace(os.Getenv("ADGUARD_URL")),
+			Username: strings.TrimSpace(os.Getenv("ADGUARD_USERNAME")),
+			Password: strings.TrimSpace(os.Getenv("ADGUARD_PASSWORD")),
+		},
 	}
 	if config.ResendFrom == "" {
 		config.ResendFrom = defaultResendFrom
+	}
+	if config.Resolver.BaseURL == "" {
+		config.Resolver.BaseURL = defaultResolverURL
 	}
 
 	var missing []string
@@ -127,6 +147,8 @@ func Load() (Config, error) {
 		"RESEND_WEBHOOK_SECRET": config.ResendWebhookSecret,
 		"TURNSTILE_SECRET_KEY":  config.TurnstileSecret,
 		"TURNSTILE_SITE_KEY":    config.TurnstileSite,
+		"ADGUARD_USERNAME":      config.Resolver.Username,
+		"ADGUARD_PASSWORD":      config.Resolver.Password,
 	} {
 		if value == "" {
 			missing = append(missing, name)

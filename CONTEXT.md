@@ -112,6 +112,14 @@ _Avoid_: Revoke, delete a peer, deactivate, unenroll
 The period after a Device is removed during which its tunnel address cannot be allocated to another Device. It runs from the removal instant for longer than the query-log retention, so a later occupant of the address can never resolve to the previous occupant’s retained queries. Applies to addresses only—never to people.
 _Avoid_: Cooldown, hold, reserved, grace period
 
+**Enforcement plane**:
+The two things that make a Policy true on a Device: the tunnel interface carrying the Device, and the **Resolver** filtering its DNS. Reported by `/health` as one named fact each, so a resolver that is running but not filtering is distinguishable from one that is enforcing.
+_Avoid_: The stack, the backend, enforcement layer
+
+**Resolver**:
+AdGuard Home in the role Nightloch uses it for - the enforcer that answers a Device's DNS and applies the Baseline list. **AdGuard Home** names the product; **Resolver** names its place in the enforcement plane, and is the term the code uses for the seam it sits behind.
+_Avoid_: DNS server (when the enforcing role is meant), filter, upstream
+
 **Action alert**:
 An immediate integrity email about a discrete event (loosen, enroll, Partnership change, cooling-off start, etc.).
 _Avoid_: Notification (alone), digest, quiet-peer alert (as the main integrity path)

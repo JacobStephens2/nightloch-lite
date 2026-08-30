@@ -40,6 +40,13 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T, healthChecks ...HealthCheck) *testEnv {
 	t.Helper()
+	return newTestEnvWithLogger(t, slog.New(slog.NewTextHandler(io.Discard, nil)), healthChecks...)
+}
+
+// newTestEnvWithLogger is newTestEnv for a test that reads what the App logged
+// rather than discarding it.
+func newTestEnvWithLogger(t *testing.T, logger *slog.Logger, healthChecks ...HealthCheck) *testEnv {
+	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "nightloch.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +63,7 @@ func newTestEnv(t *testing.T, healthChecks ...HealthCheck) *testEnv {
 		Auth: authService, DB: db, Partnerships: partnerships,
 		TurnstileSite: "site-key", DeliveryWebhookSecret: testWebhookSecret, Version: "test",
 		HealthChecks: healthChecks,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       logger,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
+)
 
 func TestParseBaseURL(t *testing.T) {
 	t.Parallel()
@@ -70,6 +75,43 @@ func TestLoadTunnelDefaultsThePortAndRequiresTheRest(t *testing.T) {
 			t.Setenv(missing, "")
 			if _, err := LoadTunnel(); err == nil {
 				t.Fatalf("LoadTunnel succeeded without %s", missing)
+			}
+		})
+	}
+}
+
+// Serving without AdGuard Home's administration credentials would leave the
+// process unable to say whether anything is being filtered, so Load requires
+// them. Only the URL has a default, because the deployment always puts the
+// administration endpoint on the same loopback port.
+func TestLoadRequiresTheResolverAdministrationCredentials(t *testing.T) {
+	t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "nightloch.db"))
+	t.Setenv("BASE_URL", "https://lite.nightloch.app")
+	t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("RESEND_WEBHOOK_SECRET", "whsec_test")
+	t.Setenv("TURNSTILE_SECRET_KEY", "turnstile-secret")
+	t.Setenv("TURNSTILE_SITE_KEY", "turnstile-site")
+	t.Setenv("ADGUARD_URL", "")
+	t.Setenv("ADGUARD_USERNAME", "operator")
+	t.Setenv("ADGUARD_PASSWORD", "admin-secret")
+
+	settings, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if settings.Resolver.BaseURL != defaultResolverURL {
+		t.Fatalf("resolver URL = %q, want the loopback default %q", settings.Resolver.BaseURL, defaultResolverURL)
+	}
+	if _, err := enforcement.NewAdGuardHome(settings.Resolver); err != nil {
+		t.Fatalf("the loaded settings do not build a resolver: %v", err)
+	}
+
+	for _, missing := range []string{"ADGUARD_USERNAME", "ADGUARD_PASSWORD"} {
+		t.Run("without "+missing, func(t *testing.T) {
+			t.Setenv(missing, "")
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load succeeded without %s", missing)
 			}
 		})
 	}

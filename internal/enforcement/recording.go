@@ -67,3 +67,39 @@ func (t *RecordingTunnel) removeMember(publicKey string) {
 		return peer.PublicKey == publicKey
 	})
 }
+
+// enforcingResolver is the state a healthy AdGuard Home reports: running, with
+// protection and the filtering engine both on.
+var enforcingResolver = ResolverStatus{Running: true, ProtectionEnabled: true, FilteringEnabled: true}
+
+// RecordingResolver is the Resolver a test uses instead of a droplet. It holds
+// no enforcement rule, because the interface it stands in for writes none:
+// what it reports is only whether the resolver is up and filtering.
+type RecordingResolver struct {
+	// Calls is every invocation in order. There is one operation, so every
+	// entry reads "status".
+	Calls []string
+
+	// Reported is the state to answer with. Its zero value is a resolver that
+	// is down, so a test that means "healthy" has to say so.
+	Reported ResolverStatus
+
+	// StatusError makes the read fail, which is a resolver whose state is
+	// unknown rather than one that is known not to be filtering.
+	StatusError error
+}
+
+func (r *RecordingResolver) Status(context.Context) (ResolverStatus, error) {
+	r.Calls = append(r.Calls, "status")
+	if r.StatusError != nil {
+		return ResolverStatus{}, r.StatusError
+	}
+	return r.Reported, nil
+}
+
+// EnforcingResolver is a RecordingResolver reporting a resolver that is up and
+// filtering, which is the state most tests want to hold fixed while they vary
+// something else.
+func EnforcingResolver() *RecordingResolver {
+	return &RecordingResolver{Reported: enforcingResolver}
+}
