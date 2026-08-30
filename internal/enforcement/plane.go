@@ -54,17 +54,7 @@ func (p *Plane) ResolverEnforcing(ctx context.Context) error {
 		}
 		return fmt.Errorf("%w: %w", ErrResolverUnreachable, err)
 	}
-	var off []string
-	if !status.Running {
-		off = append(off, "not running")
-	}
-	if !status.ProtectionEnabled {
-		off = append(off, "protection off")
-	}
-	if !status.FilteringEnabled {
-		off = append(off, "filtering off")
-	}
-	if len(off) > 0 {
+	if enforcing, off := status.Enforcing(); !enforcing {
 		return fmt.Errorf("%w: %s", ErrResolverNotFiltering, strings.Join(off, ", "))
 	}
 	return nil

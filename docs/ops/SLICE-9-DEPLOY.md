@@ -12,7 +12,7 @@ The deploy performs this sequence on the staging origin:
 6. Poll the `/health` endpoint for up to 30 seconds.
 7. Restore and restart the previous binary if the health gate fails. Additive migrations remain in place by design.
 
-The gate reads the endpoint's status code, and only the writable-database check sets it. `/health` also reports the enforcement plane — `tunnel_interface` and `resolver_filtering` — as named facts that never change the status code, so a tunnel or AdGuard Home outage is loud in the payload and rolls a good binary back. Read the body, not only the code:
+The gate reads the endpoint's status code, and only the writable-database check sets it. `/health` also reports the enforcement plane — `tunnel_interface` and `resolver_filtering` — as named facts that never change the status code, so a tunnel or AdGuard Home outage is loud in the payload and rolls nothing back. Read the body, not only the code:
 
 ```json
 {"status":"ok","version":"…","checks":{
