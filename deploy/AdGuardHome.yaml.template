@@ -1,0 +1,97 @@
+# AdGuard Home v0.107.79 configuration for Nightloch's global Baseline.
+#
+# nightloch-resolver-posture.sh renders the two placeholders on first install.
+# AdGuard Home owns the rendered file after that; reinstalling the posture
+# never overwrites it, because later slices add generated user_rules through
+# the control API.
+
+http:
+  address: 127.0.0.1:3000
+  session_ttl: 720h
+  pprof:
+    enabled: false
+    port: 6060
+
+users:
+  - name: operator
+    password: __ADGUARD_PASSWORD_HASH__
+auth_attempts: 5
+block_auth_min: 15
+
+dns:
+  # This is the whole public-resolver boundary.  The administration listener
+  # above is loopback-only; DNS listens only on the address owned by wg0.
+  bind_hosts:
+    - 10.66.0.1
+  port: 53
+  upstream_dns:
+    - 127.0.0.53
+  bootstrap_dns: []
+  upstream_mode: load_balance
+  upstream_timeout: 10s
+  cache_enabled: true
+  cache_size: 4194304
+  enable_dnssec: true
+  refuse_any: true
+  use_private_ptr_resolvers: false
+
+filtering:
+  protection_enabled: true
+  filtering_enabled: true
+  # Zero disables automatic refresh in AdGuard Home.  The Operator refreshes
+  # the lists explicitly after reviewing the upstream change, then runs the
+  # resolver verifier and Device checks from the runbook.
+  filters_update_interval: 0
+  blocking_mode: default
+  blocked_response_ttl: 10
+  rewrites_enabled: true
+  parental_enabled: false
+  safebrowsing_enabled: false
+  safe_search:
+    enabled: false
+  blocked_services:
+    schedule:
+      time_zone: Local
+    ids: []
+
+# These are global subscriptions.  They contain no Device address and no
+# Protectee Policy; every Device receives the same always-on Baseline.
+filters:
+  - url: https://nsfw.oisd.nl/
+    name: OISD NSFW Baseline list
+    enabled: true
+    id: 1
+  - url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt
+    name: HaGeZi Encrypted DNS/VPN/TOR/Proxy Bypass
+    enabled: true
+    id: 2
+whitelist_filters: []
+
+# Firefox treats an NXDOMAIN answer for this canary as a signal not to enable
+# its default encrypted resolver.  It does not prevent a determined manual
+# bypass, which is why the enrollment UI states that limit plainly.
+user_rules:
+  - '||use-application-dns.net^$dnsrewrite=NXDOMAIN;;'
+
+querylog:
+  enabled: true
+  file_enabled: true
+  # Rendered from enforcement.QueryLogRetention; never state it here.
+  interval: __QUERY_LOG_RETENTION__
+  size_memory: 1000
+  ignored: []
+  ignored_enabled: false
+
+statistics:
+  enabled: true
+  interval: 24h
+  ignored: []
+  ignored_enabled: false
+
+dhcp:
+  enabled: false
+
+tls:
+  enabled: false
+
+schema_version: 34

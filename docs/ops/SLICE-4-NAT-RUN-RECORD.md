@@ -9,8 +9,10 @@ The Slice 1 droplet now exists at `134.209.165.82`. The host-side portion of the
 run completed on **2026-08-30**: the Operator confirmed the out-of-band DigitalOcean
 Recovery Console, approved and personally ran activation, and the host posture survived an
 unattended reboot.
-There is not yet a Device or Resolver, so the three checks that can only be answered from a
-Device remain blocked rather than inferred from the host.
+There is not yet a Device or live Resolver, so the three checks that can only be answered
+from a Device remain blocked rather than inferred from the host.  Issue #41's Resolver
+artifacts and [runbook](./SLICE-4-RESOLVER.md) are prepared in the repository; they have not
+been installed on this host, and this record does not turn prepared work into an observation.
 
 ## Done
 
@@ -73,10 +75,12 @@ Device remain blocked rather than inferred from the host.
       the verifier passed, HTTPS served, and off-host port 53 still gave no answer. This did
       not satisfy the separate checklist drill that requires a Device on the tunnel.
 
-## Not done - blocked on a Device and Resolver
+## Not done - blocked on a live Device and Resolver
 
 `wg show wg0 peers` returned no peers before the reboot. These checks need an enrolled
 Device and AdGuard Home listening on `10.66.0.1:53`; the host cannot answer them honestly.
+Install and verify the Resolver through `SLICE-4-RESOLVER.md`, then carry the Device-only
+observations into issue #42.
 
 - [ ] Reboot the droplet with a Device on the tunnel; verify that the Device reconnects and
       browsing works.

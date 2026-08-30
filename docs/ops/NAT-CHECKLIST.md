@@ -93,7 +93,8 @@ the wg0 DNS allowances first, then the rules, then forwarding, then the interfac
       ```bash
       sudo /usr/local/sbin/nightloch-nat-verify.sh
       ```
-      `resolver_listening` reports **WARN** until the AdGuard Home ticket lands and binds
+      `resolver_listening` reports **WARN** until
+      [the Resolver runbook](./SLICE-4-RESOLVER.md) has been executed and AdGuard Home binds
       DNS to `10.66.0.1`. That is expected here and does not fail the run: the redirect is
       correct, and until something answers on that address a Device resolves nothing.
 - [ ] **From somewhere that is not the droplet**, the public address answers nothing on 53:
