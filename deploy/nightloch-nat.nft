@@ -1,0 +1,80 @@
+#!/usr/sbin/nft -f
+#
+# nightloch-nat.nft - the host's tunnel forwarding and DNS posture.
+#
+# Install at /etc/nightloch/nightloch-nat.nft and load it through
+# nightloch-nat.service, never by hand. Why the posture lives in a table of its
+# own rather than in ufw's rules or in wg-quick's PostUp:
+# docs/adr/0006-keep-the-nat-posture-in-its-own-nftables-table.md
+#
+# Three properties this file is written for, in order of how badly their
+# absence hurts:
+#
+#   1. It never flushes a ruleset it does not own. ufw is the host firewall and
+#      keeps its own tables; a `flush ruleset` here would erase them on every
+#      load, including the load that happens at every boot. The table is
+#      created empty and deleted instead, which replaces exactly this posture
+#      atomically and touches nothing else.
+#
+#   2. It matches wg0 by name, never by index. `iif`/`oif` resolve an interface
+#      index while the file is parsed, so a ruleset written that way refuses to
+#      load on a boot where wg-quick has not run yet. `iifname` compares at
+#      match time, so this loads before the tunnel exists and is already in
+#      force the moment it does.
+#
+#   3. Its filter chains hook ahead of ufw. ufw's input policy is deny, and a
+#      dropped packet is a Device that hangs rather than one that fails. The
+#      reject has to be reached first to be a reject at all.
+#
+# The tunnel network and the host's address inside it are the same two facts
+# internal/enforcement allocates Device addresses from and the nightloch-wg
+# helper validates against. They are asserted to agree in
+# internal/enforcement/hostposture_test.go.
+
+table inet nightloch {}
+delete table inet nightloch
+
+table inet nightloch {
+	# DNS from inside the tunnel cannot escape. A Device configured to use
+	# 8.8.8.8, or any other resolver, still reaches AdGuard Home on the host:
+	# the redirect rewrites the destination before routing decides anything,
+	# so pointing a Device's DNS elsewhere is not a way around Policy.
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		iifname "wg0" udp dport 53 redirect to :53
+		iifname "wg0" tcp dport 53 redirect to :53
+	}
+
+	# The host carries tunnel traffic to the internet under its own address.
+	# Traffic that never leaves the tunnel is not masqueraded, so a Device
+	# reaching the resolver still arrives from its own tunnel address - which
+	# is the principal AdGuard Home keys client rules and query-log rows on.
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+
+		ip saddr 10.66.0.0/24 oifname != "wg0" masquerade
+	}
+
+	# DNS-over-TLS from the tunnel fails fast and visibly. A drop would leave a
+	# Device on strict Private DNS resolving nothing with no explanation; a
+	# reject tells it immediately, which is what the enroll screen's recovery
+	# steps assume. The policy stays accept: this chain removes one thing and
+	# decides nothing else, and ufw remains the host firewall behind it.
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+
+		iifname "wg0" tcp dport 853 reject with tcp reset
+		iifname "wg0" udp dport 853 reject
+	}
+
+	# The same answer when a Device aims DoT at the host itself rather than
+	# through it. Without this the packet reaches ufw's deny-incoming default
+	# and is dropped, which is the silent failure this posture exists to avoid.
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+
+		iifname "wg0" tcp dport 853 reject with tcp reset
+		iifname "wg0" udp dport 853 reject
+	}
+}
