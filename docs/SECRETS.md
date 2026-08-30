@@ -21,7 +21,7 @@
 
 | Item | How |
 |---|---|
-| Public key | Path in `ssh_public_key_path` (e.g. `~/.ssh/id_ed25519.pub`) |
+| Public key | Register it on the DigitalOcean account first, then put its local path in `ssh_public_key_path` (e.g. `~/.ssh/id_ed25519.pub`); OpenTofu reuses but does not own it |
 | Private key | Local only; used to SSH as `nightloch@<droplet_ip>` |
 | Console password | `tofu output -raw console_password` after apply — store in password manager; change on first login (DO web console needs a password) |
 

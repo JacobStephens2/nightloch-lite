@@ -50,7 +50,7 @@ dig +short vpn.nightloch.app
 
 # HTTPS (stock Caddy HTTP-01)
 curl -fsS https://lite.nightloch.app | head
-# expect: Origin OK — Slice 1 staging.
+# expect: Origin OK - Slice 1 staging.
 ```
 
 ## What this slice does *not* do

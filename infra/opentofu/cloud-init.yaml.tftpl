@@ -1,5 +1,8 @@
 #cloud-config
-# Nightloch Lite — Slice 1 bootstrap (first boot only; tofu ignores user_data changes later).
+# Nightloch Lite - Slice 1 bootstrap (first boot only; tofu ignores user_data changes later).
+# This file must stay ASCII. Cloud-init's PyYAML rejects C1 bytes and drops
+# the whole user-data; an em dash in the first comment is how the nightloch
+# user never got created on the first droplet.
 
 package_update: true
 package_upgrade: true
@@ -27,6 +30,8 @@ users:
     shell: /bin/bash
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     lock_passwd: false
+    ssh_authorized_keys:
+      - ${ssh_public_key}
     # Password set via chpasswd below so DO web console login works (F32).
     # Change immediately after first login; store in password manager.
 
@@ -70,7 +75,7 @@ write_files:
       </head>
       <body>
         <h1>Nightloch</h1>
-        <p class="ok">Origin OK — Slice 1 staging.</p>
+        <p class="ok">Origin OK - Slice 1 staging.</p>
         <p>Control plane and enforcement land in later slices. Staging host only; apex cutover is Slice 11.</p>
         <p><code>${staging_host}</code></p>
       </body>
@@ -98,7 +103,7 @@ write_files:
       exec > >(tee -a /var/log/nightloch-firstboot.log) 2>&1
       echo "nightloch firstboot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-      # Swap (F4) — 2G on a 2GB droplet
+      # Swap (F4) - 2G on a 2GB droplet
       if ! swapon --show | grep -q .; then
         fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
         chmod 600 /swapfile
@@ -109,14 +114,16 @@ write_files:
         echo 'vm.swappiness=10' > /etc/sysctl.d/99-nightloch-swap.conf
       fi
 
-      # Caddy from official repo (stock modules — Path A HTTP-01)
+      # Caddy from official repo (stock modules - Path A HTTP-01)
       if ! command -v caddy >/dev/null 2>&1; then
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
           | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
           | tee /etc/apt/sources.list.d/caddy-stable.list
         apt-get update
-        apt-get install -y caddy
+        # write_files places Caddyfile before this package runs; without
+        # --force-confold, dpkg prompts and firstboot dies on stdin EOF.
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confold" caddy
       fi
 
       install -d -o root -g root -m 0755 /opt/nightloch /opt/nightloch/bin /opt/nightloch/data

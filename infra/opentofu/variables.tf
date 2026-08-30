@@ -24,7 +24,7 @@ variable "image" {
 
 variable "ssh_public_key_path" {
   type        = string
-  description = "Path to SSH public key for droplet access"
+  description = "Path to an SSH public key already registered on the DigitalOcean account"
 }
 
 variable "ssh_source_cidrs" {
