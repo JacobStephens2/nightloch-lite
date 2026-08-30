@@ -1,10 +1,12 @@
 locals {
-  tags = ["nightloch", "nightloch-lite", var.project_name]
+  tags           = ["nightloch", "nightloch-lite", var.project_name]
+  ssh_public_key = trimspace(file(pathexpand(var.ssh_public_key_path)))
 
   cloud_init = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     admin_user       = var.admin_user
     console_password = random_password.console.result
     staging_host     = var.staging_host
+    ssh_public_key   = local.ssh_public_key
   })
 }
 
@@ -13,9 +15,19 @@ resource "random_password" "console" {
   special = false
 }
 
-resource "digitalocean_ssh_key" "admin" {
-  name       = "${var.project_name}-admin"
-  public_key = file(pathexpand(var.ssh_public_key_path))
+# Reuse the account key that already holds this public key. Registering the
+# same material twice is a 422, and managing or importing the shared key here
+# would let `tofu destroy` delete a key other droplets still use. The key must
+# therefore already exist on the DigitalOcean account.
+data "digitalocean_ssh_keys" "admin" {
+  filter {
+    key    = "public_key"
+    values = [local.ssh_public_key]
+  }
+}
+
+locals {
+  admin_ssh_key = data.digitalocean_ssh_keys.admin.ssh_keys[0]
 }
 
 resource "digitalocean_droplet" "nightloch" {
@@ -24,8 +36,10 @@ resource "digitalocean_droplet" "nightloch" {
   size   = var.size
   image  = var.image
 
-  ssh_keys = [digitalocean_ssh_key.admin.fingerprint]
-  tags     = local.tags
+  ssh_keys = [
+    local.admin_ssh_key.fingerprint,
+  ]
+  tags = local.tags
 
   monitoring        = true
   backups           = true

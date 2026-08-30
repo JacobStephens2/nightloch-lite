@@ -27,11 +27,13 @@ standing between a staged host and the first forwarding change.
 
 ## Before any change
 
-- [ ] Confirm the DigitalOcean **web console** login for `nightloch` works. Log in now, not
-      after locking yourself out. Password is in the password manager.
+- [ ] Confirm the DigitalOcean **Recovery Console** login for `nightloch` works. This is the
+      out-of-band QEMU console, not the network-dependent Web Console. Log in now, not after
+      locking yourself out. Password is in the password manager.
 - [ ] Take a **snapshot** of the droplet, or confirm daily backups are green and recent.
 - [ ] Open a **second SSH session** and leave it open. Do not close the first one either.
-- [ ] Know the recovery path: DO control panel → droplet → **Access → Launch Droplet Console**.
+- [ ] Know the recovery path: DO control panel → droplet → **Settings**, scroll to
+      **Recovery console → Launch Console**.
 - [ ] Record the current state so there is something to compare against:
       ```bash
       sudo /usr/local/sbin/nightloch-nat-verify.sh || true
