@@ -136,15 +136,15 @@ filter_digest_matches_receipt() {
 	[ -n "$current_digest" ] && [ "$current_digest" = "$recorded_digest" ]
 }
 
-check_baseline() {
+check_baseline_lists() {
 	oisd_url="https://nsfw.oisd.nl/"
 	hagezi_url="https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt"
 	if [ -r "$config" ] &&
 		filter_enabled "$oisd_url" && filter_enabled "$hagezi_url" &&
 		[ -s "$filters_dir/1.txt" ] && [ -s "$filters_dir/2.txt" ]; then
-		pass baseline_subscriptions "the OISD NSFW and HaGeZi global lists are enabled and loaded"
+		pass baseline_list_subscriptions "the OISD NSFW and HaGeZi global lists are enabled and loaded"
 	else
-		fail baseline_subscriptions "one or both global Baseline list subscriptions are disabled, absent, or have no loaded rules"
+		fail baseline_list_subscriptions "one or both global Baseline list subscriptions are disabled, absent, or have no loaded rules"
 	fi
 
 	if [ -r "$config" ] &&
@@ -196,7 +196,7 @@ check_canary() {
 
 check_service
 check_listeners
-check_baseline
+check_baseline_lists
 check_retention
 check_canary
 

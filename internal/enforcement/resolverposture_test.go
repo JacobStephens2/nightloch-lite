@@ -30,7 +30,7 @@ func TestResolverQueryLogRetentionIsDerivedFromTheQuarantineRule(t *testing.T) {
 	}
 }
 
-func TestResolverTemplateCarriesTheGlobalBaselineAndNothingPerDevice(t *testing.T) {
+func TestResolverTemplateCarriesTheGlobalBaselineListsAndNothingPerDevice(t *testing.T) {
 	config := stripComments(readArtifact(t, resolverTemplatePath))
 
 	// DNS is reachable from Devices only on the address the tunnel owns.  The
@@ -520,7 +520,7 @@ func installedHealthyResolver(t *testing.T) *resolverPostureEnv {
 	if run := env.run(resolverInstallerPath, "install"); run.exitCode != 0 {
 		t.Fatalf("install: exit = %d, stderr = %q", run.exitCode, run.stderr)
 	}
-	env.writeRootFile("var/lib/AdGuardHome/data/filters/1.txt", "||oisd-baseline.example^\n", 0o600)
+	env.writeRootFile("var/lib/AdGuardHome/data/filters/1.txt", "||oisd-list.example^\n", 0o600)
 	env.writeRootFile("var/lib/AdGuardHome/data/filters/2.txt", "||encrypted-dns.example^\n", 0o600)
 	env.forget()
 	return env
@@ -545,7 +545,7 @@ func TestResolverVerifierReportsEveryNamedFactOnAHealthyHost(t *testing.T) {
 		"PASS resolver_service",
 		"PASS dns_listener",
 		"PASS admin_listener",
-		"PASS baseline_subscriptions",
+		"PASS baseline_list_subscriptions",
 		"PASS filter_updates_manual",
 		"PASS query_log_retention",
 		"PASS firefox_canary",
@@ -583,7 +583,7 @@ func TestResolverVerifierFailsEachBrokenAcceptanceFactByName(t *testing.T) {
 		},
 		{
 			name:     "Baseline list empty",
-			wantFact: "baseline_subscriptions",
+			wantFact: "baseline_list_subscriptions",
 			breakIt: func(env *resolverPostureEnv) []string {
 				env.writeRootFile("var/lib/AdGuardHome/data/filters/1.txt", "", 0o600)
 				return healthyResolverVerifyEnvironment()
