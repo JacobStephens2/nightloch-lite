@@ -109,7 +109,7 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeLabel}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist.</p></div>
+<div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist. <a href="/devices/enroll">Read what enrolling a Device will mean</a>, including how a Device behaves if Nightloch is unreachable.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -428,6 +428,33 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <p class="consent"><label class="inline"><input type="checkbox" name="log_sharing" value="on"> Share my DNS domain log with this Partner. I can turn this off immediately; Nightloch will tell them.</label></p>
 <button type="submit">Send Partner invitation</button></form>
 <p><a href="/">Cancel</a></p></section></main></body></html>`,
+	"device-enroll": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Before you enroll a Device · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Before you enroll a Device</h1>
+<p class="lede">A Device is one phone or laptop carrying a full tunnel to Nightloch. While that tunnel is up, everything the Device sends goes through Nightloch and every name it looks up is resolved and filtered there. Read this page before you enroll one, because a full tunnel has a failure that can take the Device off the internet.</p>
+<h2>If Nightloch is unreachable, the Device stops reaching the internet</h2>
+<p class="warn"><strong>That is deliberate, and it is not a bug.</strong> If the server is down, the path to it is broken, or the tunnel cannot be established, the Device keeps sending everything into a tunnel that goes nowhere. Nightloch does not fall open: it will not hand the Device back its unfiltered internet because protection stopped working. Until you turn the tunnel off yourself, the Device stops reaching the internet at all - no browsing, no apps, no mail.</p>
+<p>The alternative would mean the moment protection is least available is also the easiest moment to be without it. The cost of choosing the other way is real and lands on you, so the recovery steps below are part of the product rather than a support article you have to find while offline.</p>
+<h2>Getting a Device back online</h2>
+<p>Turning the tunnel off needs no internet and never needs the Operator. Each supported platform has its own route, and each has at least one setting that turns a recoverable blackhole into one you cannot leave from the app you turned the tunnel on in.</p>
+{{range .Platforms}}
+<h3>{{.Name}}</h3>
+<ul class="rows">{{range .Recovery}}<li>{{.}}</li>{{end}}</ul>
+<p class="lede">Settings to understand before you turn them on:</p>
+<ul class="rows">{{range .Traps}}<li><strong>{{.Setting}}</strong><br>
+{{.Consequence}}<br>
+<span class="warn-inline">Recovery:</span> {{.Recovery}}</li>{{end}}</ul>
+{{end}}
+<h2>What this does not protect you from</h2>
+<p>With the tunnel off, you are not protected. Nothing is filtered and nothing is logged; your Partners see your Coverage fall, which is a signal to them rather than a control over you. Turning the tunnel off stays available to you by design - Nightloch restrains what you may loosen, not whether you may disconnect.</p>
+<p>Nightloch filters DNS domains. On hardware you own, a determined bypass - encrypted DNS to a resolver Nightloch does not control, a second network path, a device that was never enrolled as a Device - is not fully preventable. Nightloch closes the routes it can reach, tells your Partners what it observes, and does not claim a guarantee it cannot keep.</p>
+<h2>Enrollment is not open yet</h2>
+<p>This page offers no way to enroll, which is the current state rather than a fault. Device enrollment is gated behind the Operator&rsquo;s Enrollment allowlist, so the tunnel is not an open VPN that any signed-in stranger can use as a free exit. Until that allowlist ships, the Operator mints a Device on the server and hands you its configuration once.</p>
+<p>The wording above ships ahead of the action deliberately: what enrolling costs you should be settled before there is a button that does it.</p>
+<p><a href="/">Back to your protection</a></p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
 }
 
 // templateFuncs keeps every rendered instant explicitly labelled. The server
