@@ -110,6 +110,9 @@ Resolver posture is live and its observations are recorded in
 
 This macOS run satisfies the NAT checklist's Device-on-tunnel reboot and public-resolver
 redirect steps. It does not satisfy issue #42's narrower phone-reboot criterion.
+Issue #42's cross-cutting status, including the blocked-services observation and the
+non-qualifying IPv6 precondition check, is kept in
+[SLICE-4-DRILL-RUN-RECORD.md](./SLICE-4-DRILL-RUN-RECORD.md).
 
 ## Remaining Device-only observation
 

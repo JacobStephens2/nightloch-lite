@@ -215,15 +215,16 @@ record.
 ## What remains for issue #42
 
 This runbook proves host configuration and read-back facts.  It does not pretend to prove
-Device behavior.  The Slice 4 gate still requires observed artifacts from a real phone and
-dual-stack Mac:
+Device behavior.  [The issue #42 drill record](./SLICE-4-DRILL-RUN-RECORD.md) carries the
+current observed status.  The completed macOS run has already shown that:
 
 - tunnel on blocks an OISD sample while ordinary browsing works; tunnel off opens both;
 - a Device reconnects after an unattended droplet reboot;
-- DNS aimed at `8.8.8.8` from inside the tunnel still lands on this Resolver;
-- Android strict Private DNS fails visibly rather than hanging;
-- IPv6 leak checks, a day of OISD false-positive observations, and the Instagram
-  blocked-services catalogue/schedule polarity are recorded.
+- DNS aimed at `8.8.8.8` from inside the tunnel still lands on this Resolver.
+
+The live catalogue observation also found Instagram and recorded that its schedule is a
+pause window.  Android strict Private DNS and phone recovery remain in issue #54.  The
+dual-stack IPv6 leak drill and a day of OISD false-positive observations remain unrun.
 
 Record those results under `docs/ops/` only after they are actually observed.  No host-only
 test or prepared command checks a box that requires a Device.
