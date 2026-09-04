@@ -116,3 +116,59 @@ func TestLoadRequiresTheResolverAdministrationCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadEnrollmentAllowlist(t *testing.T) {
+	setValidEnv := func() {
+		t.Setenv("DATABASE_PATH", filepath.Join(t.TempDir(), "nightloch.db"))
+		t.Setenv("BASE_URL", "https://lite.nightloch.app")
+		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+		t.Setenv("RESEND_API_KEY", "re_test")
+		t.Setenv("RESEND_WEBHOOK_SECRET", "whsec_test")
+		t.Setenv("TURNSTILE_SECRET_KEY", "turnstile-secret")
+		t.Setenv("TURNSTILE_SITE_KEY", "turnstile-site")
+		t.Setenv("ADGUARD_URL", "")
+		t.Setenv("ADGUARD_USERNAME", "operator")
+		t.Setenv("ADGUARD_PASSWORD", "admin-secret")
+	}
+
+	t.Run("empty or unset closes enrollment to all users", func(t *testing.T) {
+		setValidEnv()
+		t.Setenv("ENROLLMENT_ALLOWLIST", "")
+		settings, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(settings.EnrollmentAllowlist) != 0 {
+			t.Errorf("len(EnrollmentAllowlist) = %d, want 0", len(settings.EnrollmentAllowlist))
+		}
+	})
+
+	t.Run("normalizes and trims comma-separated emails", func(t *testing.T) {
+		setValidEnv()
+		t.Setenv("ENROLLMENT_ALLOWLIST", " Protectee@Example.COM , another@domain.org ")
+		settings, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(settings.EnrollmentAllowlist) != 2 {
+			t.Fatalf("len(EnrollmentAllowlist) = %d, want 2", len(settings.EnrollmentAllowlist))
+		}
+		if _, ok := settings.EnrollmentAllowlist["protectee@example.com"]; !ok {
+			t.Errorf("protectee@example.com not in allowlist map")
+		}
+		if _, ok := settings.EnrollmentAllowlist["another@domain.org"]; !ok {
+			t.Errorf("another@domain.org not in allowlist map")
+		}
+		if _, ok := settings.EnrollmentAllowlist["stranger@example.com"]; ok {
+			t.Errorf("stranger@example.com unexpectedly in allowlist map")
+		}
+	})
+
+	t.Run("rejects invalid email address in allowlist", func(t *testing.T) {
+		setValidEnv()
+		t.Setenv("ENROLLMENT_ALLOWLIST", "valid@example.com, not-an-email")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load succeeded with invalid email in ENROLLMENT_ALLOWLIST")
+		}
+	})
+}

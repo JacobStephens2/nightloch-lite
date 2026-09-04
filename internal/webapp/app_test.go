@@ -15,6 +15,8 @@ import (
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	"github.com/JacobStephens2/nightloch-lite/internal/emailaddr"
+	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
@@ -36,6 +38,20 @@ type testEnv struct {
 	sender       *mailmessage.RecordingSender
 	auth         *githubauth.Service
 	partnerships *partnership.Service
+	enforcement  *enforcement.Service
+	tunnel       *enforcement.RecordingTunnel
+	resolver     *enforcement.RecordingResolver
+}
+
+func (e *testEnv) setAllowlist(emails ...string) {
+	allowlist := make(map[string]struct{})
+	for _, email := range emails {
+		norm, err := emailaddr.Normalize(email)
+		if err == nil {
+			allowlist[norm] = struct{}{}
+		}
+	}
+	e.app.enrollmentAllowlist = allowlist
 }
 
 func newTestEnv(t *testing.T, healthChecks ...HealthCheck) *testEnv {
@@ -59,16 +75,40 @@ func newTestEnvWithLogger(t *testing.T, logger *slog.Logger, healthChecks ...Hea
 	sender := &mailmessage.RecordingSender{}
 	authService := githubauth.NewService(githubauth.NewStore(db), sender, fakeVerifier{}, baseURL)
 	partnerships := partnership.NewService(db, baseURL)
-	app, err := New(Options{
-		Auth: authService, DB: db, Partnerships: partnerships,
-		TurnstileSite: "site-key", DeliveryWebhookSecret: testWebhookSecret, Version: "test",
-		HealthChecks: healthChecks,
-		Logger:       logger,
+	tunnel := &enforcement.RecordingTunnel{}
+	resolver := enforcement.EnforcingResolver()
+	enforcementService, err := enforcement.NewService(db, tunnel, resolver, enforcement.TunnelSettings{
+		EndpointHost: "vpn.nightloch.app",
+		EndpointPort: 51820,
+		PublicKey:    "c2VydmVycHVibGljc2VydmVycHVibGljc2VydmVycHU=",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testEnv{app: app, db: db, sender: sender, auth: authService, partnerships: partnerships}
+	enforcementService.SetAuthorizer(partnerships)
+
+	app, err := New(Options{
+		Auth: authService, DB: db, Partnerships: partnerships,
+		Enforcement:           enforcementService,
+		TurnstileSite:         "site-key",
+		DeliveryWebhookSecret: testWebhookSecret,
+		Version:               "test",
+		HealthChecks:          healthChecks,
+		Logger:                logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testEnv{
+		app:          app,
+		db:           db,
+		sender:       sender,
+		auth:         authService,
+		partnerships: partnerships,
+		enforcement:  enforcementService,
+		tunnel:       tunnel,
+		resolver:     resolver,
+	}
 }
 
 func newTestApp(t *testing.T) (*App, *mailmessage.RecordingSender, *githubauth.Service) {
