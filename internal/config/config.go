@@ -243,4 +243,3 @@ func parseEnrollmentAllowlist(raw string) (map[string]struct{}, error) {
 	}
 	return allowlist, nil
 }
-

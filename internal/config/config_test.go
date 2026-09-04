@@ -172,4 +172,3 @@ func TestLoadEnrollmentAllowlist(t *testing.T) {
 		}
 	})
 }
-
