@@ -897,3 +897,100 @@ address %[4]s.`,
 		},
 	}
 }
+
+type deviceEnrolledMessage struct {
+	ProtecteeEmail string
+	DeviceName     string
+	EnrolledAt     time.Time
+	DashboardURL   string
+}
+
+// renderDeviceEnrolled produces the canonical Action alert sent to active Partners
+// when a Protectee enrolls a Device.
+func renderDeviceEnrolled(message deviceEnrolledMessage, recipient string) preparedMessage {
+	text := fmt.Sprintf(`%[1]s enrolled Device "%[2]s" on %[3]s.
+
+All traffic from this Device is filtered through Nightloch according to %[1]s’s Policy.
+
+Turning off the VPN on the Device removes protection.
+
+Review the Roster and Activity:
+%[4]s
+
+This is an integrity message from Nightloch. Replies go to the monitored address %[5]s.`,
+		message.ProtecteeEmail,
+		message.DeviceName,
+		utcStamp(message.EnrolledAt),
+		message.DashboardURL,
+		alertsAddress,
+	)
+
+	return preparedMessage{
+		Kind: MessageDeviceEnrolled,
+		Envelope: mailmessage.Envelope{
+			To:      recipient,
+			Subject: fmt.Sprintf("[Nightloch] %s enrolled Device %q", message.ProtecteeEmail, message.DeviceName),
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}
+
+type deviceRemovedMessage struct {
+	ActorEmail     string
+	ProtecteeEmail string
+	DeviceName     string
+	RemovedAt      time.Time
+	DashboardURL   string
+}
+
+// renderDeviceRemoved produces the canonical Action alert sent when a Device is removed.
+func renderDeviceRemoved(message deviceRemovedMessage, recipient string) preparedMessage {
+	subject := fmt.Sprintf("[Nightloch] %s removed Device %q", message.ActorEmail, message.DeviceName)
+
+	var text string
+	if message.ActorEmail == message.ProtecteeEmail {
+		text = fmt.Sprintf(`%[1]s removed Device "%[2]s" on %[3]s.
+
+Protection on that hardware has ended. Traffic from that Device is no longer filtered through Nightloch.
+
+Review the Roster and Activity:
+%[4]s
+
+This is an integrity message from Nightloch. Replies go to the monitored address %[5]s.`,
+			message.ProtecteeEmail,
+			message.DeviceName,
+			utcStamp(message.RemovedAt),
+			message.DashboardURL,
+			alertsAddress,
+		)
+	} else {
+		text = fmt.Sprintf(`%[1]s removed Device "%[2]s" from %[3]s’s protection on %[4]s.
+
+Protection on that hardware has ended. Traffic from that Device is no longer filtered through Nightloch.
+
+Review the Roster and Activity:
+%[5]s
+
+This is an integrity message from Nightloch. Replies go to the monitored address %[6]s.`,
+			message.ActorEmail,
+			message.DeviceName,
+			message.ProtecteeEmail,
+			utcStamp(message.RemovedAt),
+			message.DashboardURL,
+			alertsAddress,
+		)
+	}
+
+	return preparedMessage{
+		Kind: MessageDeviceRemoved,
+		Envelope: mailmessage.Envelope{
+			To:      recipient,
+			Subject: subject,
+			Text:    text,
+			HTML:    textToHTML(text),
+			ReplyTo: alertsAddress,
+		},
+	}
+}

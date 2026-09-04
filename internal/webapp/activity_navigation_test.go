@@ -1,7 +1,9 @@
 package webapp
 
 import (
+	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"testing"
@@ -341,4 +343,68 @@ func slicesContain(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestActivityDevicesCategoryThroughTheHTTPSeam(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	protecteeSession, protecteeCSRF, partnerSession, partnerCSRF, _ := livePartnership(t, env)
+	protecteeID := userID(t, env, "protectee@example.com")
+	partnerID := userID(t, env, "partner@example.com")
+
+	// 1. Verify Category "Devices" is offered in the filter dropdown
+	page := get(t, env, "https://lite.nightloch.app/activity", protecteeSession, protecteeCSRF).Body.String()
+	if !strings.Contains(page, `<option value="devices">Devices</option>`) {
+		t.Fatalf("Devices category option not found in dropdown:\n%s", page)
+	}
+
+	// 2. Record device_enrolled and device_removed entries
+	if err := env.partnerships.RecordDeviceEnrolled(context.Background(), protecteeID, "MacBook"); err != nil {
+		t.Fatalf("RecordDeviceEnrolled: %v", err)
+	}
+	if err := env.partnerships.RecordDeviceRemoved(context.Background(), partnerID, protecteeID, "Old iPad"); err != nil {
+		t.Fatalf("RecordDeviceRemoved: %v", err)
+	}
+
+	// 3. Protectee filters by category=devices
+	filtered := get(t, env, "https://lite.nightloch.app/activity?category=devices", protecteeSession, protecteeCSRF)
+	if filtered.Code != http.StatusOK {
+		t.Fatalf("GET /activity?category=devices = %d", filtered.Code)
+	}
+	body := html.UnescapeString(filtered.Body.String())
+
+	if !strings.Contains(body, `<option value="devices" selected>Devices</option>`) {
+		t.Errorf("Devices category not marked selected in dropdown:\n%s", body)
+	}
+	if !strings.Contains(body, `protectee@example.com enrolled Device "MacBook". Traffic from it is filtered through Nightloch.`) {
+		t.Errorf("enrolled prose missing from filtered activity:\n%s", body)
+	}
+	if !strings.Contains(body, `partner@example.com removed Device "Old iPad". Protection on that hardware has ended.`) {
+		t.Errorf("removed prose missing from filtered activity:\n%s", body)
+	}
+	// Non-device entries (e.g. invitation/acceptance from livePartnership) should NOT be displayed
+	if strings.Contains(body, "invited partner@example.com") {
+		t.Errorf("invitation entry unexpectedly present in Devices-filtered view:\n%s", body)
+	}
+	if strings.Contains(body, "became their Partner") {
+		t.Errorf("acceptance entry unexpectedly present in Devices-filtered view:\n%s", body)
+	}
+
+	// 4. Partner views Protectee's activity with category=devices
+	partnerViewURL := fmt.Sprintf("https://lite.nightloch.app/activity/%d?category=devices", protecteeID)
+	partnerFiltered := get(t, env, partnerViewURL, partnerSession, partnerCSRF)
+	if partnerFiltered.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d", partnerViewURL, partnerFiltered.Code)
+	}
+	partnerBody := html.UnescapeString(partnerFiltered.Body.String())
+
+	if !strings.Contains(partnerBody, `protectee@example.com enrolled Device "MacBook". Traffic from it is filtered through Nightloch.`) {
+		t.Errorf("enrolled prose missing from partner view:\n%s", partnerBody)
+	}
+	if !strings.Contains(partnerBody, `partner@example.com removed Device "Old iPad". Protection on that hardware has ended.`) {
+		t.Errorf("removed prose missing from partner view:\n%s", partnerBody)
+	}
+	if strings.Contains(partnerBody, "invited partner@example.com") {
+		t.Errorf("invitation entry unexpectedly present in partner Devices-filtered view:\n%s", partnerBody)
+	}
 }

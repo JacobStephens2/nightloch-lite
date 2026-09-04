@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+const (
+	// ActionDeviceEnrolled and ActionDeviceRemoved are the stable Activity actions
+	// for hardware enrollment and removal under CategoryDevices.
+	ActionDeviceEnrolled = "device_enrolled"
+	ActionDeviceRemoved  = "device_removed"
+)
+
 // activityEntry is one append-only chronology entry for a Protectee. Entries
 // are never edited; corrections append (S3-17). Details holds structured
 // fields used to render authorized prose and is never product UI (S3-49).
@@ -428,6 +435,20 @@ func (e ActivityEntry) Summary() string {
 	case ActionDeliveryRecovered:
 		return fmt.Sprintf("Nightloch reached %s by email again. The earlier failure stays in this chronology.",
 			e.TargetEmail)
+	case ActionDeviceEnrolled:
+		name := e.details.DeviceName
+		if name != "" {
+			return fmt.Sprintf("%s enrolled Device %q. Traffic from it is filtered through Nightloch.",
+				actor, name)
+		}
+		return fmt.Sprintf("%s enrolled a Device. Traffic from it is filtered through Nightloch.", actor)
+	case ActionDeviceRemoved:
+		name := e.details.DeviceName
+		if name != "" {
+			return fmt.Sprintf("%s removed Device %q. Protection on that hardware has ended.",
+				actor, name)
+		}
+		return fmt.Sprintf("%s removed a Device. Protection on that hardware has ended.", actor)
 	}
 	// An action with no prose is a programming error rather than a viewer's
 	// problem, so the entry still reads as an attributable event instead of
