@@ -433,6 +433,33 @@ func (s *Service) CanLoosen(ctx context.Context, actorID, protecteeID int64) (bo
 	return actorPartnerships > 0, nil
 }
 
+// CanRemoveDevice answers whether actorID may remove a Device belonging to
+// protecteeID. Both the Protectee owner and any active Partner protecting that
+// Protectee may remove a Device immediately (no 72-hour delay; physical
+// disconnect is already unpreventable). Any other actor is denied.
+func (s *Service) CanRemoveDevice(ctx context.Context, actorID, protecteeID int64) (bool, error) {
+	if actorID <= 0 || protecteeID <= 0 {
+		return false, nil
+	}
+	var liveProtectee, liveActor, activePartnership int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM users WHERE id = ?1 AND deleted_at IS NULL),
+			(SELECT COUNT(*) FROM users WHERE id = ?2 AND deleted_at IS NULL),
+			(SELECT COUNT(*) FROM partnerships WHERE protectee_id = ?1 AND partner_id = ?2 AND ended_at IS NULL)`,
+		protecteeID, actorID).Scan(&liveProtectee, &liveActor, &activePartnership)
+	if err != nil {
+		return false, fmt.Errorf("read removal authorization: %w", err)
+	}
+	if liveProtectee == 0 || liveActor == 0 {
+		return false, nil
+	}
+	if actorID == protecteeID {
+		return true, nil
+	}
+	return activePartnership > 0, nil
+}
+
 func (s *Service) reviewURL(rawToken string) string {
 	link := *s.baseURL
 	link.Path = "/partners/invitations/" + rawToken

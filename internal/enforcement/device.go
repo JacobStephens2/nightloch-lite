@@ -86,16 +86,30 @@ type KeyPair struct {
 	PublicKey  string
 }
 
+// DeviceAuthorizer decides whether an actor is authorized to perform Device operations.
+type DeviceAuthorizer interface {
+	CanRemoveDevice(ctx context.Context, actorID, protecteeID int64) (bool, error)
+}
+
+// DeviceAuthorizerFunc adapts a bare function into a DeviceAuthorizer.
+type DeviceAuthorizerFunc func(ctx context.Context, actorID, protecteeID int64) (bool, error)
+
+// CanRemoveDevice implements DeviceAuthorizer.
+func (f DeviceAuthorizerFunc) CanRemoveDevice(ctx context.Context, actorID, protecteeID int64) (bool, error) {
+	return f(ctx, actorID, protecteeID)
+}
+
 // Service is the deep enforcement module. Callers hand it an Operator's or
 // Protectee's intent; address allocation, transaction ordering against the
 // tunnel and resolver, key generation, and canonical rendering all stay inside.
 type Service struct {
-	db       *sql.DB
-	tunnel   Tunnel
-	resolver Resolver
-	settings TunnelSettings
-	now      func() time.Time
-	newKeys  func() (KeyPair, error)
+	db         *sql.DB
+	tunnel     Tunnel
+	resolver   Resolver
+	authorizer DeviceAuthorizer
+	settings   TunnelSettings
+	now        func() time.Time
+	newKeys    func() (KeyPair, error)
 }
 
 // NewService builds a Service over the process's serialized SQLite handle,
@@ -109,6 +123,12 @@ func NewService(db *sql.DB, tunnel Tunnel, resolver Resolver, settings TunnelSet
 		return nil, err
 	}
 	return &Service{db: db, tunnel: tunnel, resolver: resolver, settings: settings, now: time.Now, newKeys: generateKeyPair}, nil
+}
+
+// SetAuthorizer configures the DeviceAuthorizer used to verify access for Device operations.
+// When unconfigured (nil), authorized operations fail closed.
+func (s *Service) SetAuthorizer(authorizer DeviceAuthorizer) {
+	s.authorizer = authorizer
 }
 
 // MintCommand is one Operator's request to mint a Device for a Protectee.
@@ -295,11 +315,7 @@ type RemovedDevice struct {
 	ReusableAt time.Time
 }
 
-// RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
-// and withdraws its WireGuard peer.
-//
-// The actor must be either the Protectee owning the Device or an active
-// Partner protecting that Protectee.
+// scanLiveDevice scans a single live Device row.
 func scanLiveDevice(row *sql.Row) (Device, error) {
 	var device Device
 	var address string
@@ -319,20 +335,17 @@ func scanLiveDevice(row *sql.Row) (Device, error) {
 // RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
 // and withdraws its WireGuard peer.
 //
-// The actor must be either the Protectee owning the Device or an active
-// Partner protecting that Protectee.
+// The actor must be authorized by the configured DeviceAuthorizer (either the Protectee
+// owning the Device or an active Partner protecting that Protectee).
 func (s *Service) RemoveDeviceByID(ctx context.Context, actorID, deviceID int64) (RemovedDevice, error) {
 	if actorID <= 0 || deviceID <= 0 {
 		return RemovedDevice{}, ErrUnauthorizedRemoval
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return RemovedDevice{}, fmt.Errorf("begin removal: %w", err)
+	if s.authorizer == nil {
+		return RemovedDevice{}, ErrUnauthorizedRemoval
 	}
-	defer tx.Rollback()
 
-	row := tx.QueryRowContext(ctx,
+	row := s.db.QueryRowContext(ctx,
 		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices
 		 WHERE id = ? AND removed_at IS NULL`,
 		deviceID)
@@ -344,21 +357,19 @@ func (s *Service) RemoveDeviceByID(ctx context.Context, actorID, deviceID int64)
 		return RemovedDevice{}, fmt.Errorf("read Device: %w", err)
 	}
 
-	var liveActor, activePartnership int
-	err = tx.QueryRowContext(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM users WHERE id = ?1 AND deleted_at IS NULL),
-			(SELECT COUNT(*) FROM partnerships WHERE protectee_id = ?2 AND partner_id = ?1 AND ended_at IS NULL)`,
-		actorID, device.ProtecteeID).Scan(&liveActor, &activePartnership)
+	allowed, err := s.authorizer.CanRemoveDevice(ctx, actorID, device.ProtecteeID)
 	if err != nil {
 		return RemovedDevice{}, fmt.Errorf("check removal authorization: %w", err)
 	}
-	if liveActor == 0 {
+	if !allowed {
 		return RemovedDevice{}, ErrUnauthorizedRemoval
 	}
-	if actorID != device.ProtecteeID && activePartnership == 0 {
-		return RemovedDevice{}, ErrUnauthorizedRemoval
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("begin removal: %w", err)
 	}
+	defer tx.Rollback()
 
 	return s.removeDeviceTx(ctx, tx, device)
 }
