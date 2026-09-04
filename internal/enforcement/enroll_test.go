@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/JacobStephens2/nightloch-lite/internal/database"
+	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
 
 func newEnrollTestEnv(t *testing.T) (*Service, *RecordingTunnel, *RecordingResolver, *sql.DB) {
@@ -28,6 +30,11 @@ func newEnrollTestEnv(t *testing.T) (*Service, *RecordingTunnel, *RecordingResol
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return testClock }
+	baseURL, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetAuthorizer(partnership.NewService(db, baseURL))
 	return service, tunnel, resolver, db
 }
 
@@ -322,4 +329,39 @@ func TestMintDeviceAndRemoveDeviceMaintainAGHClientConsistency(t *testing.T) {
 		t.Errorf("resolver still has client %s after RemoveDevice", clientName)
 	}
 	_ = tunnel
+}
+
+func TestRemoveDeviceByIDNilAuthorizerDeniesClosed(t *testing.T) {
+	t.Parallel()
+	service, _, _, db := newEnrollTestEnv(t)
+	service.SetAuthorizer(nil)
+	protecteeID := createUser(t, db, "protectee@example.com")
+	dev, err := service.EnrollDevice(context.Background(), protecteeID, "Dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.RemoveDeviceByID(context.Background(), protecteeID, dev.Device.ID)
+	if !errors.Is(err, ErrUnauthorizedRemoval) {
+		t.Fatalf("nil authorizer error = %v, want ErrUnauthorizedRemoval", err)
+	}
+}
+
+func TestRemoveDeviceByIDAuthorizerFuncErrorPropagates(t *testing.T) {
+	t.Parallel()
+	service, _, _, db := newEnrollTestEnv(t)
+	expectedErr := errors.New("authorization check failed")
+	service.SetAuthorizer(DeviceAuthorizerFunc(func(ctx context.Context, actorID, protecteeID int64) (bool, error) {
+		return false, expectedErr
+	}))
+	protecteeID := createUser(t, db, "protectee@example.com")
+	dev, err := service.EnrollDevice(context.Background(), protecteeID, "Dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.RemoveDeviceByID(context.Background(), protecteeID, dev.Device.ID)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("authorizer error = %v, want %v", err, expectedErr)
+	}
 }
