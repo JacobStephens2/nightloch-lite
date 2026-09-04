@@ -2,9 +2,11 @@ package enforcement
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 )
 
@@ -136,5 +138,150 @@ func TestAdGuardHomeRefusesSettingsItCannotReach(t *testing.T) {
 		if _, err := NewAdGuardHome(settings); err == nil {
 			t.Fatalf("NewAdGuardHome(%s) succeeded, want an error", name)
 		}
+	}
+}
+
+func TestDeviceClientName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		id   int64
+		want string
+	}{
+		{id: 1, want: "device-1"},
+		{id: 42, want: "device-42"},
+		{id: 999999, want: "device-999999"},
+	} {
+		if got := DeviceClientName(tc.id); got != tc.want {
+			t.Errorf("DeviceClientName(%d) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}
+
+func TestAdGuardHomeAddsClient(t *testing.T) {
+	t.Parallel()
+	var (
+		gotMethod string
+		gotPath   string
+		gotUser   string
+		gotPass   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotUser, gotPass, _ = r.BasicAuth()
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	resolver, err := NewAdGuardHome(ResolverSettings{
+		BaseURL:  server.URL,
+		Username: "operator",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ip := netip.MustParseAddr("10.66.0.2")
+	err = resolver.AddClient(context.Background(), "device-1", ip)
+	if err != nil {
+		t.Fatalf("AddClient: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotPath != "/control/clients/add" {
+		t.Errorf("path = %s, want /control/clients/add", gotPath)
+	}
+	if gotUser != "operator" || gotPass != "secret" {
+		t.Errorf("credentials = %s:%s, want operator:secret", gotUser, gotPass)
+	}
+	if gotBody["name"] != "device-1" {
+		t.Errorf("body name = %v, want device-1", gotBody["name"])
+	}
+	ids, ok := gotBody["ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "10.66.0.2" {
+		t.Errorf("body ids = %v, want [10.66.0.2]", gotBody["ids"])
+	}
+	if gotBody["filtering_enabled"] != true {
+		t.Errorf("body filtering_enabled = %v, want true", gotBody["filtering_enabled"])
+	}
+	if gotBody["use_global_settings"] != true {
+		t.Errorf("body use_global_settings = %v, want true", gotBody["use_global_settings"])
+	}
+}
+
+func TestAdGuardHomeRemovesClient(t *testing.T) {
+	t.Parallel()
+	var (
+		gotMethod string
+		gotPath   string
+		gotUser   string
+		gotPass   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotUser, gotPass, _ = r.BasicAuth()
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	resolver, err := NewAdGuardHome(ResolverSettings{
+		BaseURL:  server.URL,
+		Username: "operator",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = resolver.RemoveClient(context.Background(), "device-1")
+	if err != nil {
+		t.Fatalf("RemoveClient: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotPath != "/control/clients/delete" {
+		t.Errorf("path = %s, want /control/clients/delete", gotPath)
+	}
+	if gotUser != "operator" || gotPass != "secret" {
+		t.Errorf("credentials = %s:%s, want operator:secret", gotUser, gotPass)
+	}
+	if gotBody["name"] != "device-1" {
+		t.Errorf("body name = %v, want device-1", gotBody["name"])
+	}
+}
+
+func TestAdGuardHomeAddAndRemoveClientErrors(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"client already exists"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	resolver, err := NewAdGuardHome(ResolverSettings{
+		BaseURL:  server.URL,
+		Username: "operator",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ip := netip.MustParseAddr("10.66.0.2")
+	if err := resolver.AddClient(context.Background(), "device-1", ip); !errors.Is(err, ErrResolverUnreachable) {
+		t.Fatalf("AddClient on 400 error = %v, want ErrResolverUnreachable", err)
+	}
+	if err := resolver.RemoveClient(context.Background(), "device-1"); !errors.Is(err, ErrResolverUnreachable) {
+		t.Fatalf("RemoveClient on 400 error = %v, want ErrResolverUnreachable", err)
 	}
 }
