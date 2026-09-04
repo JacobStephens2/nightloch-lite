@@ -330,9 +330,25 @@ func runServe() error {
 	}
 	plane := enforcement.NewPlane(&enforcement.HelperTunnel{}, resolver)
 
+	tunnelSettings, err := config.LoadTunnel()
+	if err != nil {
+		return err
+	}
+	enforcementService, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, resolver, tunnelSettings)
+	if err != nil {
+		return err
+	}
+	enforcementService.SetAuthorizer(partnerships)
+
 	app, err := webapp.New(webapp.Options{
-		Auth: authService, DB: db, Logger: logger, Partnerships: partnerships,
-		TurnstileSite: settings.TurnstileSite, Version: version,
+		Auth:                  authService,
+		DB:                    db,
+		Logger:                logger,
+		Partnerships:          partnerships,
+		Enforcement:           enforcementService,
+		EnrollmentAllowlist:   settings.EnrollmentAllowlist,
+		TurnstileSite:         settings.TurnstileSite,
+		Version:               version,
 		DeliveryWebhookSecret: settings.ResendWebhookSecret,
 		HealthChecks:          webapp.EnforcementHealthChecks(plane),
 	})

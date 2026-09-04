@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JacobStephens2/nightloch-lite/internal/emailaddr"
 	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
 )
 
@@ -44,6 +45,9 @@ type Config struct {
 	// exists to remove, and an absent credential is a deployment that is not
 	// finished rather than a resolver that is down.
 	Resolver enforcement.ResolverSettings
+	// EnrollmentAllowlist is the set of normalized email addresses permitted to
+	// enroll Devices during beta. An empty set closes enrollment to all users.
+	EnrollmentAllowlist map[string]struct{}
 }
 
 // DatabasePath returns the configured SQLite path for commands that only need
@@ -148,6 +152,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	allowlist, err := parseEnrollmentAllowlist(os.Getenv("ENROLLMENT_ALLOWLIST"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	config := Config{
 		BaseURL:             baseURL,
 		DatabasePath:        databasePath,
@@ -158,6 +167,7 @@ func Load() (Config, error) {
 		TurnstileSecret:     strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
 		TurnstileSite:       strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
 		Resolver:            resolver,
+		EnrollmentAllowlist: allowlist,
 	}
 	if config.ResendFrom == "" {
 		config.ResendFrom = defaultResendFrom
@@ -212,4 +222,24 @@ func validateLoopbackAddr(addr string) error {
 		return errors.New("HTTP_ADDR must bind to a loopback address; Caddy is the public listener")
 	}
 	return nil
+}
+
+func parseEnrollmentAllowlist(raw string) (map[string]struct{}, error) {
+	allowlist := make(map[string]struct{})
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return allowlist, nil
+	}
+	for _, part := range strings.Split(raw, ",") {
+		token := strings.TrimSpace(part)
+		if token == "" {
+			continue
+		}
+		normalized, err := emailaddr.Normalize(token)
+		if err != nil {
+			return nil, fmt.Errorf("invalid email %q in ENROLLMENT_ALLOWLIST: %w", token, err)
+		}
+		allowlist[normalized] = struct{}{}
+	}
+	return allowlist, nil
 }

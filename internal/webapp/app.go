@@ -16,6 +16,8 @@ import (
 	"time"
 
 	githubauth "github.com/JacobStephens2/nightloch-lite/internal/auth"
+	"github.com/JacobStephens2/nightloch-lite/internal/emailaddr"
+	"github.com/JacobStephens2/nightloch-lite/internal/enforcement"
 	mailmessage "github.com/JacobStephens2/nightloch-lite/internal/mail"
 	"github.com/JacobStephens2/nightloch-lite/internal/partnership"
 )
@@ -39,6 +41,10 @@ type Options struct {
 	DB           *sql.DB
 	Logger       *slog.Logger
 	Partnerships *partnership.Service
+	Enforcement  *enforcement.Service
+	// EnrollmentAllowlist is the set of normalized email addresses permitted to
+	// enroll Devices during beta. An empty set closes enrollment to all users.
+	EnrollmentAllowlist map[string]struct{}
 	// DeliveryWebhookSecret authenticates the provider's delivery callbacks.
 	// Without it Nightloch could only guess at Partner reachability from its
 	// own send attempts, so it is required rather than optional.
@@ -53,24 +59,26 @@ type Options struct {
 
 // App is an http.Handler with explicit dependencies for integration testing.
 type App struct {
-	auth             authService
-	db               *sql.DB
-	logger           *slog.Logger
-	partnerships     *partnership.Service
-	deliveryVerifier mailmessage.WebhookVerifier
-	turnstileSite    string
-	version          string
-	healthChecks     []HealthCheck
-	now              func() time.Time
-	random           io.Reader
-	templates        map[string]*template.Template
-	handler          http.Handler
+	auth                authService
+	db                  *sql.DB
+	logger              *slog.Logger
+	partnerships        *partnership.Service
+	enforcement         *enforcement.Service
+	enrollmentAllowlist map[string]struct{}
+	deliveryVerifier    mailmessage.WebhookVerifier
+	turnstileSite       string
+	version             string
+	healthChecks        []HealthCheck
+	now                 func() time.Time
+	random              io.Reader
+	templates           map[string]*template.Template
+	handler             http.Handler
 }
 
 func New(options Options) (*App, error) {
-	if options.Auth == nil || options.DB == nil || options.Partnerships == nil ||
+	if options.Auth == nil || options.DB == nil || options.Partnerships == nil || options.Enforcement == nil ||
 		options.TurnstileSite == "" || options.DeliveryWebhookSecret == "" {
-		return nil, errors.New("webapp requires Auth, DB, Partnerships, TurnstileSite, and DeliveryWebhookSecret")
+		return nil, errors.New("webapp requires Auth, DB, Partnerships, Enforcement, TurnstileSite, and DeliveryWebhookSecret")
 	}
 	if options.Logger == nil {
 		options.Logger = slog.Default()
@@ -79,18 +87,24 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowlist := options.EnrollmentAllowlist
+	if allowlist == nil {
+		allowlist = make(map[string]struct{})
+	}
 	app := &App{
-		auth:             options.Auth,
-		db:               options.DB,
-		logger:           options.Logger,
-		partnerships:     options.Partnerships,
-		deliveryVerifier: mailmessage.WebhookVerifier{Secret: options.DeliveryWebhookSecret},
-		turnstileSite:    options.TurnstileSite,
-		version:          options.Version,
-		healthChecks:     append(defaultHealthChecks(options.DB), options.HealthChecks...),
-		now:              time.Now,
-		random:           rand.Reader,
-		templates:        templates,
+		auth:                options.Auth,
+		db:                  options.DB,
+		logger:              options.Logger,
+		partnerships:        options.Partnerships,
+		enforcement:         options.Enforcement,
+		enrollmentAllowlist: allowlist,
+		deliveryVerifier:    mailmessage.WebhookVerifier{Secret: options.DeliveryWebhookSecret},
+		turnstileSite:       options.TurnstileSite,
+		version:             options.Version,
+		healthChecks:        append(defaultHealthChecks(options.DB), options.HealthChecks...),
+		now:                 time.Now,
+		random:              rand.Reader,
+		templates:           templates,
 	}
 
 	mux := http.NewServeMux()
@@ -139,16 +153,23 @@ func New(options Options) (*App, error) {
 	// what authorizes them, so they bypass the CSRF check by path (see
 	// verifyCSRF) rather than by having a token to present.
 	mux.HandleFunc("POST "+deliveryWebhookPath, app.deliveryWebhook)
-	// The Device enroll screen ships its copy before Slice 5 ships the action,
-	// so it is a GET with no counterpart: it changes nothing and offers
-	// nothing to submit.
 	mux.HandleFunc("GET /devices/enroll", app.deviceEnroll)
+	mux.HandleFunc("POST /devices/enroll", app.deviceEnrollSubmit)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
 
 	app.handler = app.recoverPanics(app.securityHeaders(app.verifyCSRF(mux)))
 	return app, nil
+}
+
+func (a *App) isEnrollmentAllowed(email string) bool {
+	normalized, err := emailaddr.Normalize(email)
+	if err != nil {
+		return false
+	}
+	_, ok := a.enrollmentAllowlist[normalized]
+	return ok
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
