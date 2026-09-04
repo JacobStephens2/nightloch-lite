@@ -39,6 +39,7 @@ var templateSources = map[string]string{
 <body><header class="topbar"><strong>Nightloch</strong><form method="post" action="/sign-out"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="quiet" type="submit">Sign out</button></form></header>
 <main class="dashboard"><section><p class="eyebrow">Signed in as {{.User.Email}}</p><h1>Your protection</h1>
 {{if .Refusal}}<p class="error" role="alert">{{.Refusal}}</p>{{end}}
+{{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
 {{if .View.PartnerLockActive}}
 <p class="lede"><strong>Partner lock is active.</strong> Your Partners can loosen your Policy; you cannot.</p>
 <h2>Your Partners</h2>
@@ -57,6 +58,19 @@ Until then this Partnership stays active and {{.PartnerEmail}} keeps every Partn
 <p class="lede"><strong>Partner lock is inactive.</strong> You have no active Partners, so you can still loosen your own Policy.</p>
 {{end}}
 <p class="actions"><a class="button-link" href="/partners/invite">Add a Partner</a> <a href="/activity">View your Activity</a></p>
+<h2>Your Devices</h2>
+{{if .Devices}}
+<ul class="rows">{{range .Devices}}<li><strong>{{.Name}}</strong> — {{.Address}}<br>
+Enrolled {{utc .CreatedAt}}.<br>
+<a href="/devices/{{.ID}}/remove">Remove Device</a></li>{{end}}</ul>
+{{else}}
+<p class="muted">No Devices enrolled.</p>
+{{end}}
+{{if .EnrollmentAllowed}}
+<p class="actions"><a class="button-link" href="/devices/enroll">Enroll a Device</a></p>
+{{else}}
+<div class="notice"><strong>Next milestone</strong><p>Device enrollment is invite-only during beta. <a href="/devices/enroll">Read what enrolling a Device will mean</a>, including how a Device behaves if Nightloch is unreachable.</p></div>
+{{end}}
 {{if .View.PendingInvitations}}
 <h2>Invitations you sent</h2>
 <p class="lede">A pending invitation grants no Partner powers and does not activate Partner lock; acceptance is required.</p>
@@ -86,6 +100,14 @@ Log sharing if you accept: {{if .LogSharing}}On — you will receive domain-log 
 Reciprocal: {{if .Reciprocal}}Yes — {{.ProtecteeEmail}} is also one of your own Partners, listed under Your protection above. That is a separate Partnership with its own Log sharing, ending, and deadline; nothing you do here changes it.{{else}}No{{end}}<br>
 <strong>Their Roster</strong>
 <ul class="rows">{{range .Roster}}<li>{{.PartnerEmail}} — Partner since {{utc .Since}}. Log sharing: {{if .LogSharing}}On{{else}}Off{{end}}. Reciprocal: {{if .Reciprocal}}Yes{{else}}No{{end}}. {{if .Reachability.Warning}}<span class="warn-inline">{{.Reachability.Label}}.</span>{{else}}{{.Reachability.Label}}.{{end}}{{if .CoolingOffRunning}} <span class="warn-inline">Scheduled to end {{utc .CoolingOffEndsAt}} — {{countdown .CoolingOffEndsAt $.Now}}.</span>{{end}}</li>{{end}}</ul>
+<strong>Their Devices</strong>
+{{if .Devices}}
+<ul class="rows">{{range .Devices}}<li><strong>{{.Name}}</strong> — {{.Address}}<br>
+Enrolled {{utc .CreatedAt}}.<br>
+<a href="/devices/{{.ID}}/remove">Remove Device</a></li>{{end}}</ul>
+{{else}}
+<p class="muted">No Devices enrolled.</p>
+{{end}}
 {{if .PendingInvitations}}
 <strong>Invitations {{.ProtecteeEmail}} sent</strong>
 <ul class="rows">{{range .PendingInvitations}}<li>{{.InviteeEmail}} — Invited by {{.InviterEmail}}. Sent {{utc .SentAt}}. Expires {{utc .ExpiresAt}}.<br>
@@ -109,7 +131,6 @@ Until then it stays active and you keep every Partner power. {{.ProtecteeEmail}}
 <ul class="rows">{{range .Ended}}<li><strong>{{.ProtecteeLabel}}</strong> — ended {{utc .EndedAt}}.<br>
 <a href="/partners/ended-partnerships/{{.PartnershipID}}">View receipt</a></li>{{end}}</ul>
 {{end}}
-<div class="notice"><strong>Next milestone</strong><p>Device enrollment remains unavailable until the Operator adds you to the Enrollment allowlist. <a href="/devices/enroll">Read what enrolling a Device will mean</a>, including how a Device behaves if Nightloch is unreachable.</p></div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 	"invitation-review": `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -477,6 +498,21 @@ How it ended: {{if .Receipt.PartnerEnded}}You ended the Partnership immediately.
 <p>Or copy and paste this configuration into WireGuard manually:</p>
 <pre class="conf-block"><code>{{.Configuration}}</code></pre>
 <p><a href="/">Back to your protection</a></p>
+</section><footer>Version {{.Version}}</footer></main></body></html>`,
+	"device-remove-confirm": `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remove Device · Nightloch</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header class="topbar"><strong>Nightloch</strong><a href="/">Your protection</a></header>
+<main class="dashboard"><section><h1>Remove {{.Device.Name}}?</h1>
+<p class="lede">Device: <strong>{{.Device.Name}}</strong> ({{.Device.Address}})</p>
+<p class="lede">Removing this Device takes effect immediately: the tunnel stops carrying its traffic and Nightloch deletes its DNS filtering profile.</p>
+<p class="warn"><strong>Immediate disconnect:</strong> The tunnel stops working immediately and protection ends on that hardware. If &ldquo;Block connections without VPN&rdquo; is on in Android or similar VPN lock settings are enabled, the hardware goes offline until the VPN is disabled or reconfigured.</p>
+<p class="lede"><strong>Quarantine:</strong> Its tunnel address ({{.Device.Address}}) enters quarantine for 8 days (query-log retention plus 1 day) and cannot be re-minted or re-enrolled until that window expires.</p>
+<div class="actions">
+<form method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">Remove Device</button></form>
+<a class="quiet-link" href="{{.Back}}">Cancel</a>
+</div>
 </section><footer>Version {{.Version}}</footer></main></body></html>`,
 }
 
