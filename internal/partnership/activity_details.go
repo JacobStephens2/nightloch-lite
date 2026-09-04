@@ -49,6 +49,8 @@ type activityDetails struct {
 	// translated below, and an unknown kind renders nothing at all.
 	MessageKind  string `json:"message_kind"`
 	Reachability string `json:"reachability"`
+	// DeviceName is the name of the enrolled or removed Device.
+	DeviceName string `json:"device_name"`
 }
 
 // ActivityDetail is one typed, human-readable fact behind an entry, which a
@@ -84,6 +86,8 @@ var messageKindLabels = map[string]string{
 	MessageCoolingOffCanceled:          "Cooling-off canceled alert",
 	MessageCoolingOffBecameFinal:       "Final Partnership alert",
 	MessagePartnershipEnded:            "Partnership ended alert",
+	MessageDeviceEnrolled:              "Device enrolled alert",
+	MessageDeviceRemoved:               "Device removed alert",
 }
 
 // Details is the entry's typed detail rows for the viewer who read it. It is
@@ -150,6 +154,8 @@ func (e ActivityEntry) Details() []ActivityDetail {
 	case ActionDeliveryDelayed, ActionDeliveryFailed, ActionDeliveryRecovered:
 		add("Message", messageKindLabels[details.MessageKind])
 		add("Reachability", reachabilityRow(details.Reachability))
+	case ActionDeviceEnrolled, ActionDeviceRemoved:
+		add("Device", details.DeviceName)
 	}
 	return rows
 }

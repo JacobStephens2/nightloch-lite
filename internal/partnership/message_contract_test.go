@@ -58,6 +58,17 @@ func everyCanonicalMessage(t *testing.T, service *Service, db *sql.DB) []queuedM
 	}
 	secondPartnership := accepted.PartnershipID
 
+	// Device enrollment and removal with active Partners.
+	if err := service.RecordDeviceEnrolled(ctx, protectee, "Laptop"); err != nil {
+		t.Fatalf("RecordDeviceEnrolled: %v", err)
+	}
+	if err := service.RecordDeviceRemoved(ctx, protectee, protectee, "Laptop"); err != nil {
+		t.Fatalf("RecordDeviceRemoved by Protectee: %v", err)
+	}
+	if err := service.RecordDeviceRemoved(ctx, partnerA, protectee, "Old Phone"); err != nil {
+		t.Fatalf("RecordDeviceRemoved by Partner: %v", err)
+	}
+
 	// An invitation the Protectee withdraws, and one the invitee declines.
 	pending := invite(t, service, protectee, "withdrawn@example.com", false)
 	if _, err := service.CancelInvitation(ctx, pending.ID, protectee); err != nil {
@@ -166,6 +177,13 @@ func TestEveryCanonicalMessageReachesExactlyItsOwnRecipients(t *testing.T) {
 			"protectee@example.com", "partner-a@example.com",
 		},
 		MessageUserDeleted: {"partner-a@example.com"},
+		MessageDeviceEnrolled: {
+			"partner-a@example.com", "partner-b@example.com",
+		},
+		MessageDeviceRemoved: {
+			"partner-a@example.com", "partner-b@example.com",
+			"protectee@example.com", "partner-b@example.com",
+		},
 	}
 
 	got := map[string][]string{}
