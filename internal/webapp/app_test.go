@@ -86,6 +86,7 @@ func newTestEnvWithLogger(t *testing.T, logger *slog.Logger, healthChecks ...Hea
 		t.Fatal(err)
 	}
 	enforcementService.SetAuthorizer(partnerships)
+	partnerships.SetDeviceTeardown(tunnel, resolver)
 
 	app, err := New(Options{
 		Auth: authService, DB: db, Partnerships: partnerships,

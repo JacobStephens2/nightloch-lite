@@ -124,6 +124,16 @@ func (r *RecordingResolver) RemoveClient(_ context.Context, name string) error {
 	return nil
 }
 
+// HasPeer reports whether the public key is currently a tunnel member.
+func (t *RecordingTunnel) HasPeer(publicKey string) bool {
+	for _, member := range t.members {
+		if member.PublicKey == publicKey {
+			return true
+		}
+	}
+	return false
+}
+
 // HasClient reports whether the named client is currently registered.
 func (r *RecordingResolver) HasClient(name string) bool {
 	if r.clients == nil {
@@ -131,6 +141,11 @@ func (r *RecordingResolver) HasClient(name string) bool {
 	}
 	_, ok := r.clients[name]
 	return ok
+}
+
+// ClientCount reports the number of currently registered clients.
+func (r *RecordingResolver) ClientCount() int {
+	return len(r.clients)
 }
 
 // EnforcingResolver is a RecordingResolver reporting a resolver that is up and
