@@ -674,6 +674,7 @@ func TestEveryActionHasACategoryAndEveryCategoryHasActions(t *testing.T) {
 		ActionInvitationDeclined, ActionInvitationCanceled, ActionInvitationExpired,
 		ActionPartnershipEndedByPartner, ActionCoolingOffStarted, ActionCoolingOffCanceled,
 		ActionPartnershipEndedAfterCoolingOff, ActionCoolingOffBecameFinal,
+		ActionDeviceEnrolled, ActionDeviceRemoved,
 		ActionDeliveryDelayed, ActionDeliveryFailed, ActionDeliveryRecovered,
 	} {
 		if categoryOfAction[action] == AnyCategory {

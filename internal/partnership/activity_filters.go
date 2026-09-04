@@ -26,6 +26,8 @@ const (
 	// CategoryCoolingOff covers the Protectee's 72-hour exit and everything
 	// that happens to a running one short of the ending itself.
 	CategoryCoolingOff ActivityCategory = "cooling-off"
+	// CategoryDevices covers enrolled hardware and its removal.
+	CategoryDevices ActivityCategory = "devices"
 	// CategoryDelivery covers reachability alone, which is an integrity
 	// signal rather than a lifecycle change and is read as such (S3-58).
 	CategoryDelivery ActivityCategory = "delivery"
@@ -53,6 +55,8 @@ var categoryOfAction = map[string]ActivityCategory{
 	ActionCoolingOffStarted:               CategoryCoolingOff,
 	ActionCoolingOffCanceled:              CategoryCoolingOff,
 	ActionCoolingOffBecameFinal:           CategoryCoolingOff,
+	ActionDeviceEnrolled:                  CategoryDevices,
+	ActionDeviceRemoved:                   CategoryDevices,
 	ActionDeliveryDelayed:                 CategoryDelivery,
 	ActionDeliveryFailed:                  CategoryDelivery,
 	ActionDeliveryRecovered:               CategoryDelivery,
@@ -65,7 +69,7 @@ var categoryOfAction = map[string]ActivityCategory{
 // rather than by construction.
 func ActivityCategories() []ActivityCategory {
 	return []ActivityCategory{
-		CategoryInvitations, CategoryPartnerships, CategoryCoolingOff, CategoryDelivery,
+		CategoryInvitations, CategoryPartnerships, CategoryCoolingOff, CategoryDevices, CategoryDelivery,
 	}
 }
 
@@ -78,6 +82,8 @@ func (c ActivityCategory) Label() string {
 		return "Partnerships"
 	case CategoryCoolingOff:
 		return "Cooling-off"
+	case CategoryDevices:
+		return "Devices"
 	case CategoryDelivery:
 		return "Delivery"
 	default:
