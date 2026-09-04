@@ -1,6 +1,7 @@
 package enforcement
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -17,16 +19,27 @@ import (
 // exactly as the tunnel and the mail provider are, so every state it can be in
 // is reachable in a test without a droplet.
 //
-// It reports state and changes nothing. The rules AdGuard Home enforces are a
-// generated projection written by a later slice
-// (docs/SECURITY-POLICY-DESIGN.md §4); widening this interface to write one is
-// that slice's decision rather than something health quietly acquires.
+// AdGuard Home keys client filtering rules and query-log isolation on client
+// entries. In Slice 5, Resolver manages these client records via AdGuard Home's
+// control API (/control/clients/add and /control/clients/delete).
 type Resolver interface {
 	// Status reports whether the resolver is running and filtering. An error
 	// means the answer is unknown — it is never flattened into "not
 	// filtering", because an unreachable resolver and a resolver that has
 	// stopped enforcing call for different responses.
 	Status(ctx context.Context) (ResolverStatus, error)
+	// AddClient registers a Device client with AdGuard Home by name and assigned
+	// tunnel IP, applying global filtering settings.
+	AddClient(ctx context.Context, name string, ip netip.Addr) error
+	// RemoveClient deletes a Device client from AdGuard Home by name.
+	RemoveClient(ctx context.Context, name string) error
+}
+
+// DeviceClientName returns AdGuard Home's client name for a Device. The name is
+// formatted as device-<id>, making it globally unique, immutable, and free of
+// personal data that could cause multi-tenant query-log leaks ([F12]).
+func DeviceClientName(id int64) string {
+	return fmt.Sprintf("device-%d", id)
 }
 
 // ResolverStatus is what AdGuard Home says about itself. All three facts have
@@ -199,6 +212,57 @@ func (a *AdGuardHome) get(ctx context.Context, path string, into any) error {
 	}
 	if err := json.Unmarshal(body, into); err != nil {
 		return fmt.Errorf("%w: %s did not answer the control API: %w", ErrResolverUnreachable, path, err)
+	}
+	return nil
+}
+
+// AddClient registers a Device client with AdGuard Home, setting
+// filtering_enabled = true and use_global_settings = true.
+func (a *AdGuardHome) AddClient(ctx context.Context, name string, ip netip.Addr) error {
+	payload := struct {
+		Name              string   `json:"name"`
+		IDs               []string `json:"ids"`
+		FilteringEnabled  bool     `json:"filtering_enabled"`
+		UseGlobalSettings bool     `json:"use_global_settings"`
+	}{
+		Name:              name,
+		IDs:               []string{ip.String()},
+		FilteringEnabled:  true,
+		UseGlobalSettings: true,
+	}
+	return a.post(ctx, "/control/clients/add", payload)
+}
+
+// RemoveClient deletes a Device client from AdGuard Home by name.
+func (a *AdGuardHome) RemoveClient(ctx context.Context, name string) error {
+	payload := struct {
+		Name string `json:"name"`
+	}{
+		Name: name,
+	}
+	return a.post(ctx, "/control/clients/delete", payload)
+}
+
+func (a *AdGuardHome) post(ctx context.Context, path string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("%w: marshal request for %s: %w", ErrResolverUnreachable, path, err)
+	}
+	endpoint := a.baseURL.JoinPath(path).String()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrResolverUnreachable, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth(a.username, a.password)
+	response, err := a.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrResolverUnreachable, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(response.Body, maxResolverBody))
+		return fmt.Errorf("%w: %s answered %s: %s", ErrResolverUnreachable, path, response.Status, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }

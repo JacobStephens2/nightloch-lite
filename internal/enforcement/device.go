@@ -31,6 +31,10 @@ import (
 // label an Operator and later a Protectee reads in a list, not a description.
 const maxDeviceNameLength = 64
 
+// MaxDevicesPerProtectee bounds the number of live Devices a Protectee may hold
+// simultaneously.
+const MaxDevicesPerProtectee = 5
+
 var (
 	// ErrInvalidEmail rejects an address that identifies no possible User.
 	ErrInvalidEmail = emailaddr.ErrInvalid
@@ -41,12 +45,17 @@ var (
 	// ErrDeviceExists rejects minting a Device that already exists rather than
 	// allocating it a second tunnel address.
 	ErrDeviceExists = errors.New("that Protectee already has a Device with that name")
+	// ErrDeviceQuotaExceeded rejects enrolling a 6th live Device for a Protectee.
+	ErrDeviceQuotaExceeded = errors.New("device quota exceeded: you may have at most 5 live Devices, remove an unused Device first")
+	// ErrUnauthorizedRemoval rejects a Device removal attempt by an actor who is
+	// neither the Protectee nor an active Partner.
+	ErrUnauthorizedRemoval = errors.New("unauthorized to remove this Device")
 	// ErrUnknownDevice rejects removing something that is not one of that
 	// Protectee's live Devices, which is also what a Device already removed
 	// is. Removal is therefore refused rather than repeated: the tunnel is
 	// never invoked a second time for a peer already withdrawn, and the
 	// quarantine clock never restarts.
-	ErrUnknownDevice = errors.New("that Protectee has no Device with that name")
+	ErrUnknownDevice = errors.New("unknown Device")
 	// ErrAddressPoolExhausted rejects minting when the tunnel network holds no
 	// address a Device could be given. It is wrapped with the remedy the pool
 	// actually has, which is not the same remedy in both cases.
@@ -77,25 +86,29 @@ type KeyPair struct {
 	PublicKey  string
 }
 
-// Service is the deep enforcement module. Callers hand it an Operator's
-// intent; address allocation, transaction ordering against the tunnel, key
-// generation, and canonical rendering all stay inside.
+// Service is the deep enforcement module. Callers hand it an Operator's or
+// Protectee's intent; address allocation, transaction ordering against the
+// tunnel and resolver, key generation, and canonical rendering all stay inside.
 type Service struct {
 	db       *sql.DB
 	tunnel   Tunnel
+	resolver Resolver
 	settings TunnelSettings
 	now      func() time.Time
 	newKeys  func() (KeyPair, error)
 }
 
-// NewService builds a Service over the process's serialized SQLite handle and
-// an injected Tunnel. Settings are validated once here rather than at every
-// render, so RenderConfiguration is total.
-func NewService(db *sql.DB, tunnel Tunnel, settings TunnelSettings) (*Service, error) {
+// NewService builds a Service over the process's serialized SQLite handle,
+// an injected Tunnel, and an injected Resolver. Settings are validated once
+// here rather than at every render, so RenderConfiguration is total.
+func NewService(db *sql.DB, tunnel Tunnel, resolver Resolver, settings TunnelSettings) (*Service, error) {
+	if resolver == nil {
+		return nil, errors.New("resolver is required")
+	}
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
-	return &Service{db: db, tunnel: tunnel, settings: settings, now: time.Now, newKeys: generateKeyPair}, nil
+	return &Service{db: db, tunnel: tunnel, resolver: resolver, settings: settings, now: time.Now, newKeys: generateKeyPair}, nil
 }
 
 // MintCommand is one Operator's request to mint a Device for a Protectee.
@@ -124,6 +137,31 @@ type MintedDevice struct {
 // single SQLite connection for the length of a subprocess. That is acceptable
 // for an Operator command and is the reason minting is one: the alternative
 // orderings all admit a window where the two disagree.
+// EnrollDevice allocates a tunnel address, generates keys, admits the peer to
+// WireGuard, and registers the client in AdGuard Home for a Protectee.
+//
+// A Protectee may hold at most MaxDevicesPerProtectee live Devices. Enrolling
+// a 6th is refused with ErrDeviceQuotaExceeded.
+func (s *Service) EnrollDevice(ctx context.Context, protecteeID int64, name string) (MintedDevice, error) {
+	if protecteeID <= 0 {
+		return MintedDevice{}, ErrUnknownProtectee
+	}
+	normalizedName, err := normalizeDeviceName(name)
+	if err != nil {
+		return MintedDevice{}, err
+	}
+	return s.createDevice(ctx, protecteeID, normalizedName, true)
+}
+
+// MintDevice allocates the lowest free tunnel address, records the Device,
+// admits it to the tunnel, and registers the client with AdGuard Home, in one
+// ordering this module owns: the record is written, the tunnel is changed, and
+// the resolver client is added inside a transaction that commits only once
+// both adapters have accepted the peer and client, and a failure withdraws the
+// peer again and rolls back. Neither half is therefore reachable without the
+// other — a Device an Operator can see is a Device the tunnel will carry and
+// AdGuard Home will filter, and a peer on the tunnel is a Device with a record
+// and an owner.
 func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDevice, error) {
 	email, err := emailaddr.Normalize(command.ProtecteeEmail)
 	if err != nil {
@@ -134,14 +172,8 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 		return MintedDevice{}, err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return MintedDevice{}, fmt.Errorf("begin mint: %w", err)
-	}
-	defer tx.Rollback()
-
 	var protecteeID int64
-	err = tx.QueryRowContext(ctx,
+	err = s.db.QueryRowContext(ctx,
 		"SELECT id FROM users WHERE email = ? AND deleted_at IS NULL", email).Scan(&protecteeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MintedDevice{}, fmt.Errorf("%w: %s", ErrUnknownProtectee, email)
@@ -150,13 +182,43 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 		return MintedDevice{}, fmt.Errorf("read Protectee: %w", err)
 	}
 
-	var existing int
+	return s.createDevice(ctx, protecteeID, name, false)
+}
+
+func (s *Service) createDevice(ctx context.Context, protecteeID int64, name string, enforceQuota bool) (MintedDevice, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return MintedDevice{}, fmt.Errorf("begin mint: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	err = tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM users WHERE id = ? AND deleted_at IS NULL", protecteeID).Scan(&exists)
+	if err != nil {
+		return MintedDevice{}, fmt.Errorf("read Protectee: %w", err)
+	}
+	if exists == 0 {
+		return MintedDevice{}, fmt.Errorf("%w: user id %d", ErrUnknownProtectee, protecteeID)
+	}
+
+	var liveCount int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM devices WHERE protectee_id = ? AND removed_at IS NULL",
+		protecteeID).Scan(&liveCount); err != nil {
+		return MintedDevice{}, fmt.Errorf("read existing Devices count: %w", err)
+	}
+	if enforceQuota && liveCount >= MaxDevicesPerProtectee {
+		return MintedDevice{}, ErrDeviceQuotaExceeded
+	}
+
+	var nameDuplicate int
 	if err := tx.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM devices WHERE protectee_id = ? AND name = ? AND removed_at IS NULL",
-		protecteeID, name).Scan(&existing); err != nil {
+		protecteeID, name).Scan(&nameDuplicate); err != nil {
 		return MintedDevice{}, fmt.Errorf("read existing Devices: %w", err)
 	}
-	if existing > 0 {
+	if nameDuplicate > 0 {
 		return MintedDevice{}, fmt.Errorf("%w: %s", ErrDeviceExists, name)
 	}
 
@@ -184,16 +246,27 @@ func (s *Service) MintDevice(ctx context.Context, command MintCommand) (MintedDe
 	if err := s.tunnel.AddPeer(ctx, keys.PublicKey, address); err != nil {
 		return MintedDevice{}, fmt.Errorf("admit the Device to the tunnel: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		// The tunnel now carries membership no record explains. Withdraw it,
-		// and say so plainly if that fails too: an Operator has to know the
-		// tunnel is holding a peer Nightloch cannot account for.
+
+	clientName := DeviceClientName(id)
+	if err := s.resolver.AddClient(ctx, clientName, address); err != nil {
 		if removeErr := s.tunnel.RemovePeer(ctx, keys.PublicKey); removeErr != nil {
 			return MintedDevice{}, errors.Join(
-				fmt.Errorf("commit Device: %w", err),
-				fmt.Errorf("withdraw the uncommitted peer from the tunnel: %w", removeErr))
+				fmt.Errorf("register client with resolver: %w", err),
+				fmt.Errorf("withdraw the peer after resolver failure: %w", removeErr))
 		}
-		return MintedDevice{}, fmt.Errorf("commit Device: %w", err)
+		return MintedDevice{}, fmt.Errorf("register client with resolver: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		var errs []error
+		errs = append(errs, fmt.Errorf("commit Device: %w", err))
+		if removeErr := s.tunnel.RemovePeer(ctx, keys.PublicKey); removeErr != nil {
+			errs = append(errs, fmt.Errorf("withdraw the uncommitted peer from the tunnel: %w", removeErr))
+		}
+		if removeClientErr := s.resolver.RemoveClient(ctx, clientName); removeClientErr != nil {
+			errs = append(errs, fmt.Errorf("withdraw the uncommitted client from resolver: %w", removeClientErr))
+		}
+		return MintedDevice{}, errors.Join(errs...)
 	}
 
 	device := Device{
@@ -222,11 +295,80 @@ type RemovedDevice struct {
 	ReusableAt time.Time
 }
 
-// RemoveDevice ends a Device's record and withdraws its tunnel peer, in the
-// mirror of the ordering minting uses: the record is ended inside a
-// transaction that commits only once the tunnel has dropped the peer, and a
-// commit that fails re-admits it. A Device an Operator can still see is
-// therefore still a Device the tunnel carries.
+// RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
+// and withdraws its WireGuard peer.
+//
+// The actor must be either the Protectee owning the Device or an active
+// Partner protecting that Protectee.
+func scanLiveDevice(row *sql.Row) (Device, error) {
+	var device Device
+	var address string
+	var createdAt int64
+	err := row.Scan(&device.ID, &device.ProtecteeID, &device.Name, &device.PublicKey, &address, &createdAt)
+	if err != nil {
+		return Device{}, err
+	}
+	device.Address, err = netip.ParseAddr(address)
+	if err != nil {
+		return Device{}, fmt.Errorf("read Device address %q: %w", address, err)
+	}
+	device.CreatedAt = time.Unix(createdAt, 0).UTC()
+	return device, nil
+}
+
+// RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
+// and withdraws its WireGuard peer.
+//
+// The actor must be either the Protectee owning the Device or an active
+// Partner protecting that Protectee.
+func (s *Service) RemoveDeviceByID(ctx context.Context, actorID, deviceID int64) (RemovedDevice, error) {
+	if actorID <= 0 || deviceID <= 0 {
+		return RemovedDevice{}, ErrUnauthorizedRemoval
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("begin removal: %w", err)
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx,
+		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices
+		 WHERE id = ? AND removed_at IS NULL`,
+		deviceID)
+	device, err := scanLiveDevice(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RemovedDevice{}, fmt.Errorf("%w: id %d", ErrUnknownDevice, deviceID)
+	}
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("read Device: %w", err)
+	}
+
+	var liveActor, activePartnership int
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM users WHERE id = ?1 AND deleted_at IS NULL),
+			(SELECT COUNT(*) FROM partnerships WHERE protectee_id = ?2 AND partner_id = ?1 AND ended_at IS NULL)`,
+		actorID, device.ProtecteeID).Scan(&liveActor, &activePartnership)
+	if err != nil {
+		return RemovedDevice{}, fmt.Errorf("check removal authorization: %w", err)
+	}
+	if liveActor == 0 {
+		return RemovedDevice{}, ErrUnauthorizedRemoval
+	}
+	if actorID != device.ProtecteeID && activePartnership == 0 {
+		return RemovedDevice{}, ErrUnauthorizedRemoval
+	}
+
+	return s.removeDeviceTx(ctx, tx, device)
+}
+
+// RemoveDevice ends a Device's record, removes its AdGuard Home client, and
+// withdraws its tunnel peer, in the mirror of the ordering minting uses: the
+// record is ended inside a transaction that commits only once both the resolver
+// client and the tunnel peer have been withdrawn, and a commit that fails
+// re-admits them. A Device an Operator can still see is therefore still a Device
+// the tunnel carries.
 //
 // The address is not returned to the pool. It stays out of allocation for
 // QuarantineWindow past this instant, which is strictly longer than the
@@ -236,13 +378,6 @@ type RemovedDevice struct {
 // Only a live Device can be removed. Removing one that has already been
 // removed is refused rather than repeated, which is what keeps a second
 // attempt from invoking the helper again or restarting the quarantine clock.
-//
-// As with minting, the tunnel is invoked while the transaction is open, so the
-// single SQLite write lock is held for the length of a sudo subprocess. That
-// is the same trade minting makes and for the same reason: every other
-// ordering admits a window where the record and the tunnel disagree, and here
-// that window is a Device still carried by the tunnel that no Operator can
-// see to remove.
 func (s *Service) RemoveDevice(ctx context.Context, command RemoveCommand) (RemovedDevice, error) {
 	email, err := emailaddr.Normalize(command.ProtecteeEmail)
 	if err != nil {
@@ -269,25 +404,22 @@ func (s *Service) RemoveDevice(ctx context.Context, command RemoveCommand) (Remo
 		return RemovedDevice{}, fmt.Errorf("read Protectee: %w", err)
 	}
 
-	device := Device{ProtecteeID: protecteeID, Name: name}
-	var address string
-	var createdAt int64
-	err = tx.QueryRowContext(ctx,
-		`SELECT id, name, public_key, address, created_at FROM devices
+	row := tx.QueryRowContext(ctx,
+		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices
 		 WHERE protectee_id = ? AND name = ? AND removed_at IS NULL`,
-		protecteeID, name).Scan(&device.ID, &device.Name, &device.PublicKey, &address, &createdAt)
+		protecteeID, name)
+	device, err := scanLiveDevice(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownDevice, name)
 	}
 	if err != nil {
 		return RemovedDevice{}, fmt.Errorf("read Device: %w", err)
 	}
-	device.Address, err = netip.ParseAddr(address)
-	if err != nil {
-		return RemovedDevice{}, fmt.Errorf("read Device address %q: %w", address, err)
-	}
-	device.CreatedAt = time.Unix(createdAt, 0).UTC()
 
+	return s.removeDeviceTx(ctx, tx, device)
+}
+
+func (s *Service) removeDeviceTx(ctx context.Context, tx *sql.Tx, device Device) (RemovedDevice, error) {
 	removedAt := s.now().UTC().Truncate(time.Second)
 	// Guarded on removed_at again rather than on the id alone, so a concurrent
 	// removal that won cannot be overwritten with a later instant and a longer
@@ -302,23 +434,34 @@ func (s *Service) RemoveDevice(ctx context.Context, command RemoveCommand) (Remo
 		return RemovedDevice{}, fmt.Errorf("end the Device record: %w", err)
 	}
 	if ended != 1 {
-		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownDevice, name)
+		return RemovedDevice{}, fmt.Errorf("%w: %s", ErrUnknownDevice, device.Name)
 	}
 	device.RemovedAt = removedAt
 
+	clientName := DeviceClientName(device.ID)
+	if err := s.resolver.RemoveClient(ctx, clientName); err != nil {
+		return RemovedDevice{}, fmt.Errorf("remove AdGuard Home client: %w", err)
+	}
+
 	if err := s.tunnel.RemovePeer(ctx, device.PublicKey); err != nil {
+		if reAddErr := s.resolver.AddClient(ctx, clientName, device.Address); reAddErr != nil {
+			return RemovedDevice{}, errors.Join(
+				fmt.Errorf("withdraw the Device from the tunnel: %w", err),
+				fmt.Errorf("re-add the AdGuard Home client whose tunnel withdrawal failed: %w", reAddErr))
+		}
 		return RemovedDevice{}, fmt.Errorf("withdraw the Device from the tunnel: %w", err)
 	}
+
 	if err := tx.Commit(); err != nil {
-		// The record is live again but the peer is gone, which would read as a
-		// Device nobody can reach and nobody can remove. Re-admit it, and say
-		// so plainly if that fails too.
+		var errs []error
+		errs = append(errs, fmt.Errorf("commit the removal: %w", err))
 		if addErr := s.tunnel.AddPeer(ctx, device.PublicKey, device.Address); addErr != nil {
-			return RemovedDevice{}, errors.Join(
-				fmt.Errorf("commit the removal: %w", err),
-				fmt.Errorf("re-admit the Device whose removal did not commit: %w", addErr))
+			errs = append(errs, fmt.Errorf("re-admit the Device whose removal did not commit: %w", addErr))
 		}
-		return RemovedDevice{}, fmt.Errorf("commit the removal: %w", err)
+		if reAddErr := s.resolver.AddClient(ctx, clientName, device.Address); reAddErr != nil {
+			errs = append(errs, fmt.Errorf("re-add the AdGuard Home client whose removal did not commit: %w", reAddErr))
+		}
+		return RemovedDevice{}, errors.Join(errs...)
 	}
 
 	return RemovedDevice{Device: device, ReusableAt: ReusableAt(removedAt)}, nil
