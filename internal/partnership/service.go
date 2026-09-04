@@ -74,15 +74,24 @@ func IsRefusal(err error) bool {
 // and receive viewer-authorized views; transaction ordering, recipient
 // selection, token hashing, and canonical rendering stay inside.
 type Service struct {
-	db      *sql.DB
-	baseURL *url.URL
-	now     func() time.Time
-	random  io.Reader
+	db       *sql.DB
+	baseURL  *url.URL
+	now      func() time.Time
+	random   io.Reader
+	tunnel   DeviceTunnel
+	resolver DeviceResolver
 }
 
 // NewService builds a Service over the process's serialized SQLite handle.
 func NewService(db *sql.DB, baseURL *url.URL) *Service {
 	return &Service{db: db, baseURL: baseURL, now: time.Now, random: rand.Reader}
+}
+
+// SetDeviceTeardown configures the tunnel and resolver dependencies used to
+// dismantle Devices upon User deletion.
+func (s *Service) SetDeviceTeardown(tunnel DeviceTunnel, resolver DeviceResolver) {
+	s.tunnel = tunnel
+	s.resolver = resolver
 }
 
 // InviteCommand is one authenticated Protectee's request to add a Partner.
