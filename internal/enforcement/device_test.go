@@ -31,7 +31,7 @@ func newTestService(t *testing.T) (*Service, *RecordingTunnel, *sql.DB) {
 		t.Fatal(err)
 	}
 	tunnel := &RecordingTunnel{}
-	service, err := NewService(db, tunnel, testSettings())
+	service, err := NewService(db, tunnel, EnforcingResolver(), testSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,10 @@ func TestNewServiceRefusesUnrenderableSettings(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	if _, err := NewService(db, &RecordingTunnel{}, TunnelSettings{}); !errors.Is(err, ErrInvalidTunnelSettings) {
+	if _, err := NewService(db, &RecordingTunnel{}, nil, testSettings()); err == nil {
+		t.Fatal("NewService accepted nil resolver")
+	}
+	if _, err := NewService(db, &RecordingTunnel{}, EnforcingResolver(), TunnelSettings{}); !errors.Is(err, ErrInvalidTunnelSettings) {
 		t.Fatalf("NewService error = %v, want ErrInvalidTunnelSettings", err)
 	}
 }

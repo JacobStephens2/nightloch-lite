@@ -146,6 +146,14 @@ func openEnforcement() (*enforcement.Service, *sql.DB, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	resolverSettings, err := config.LoadResolver()
+	if err != nil {
+		return nil, nil, err
+	}
+	resolver, err := enforcement.NewAdGuardHome(resolverSettings)
+	if err != nil {
+		return nil, nil, err
+	}
 	db, err := database.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -156,7 +164,7 @@ func openEnforcement() (*enforcement.Service, *sql.DB, error) {
 		db.Close()
 		return nil, nil, err
 	}
-	service, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, tunnel)
+	service, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, resolver, tunnel)
 	if err != nil {
 		db.Close()
 		return nil, nil, err

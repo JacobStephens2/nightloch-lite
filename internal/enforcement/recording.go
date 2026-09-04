@@ -72,12 +72,11 @@ func (t *RecordingTunnel) removeMember(publicKey string) {
 // protection and the filtering engine both on.
 var enforcingResolver = ResolverStatus{Running: true, ProtectionEnabled: true, FilteringEnabled: true}
 
-// RecordingResolver is the Resolver a test uses instead of a droplet. It holds
-// no enforcement rule, because the interface it stands in for writes none:
-// what it reports is only whether the resolver is up and filtering.
+// RecordingResolver is the Resolver a test uses instead of a droplet. It
+// records status checks and client additions and deletions in order.
 type RecordingResolver struct {
-	// Calls is every invocation in order. There is one operation, so every
-	// entry reads "status".
+	// Calls is every invocation in order: "status", "add-client <name> <ip>",
+	// "remove-client <name>".
 	Calls []string
 
 	// Reported is the state to answer with. Its zero value is a resolver that
@@ -87,6 +86,11 @@ type RecordingResolver struct {
 	// StatusError makes the read fail, which is a resolver whose state is
 	// unknown rather than one that is known not to be filtering.
 	StatusError error
+
+	AddClientError    error
+	RemoveClientError error
+
+	clients map[string]netip.Addr
 }
 
 func (r *RecordingResolver) Status(context.Context) (ResolverStatus, error) {
@@ -97,9 +101,41 @@ func (r *RecordingResolver) Status(context.Context) (ResolverStatus, error) {
 	return r.Reported, nil
 }
 
+func (r *RecordingResolver) AddClient(_ context.Context, name string, ip netip.Addr) error {
+	r.Calls = append(r.Calls, "add-client "+name+" "+ip.String())
+	if r.AddClientError != nil {
+		return r.AddClientError
+	}
+	if r.clients == nil {
+		r.clients = make(map[string]netip.Addr)
+	}
+	r.clients[name] = ip
+	return nil
+}
+
+func (r *RecordingResolver) RemoveClient(_ context.Context, name string) error {
+	r.Calls = append(r.Calls, "remove-client "+name)
+	if r.RemoveClientError != nil {
+		return r.RemoveClientError
+	}
+	if r.clients != nil {
+		delete(r.clients, name)
+	}
+	return nil
+}
+
+// HasClient reports whether the named client is currently registered.
+func (r *RecordingResolver) HasClient(name string) bool {
+	if r.clients == nil {
+		return false
+	}
+	_, ok := r.clients[name]
+	return ok
+}
+
 // EnforcingResolver is a RecordingResolver reporting a resolver that is up and
 // filtering, which is the state most tests want to hold fixed while they vary
 // something else.
 func EnforcingResolver() *RecordingResolver {
-	return &RecordingResolver{Reported: enforcingResolver}
+	return &RecordingResolver{Reported: enforcingResolver, clients: make(map[string]netip.Addr)}
 }

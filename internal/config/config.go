@@ -99,6 +99,30 @@ func LoadTunnel() (enforcement.TunnelSettings, error) {
 	return tunnel, nil
 }
 
+// LoadResolver reads the resolver environment for commands that interact with
+// AdGuard Home.
+func LoadResolver() (enforcement.ResolverSettings, error) {
+	settings := enforcement.ResolverSettings{
+		BaseURL:  strings.TrimSpace(os.Getenv("ADGUARD_URL")),
+		Username: strings.TrimSpace(os.Getenv("ADGUARD_USERNAME")),
+		Password: strings.TrimSpace(os.Getenv("ADGUARD_PASSWORD")),
+	}
+	if settings.BaseURL == "" {
+		settings.BaseURL = defaultResolverURL
+	}
+	var missing []string
+	if settings.Username == "" {
+		missing = append(missing, "ADGUARD_USERNAME")
+	}
+	if settings.Password == "" {
+		missing = append(missing, "ADGUARD_PASSWORD")
+	}
+	if len(missing) > 0 {
+		return enforcement.ResolverSettings{}, fmt.Errorf("required environment variables are missing: %s", strings.Join(missing, ", "))
+	}
+	return settings, nil
+}
+
 // Load reads and validates the environment for the serve command.
 func Load() (Config, error) {
 	databasePath, err := DatabasePath()
@@ -119,6 +143,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	resolver, err := LoadResolver()
+	if err != nil {
+		return Config{}, err
+	}
+
 	config := Config{
 		BaseURL:             baseURL,
 		DatabasePath:        databasePath,
@@ -128,17 +157,10 @@ func Load() (Config, error) {
 		ResendWebhookSecret: strings.TrimSpace(os.Getenv("RESEND_WEBHOOK_SECRET")),
 		TurnstileSecret:     strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")),
 		TurnstileSite:       strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")),
-		Resolver: enforcement.ResolverSettings{
-			BaseURL:  strings.TrimSpace(os.Getenv("ADGUARD_URL")),
-			Username: strings.TrimSpace(os.Getenv("ADGUARD_USERNAME")),
-			Password: strings.TrimSpace(os.Getenv("ADGUARD_PASSWORD")),
-		},
+		Resolver:            resolver,
 	}
 	if config.ResendFrom == "" {
 		config.ResendFrom = defaultResendFrom
-	}
-	if config.Resolver.BaseURL == "" {
-		config.Resolver.BaseURL = defaultResolverURL
 	}
 
 	var missing []string
@@ -147,8 +169,6 @@ func Load() (Config, error) {
 		"RESEND_WEBHOOK_SECRET": config.ResendWebhookSecret,
 		"TURNSTILE_SECRET_KEY":  config.TurnstileSecret,
 		"TURNSTILE_SITE_KEY":    config.TurnstileSite,
-		"ADGUARD_USERNAME":      config.Resolver.Username,
-		"ADGUARD_PASSWORD":      config.Resolver.Password,
 	} {
 		if value == "" {
 			missing = append(missing, name)
