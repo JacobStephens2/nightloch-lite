@@ -605,5 +605,3 @@ func TestDashboardLinksToTheDeviceEnrollScreen(t *testing.T) {
 		t.Fatalf("dashboard does not link to the enroll screen:\n%s", body)
 	}
 }
-
-
