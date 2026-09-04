@@ -365,3 +365,131 @@ func TestRemoveDeviceByIDAuthorizerFuncErrorPropagates(t *testing.T) {
 		t.Fatalf("authorizer error = %v, want %v", err, expectedErr)
 	}
 }
+
+func TestDevicesForProtectee(t *testing.T) {
+	t.Parallel()
+	service, _, _, db := newEnrollTestEnv(t)
+	ctx := context.Background()
+
+	protectee1 := createUser(t, db, "protectee1@example.com")
+	protectee2 := createUser(t, db, "protectee2@example.com")
+
+	dev1, err := service.EnrollDevice(ctx, protectee1, "Phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev2, err := service.EnrollDevice(ctx, protectee1, "Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.EnrollDevice(ctx, protectee2, "Tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Initial list: protectee1 has 2 devices
+	devices, err := service.DevicesForProtectee(ctx, protectee1)
+	if err != nil {
+		t.Fatalf("DevicesForProtectee: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("got %d devices, want 2", len(devices))
+	}
+	if devices[0].Name != "Phone" || devices[1].Name != "Laptop" {
+		t.Fatalf("got devices %v, want Phone and Laptop", devices)
+	}
+
+	// After removing dev1, only dev2 remains
+	if _, err := service.RemoveDeviceByID(ctx, protectee1, dev1.Device.ID); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = service.DevicesForProtectee(ctx, protectee1)
+	if err != nil {
+		t.Fatalf("DevicesForProtectee after removal: %v", err)
+	}
+	if len(devices) != 1 || devices[0].ID != dev2.Device.ID {
+		t.Fatalf("got %v, want only dev2", devices)
+	}
+
+	// Invalid or 0 protectee ID returns empty
+	empty, err := service.DevicesForProtectee(ctx, 0)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("DevicesForProtectee(0) = %v, %v, want empty nil", empty, err)
+	}
+}
+
+func TestLiveDeviceByIDAndAuthorizeRemoval(t *testing.T) {
+	t.Parallel()
+	service, _, _, db := newEnrollTestEnv(t)
+	ctx := context.Background()
+
+	protectee := createUser(t, db, "protectee@example.com")
+	partner := createUser(t, db, "partner@example.com")
+	stranger := createUser(t, db, "stranger@example.com")
+	createPartnership(t, db, protectee, partner)
+
+	dev, err := service.EnrollDevice(ctx, protectee, "Work Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// LiveDeviceByID finds it
+	found, err := service.LiveDeviceByID(ctx, dev.Device.ID)
+	if err != nil {
+		t.Fatalf("LiveDeviceByID: %v", err)
+	}
+	if found.ID != dev.Device.ID || found.Name != "Work Laptop" {
+		t.Fatalf("found = %+v, want dev", found)
+	}
+
+	// AuthorizeRemoval allows protectee
+	authedDev, err := service.AuthorizeRemoval(ctx, protectee, dev.Device.ID)
+	if err != nil {
+		t.Fatalf("AuthorizeRemoval protectee: %v", err)
+	}
+	if authedDev.ID != dev.Device.ID {
+		t.Fatalf("authedDev.ID = %d, want %d", authedDev.ID, dev.Device.ID)
+	}
+
+	// AuthorizeRemoval allows active partner
+	authedDev, err = service.AuthorizeRemoval(ctx, partner, dev.Device.ID)
+	if err != nil {
+		t.Fatalf("AuthorizeRemoval partner: %v", err)
+	}
+	if authedDev.ID != dev.Device.ID {
+		t.Fatalf("authedDev.ID = %d, want %d", authedDev.ID, dev.Device.ID)
+	}
+
+	// AuthorizeRemoval refuses stranger
+	_, err = service.AuthorizeRemoval(ctx, stranger, dev.Device.ID)
+	if !errors.Is(err, ErrUnauthorizedRemoval) {
+		t.Fatalf("stranger err = %v, want ErrUnauthorizedRemoval", err)
+	}
+
+	// AuthorizeRemoval refuses invalid IDs
+	_, err = service.AuthorizeRemoval(ctx, 0, dev.Device.ID)
+	if !errors.Is(err, ErrUnauthorizedRemoval) {
+		t.Fatalf("0 actor err = %v, want ErrUnauthorizedRemoval", err)
+	}
+	_, err = service.AuthorizeRemoval(ctx, protectee, 0)
+	if !errors.Is(err, ErrUnauthorizedRemoval) {
+		t.Fatalf("0 device err = %v, want ErrUnauthorizedRemoval", err)
+	}
+
+	// Remove device
+	if _, err := service.RemoveDeviceByID(ctx, protectee, dev.Device.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// LiveDeviceByID returns ErrUnknownDevice
+	_, err = service.LiveDeviceByID(ctx, dev.Device.ID)
+	if !errors.Is(err, ErrUnknownDevice) {
+		t.Fatalf("removed LiveDeviceByID err = %v, want ErrUnknownDevice", err)
+	}
+
+	// AuthorizeRemoval returns ErrUnknownDevice for removed device
+	_, err = service.AuthorizeRemoval(ctx, protectee, dev.Device.ID)
+	if !errors.Is(err, ErrUnknownDevice) {
+		t.Fatalf("removed AuthorizeRemoval err = %v, want ErrUnknownDevice", err)
+	}
+}
