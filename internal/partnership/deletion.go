@@ -6,10 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// DeviceTunnel is the tunnel interface required to withdraw WireGuard peers
+// when dismantling Devices during User deletion.
+type DeviceTunnel interface {
+	RemovePeer(ctx context.Context, publicKey string) error
+	AddPeer(ctx context.Context, publicKey string, address netip.Addr) error
+}
+
+// DeviceResolver is the resolver interface required to remove AdGuard Home
+// clients when dismantling Devices during User deletion.
+type DeviceResolver interface {
+	RemoveClient(ctx context.Context, name string) error
+	AddClient(ctx context.Context, name string, ip netip.Addr) error
+}
 
 const (
 	// ActionPartnershipEndedByUserDeletion is the stable Activity action for a
@@ -59,13 +74,16 @@ type UserDeletion struct {
 	// EndedPartnerships is how many live Partnerships this teardown ended, in
 	// both directions.
 	EndedPartnerships int
+	// DismantledDevices is how many live Devices this teardown withdrew from
+	// the tunnel and resolver.
+	DismantledDevices int
 }
 
-// DeleteUser completes one User's teardown inside the relationship perimeter
-// and replaces their identity with Deleted User, in one transaction. It is the
-// hook the later account-deletion slice calls on its own 72-hour deadline; it
-// implements no account-deletion UI, no confirmation, no Cooling-off, and no
-// Device teardown, and it starts nothing — by the time it runs, the deleting
+// DeleteUser completes one User's teardown inside the relationship perimeter,
+// dismantles any live Devices, and replaces their identity with Deleted User,
+// in one transaction. It is the hook the later account-deletion slice calls on
+// its own 72-hour deadline; it implements no account-deletion UI, no confirmation,
+// no Cooling-off, and it starts nothing — by the time it runs, the deleting
 // User has already been told what it will do.
 //
 // What it preserves is the point. A deleted User's row stays, because another
@@ -75,6 +93,12 @@ type UserDeletion struct {
 // identity: the verified email is replaced everywhere a product view reads it,
 // the deleted User's own chronology and Roster access are removed outright,
 // and a former Partner is left with the receipt alone (S3-71).
+//
+// Any live Devices belonging to the user are transactionally dismantled before
+// pseudonymization: WireGuard peers are withdrawn, AdGuard Home clients are
+// deleted, and each Device row is marked with removed_at = now. This safely
+// places the tunnel addresses into the 8-day quarantine pool without violating
+// foreign key RESTRICT constraints ([F8]).
 //
 // Mail is external history: a message named the User when the event occurred,
 // it stays that way whether it has been dispatched yet or not, and Nightloch
@@ -120,16 +144,146 @@ func (s *Service) DeleteUser(ctx context.Context, userID int64) (UserDeletion, e
 			return UserDeletion{}, err
 		}
 	}
-	if err := settleForDeletion(ctx, tx, userID, email, now); err != nil {
+	dismantled, err := s.dismantleDevicesForDeletion(ctx, tx, userID, email, now)
+	if err != nil {
 		return UserDeletion{}, err
+	}
+	if err := settleForDeletion(ctx, tx, userID, email, now); err != nil {
+		rbErr := s.rollbackDismantled(ctx, dismantled)
+		return UserDeletion{}, errors.Join(err, rbErr)
 	}
 	if err := pseudonymize(ctx, tx, userID, email, now); err != nil {
-		return UserDeletion{}, err
+		rbErr := s.rollbackDismantled(ctx, dismantled)
+		return UserDeletion{}, errors.Join(err, rbErr)
 	}
 	if err := tx.Commit(); err != nil {
-		return UserDeletion{}, fmt.Errorf("commit User deletion: %w", err)
+		rbErr := s.rollbackDismantled(ctx, dismantled)
+		return UserDeletion{}, errors.Join(fmt.Errorf("commit User deletion: %w", err), rbErr)
 	}
-	return UserDeletion{UserID: userID, DeletedAt: now, EndedPartnerships: len(relationships)}, nil
+	return UserDeletion{
+		UserID:            userID,
+		DeletedAt:         now,
+		EndedPartnerships: len(relationships),
+		DismantledDevices: len(dismantled),
+	}, nil
+}
+
+type liveDeviceToDismantle struct {
+	id        int64
+	name      string
+	publicKey string
+	address   netip.Addr
+}
+
+func (s *Service) dismantleDevicesForDeletion(ctx context.Context, tx *sql.Tx,
+	userID int64, email string, now time.Time) ([]liveDeviceToDismantle, error) {
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, name, public_key, address FROM devices
+		 WHERE protectee_id = ? AND removed_at IS NULL
+		 ORDER BY id`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("read live Devices for deletion: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []liveDeviceToDismantle
+	for rows.Next() {
+		var dev liveDeviceToDismantle
+		var addrStr string
+		if err := rows.Scan(&dev.id, &dev.name, &dev.publicKey, &addrStr); err != nil {
+			return nil, fmt.Errorf("scan live Device: %w", err)
+		}
+		parsedAddr, err := netip.ParseAddr(addrStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse Device address %q: %w", addrStr, err)
+		}
+		dev.address = parsedAddr
+		devices = append(devices, dev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read live Devices for deletion: %w", err)
+	}
+
+	if len(devices) == 0 {
+		return nil, nil
+	}
+
+	if s.tunnel == nil || s.resolver == nil {
+		return nil, fmt.Errorf("cannot dismantle Devices for User %d: tunnel or resolver not configured", userID)
+	}
+
+	var dismantled []liveDeviceToDismantle
+	for _, dev := range devices {
+		clientName := fmt.Sprintf("device-%d", dev.id)
+		if err := s.resolver.RemoveClient(ctx, clientName); err != nil {
+			rbErr := s.rollbackDismantled(ctx, dismantled)
+			return nil, errors.Join(fmt.Errorf("remove resolver client %s: %w", clientName, err), rbErr)
+		}
+
+		if err := s.tunnel.RemovePeer(ctx, dev.publicKey); err != nil {
+			_ = s.resolver.AddClient(ctx, clientName, dev.address)
+			rbErr := s.rollbackDismantled(ctx, dismantled)
+			return nil, errors.Join(fmt.Errorf("withdraw tunnel peer %s: %w", dev.publicKey, err), rbErr)
+		}
+
+		result, err := tx.ExecContext(ctx,
+			"UPDATE devices SET removed_at = ? WHERE id = ? AND removed_at IS NULL",
+			now.Unix(), dev.id)
+		if err != nil {
+			_ = s.tunnel.AddPeer(ctx, dev.publicKey, dev.address)
+			_ = s.resolver.AddClient(ctx, clientName, dev.address)
+			rbErr := s.rollbackDismantled(ctx, dismantled)
+			return nil, errors.Join(fmt.Errorf("update Device %d removed_at: %w", dev.id, err), rbErr)
+		}
+		ended, err := result.RowsAffected()
+		if err != nil || ended != 1 {
+			_ = s.tunnel.AddPeer(ctx, dev.publicKey, dev.address)
+			_ = s.resolver.AddClient(ctx, clientName, dev.address)
+			rbErr := s.rollbackDismantled(ctx, dismantled)
+			return nil, errors.Join(fmt.Errorf("Device %d was concurrently removed", dev.id), rbErr)
+		}
+
+		_, err = appendActivity(ctx, tx, activityEntry{
+			ProtecteeID: userID,
+			Action:      ActionDeviceRemoved,
+			ActorUserID: &userID,
+			ActorEmail:  email,
+			TargetEmail: email,
+			OccurredAt:  now,
+			Details: map[string]any{
+				"device_name": dev.name,
+			},
+		})
+		if err != nil {
+			_ = s.tunnel.AddPeer(ctx, dev.publicKey, dev.address)
+			_ = s.resolver.AddClient(ctx, clientName, dev.address)
+			rbErr := s.rollbackDismantled(ctx, dismantled)
+			return nil, errors.Join(fmt.Errorf("append Device removal Activity: %w", err), rbErr)
+		}
+
+		dismantled = append(dismantled, dev)
+	}
+
+	return dismantled, nil
+}
+
+func (s *Service) rollbackDismantled(ctx context.Context, devices []liveDeviceToDismantle) error {
+	var errs []error
+	for _, dev := range devices {
+		clientName := fmt.Sprintf("device-%d", dev.id)
+		if s.tunnel != nil {
+			if err := s.tunnel.AddPeer(ctx, dev.publicKey, dev.address); err != nil {
+				errs = append(errs, fmt.Errorf("re-admit peer %s: %w", dev.publicKey, err))
+			}
+		}
+		if s.resolver != nil {
+			if err := s.resolver.AddClient(ctx, clientName, dev.address); err != nil {
+				errs = append(errs, fmt.Errorf("re-add client %s: %w", clientName, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // readLivePartnershipsOf reads every live Partnership the User is on, in

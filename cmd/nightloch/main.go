@@ -328,17 +328,19 @@ func runServe() error {
 	if err != nil {
 		return err
 	}
-	plane := enforcement.NewPlane(&enforcement.HelperTunnel{}, resolver)
+	tunnel := &enforcement.HelperTunnel{}
+	plane := enforcement.NewPlane(tunnel, resolver)
 
 	tunnelSettings, err := config.LoadTunnel()
 	if err != nil {
 		return err
 	}
-	enforcementService, err := enforcement.NewService(db, &enforcement.HelperTunnel{}, resolver, tunnelSettings)
+	enforcementService, err := enforcement.NewService(db, tunnel, resolver, tunnelSettings)
 	if err != nil {
 		return err
 	}
 	enforcementService.SetAuthorizer(partnerships)
+	partnerships.SetDeviceTeardown(tunnel, resolver)
 
 	app, err := webapp.New(webapp.Options{
 		Auth:                  authService,
