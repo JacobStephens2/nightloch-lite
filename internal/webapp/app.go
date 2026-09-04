@@ -155,6 +155,8 @@ func New(options Options) (*App, error) {
 	mux.HandleFunc("POST "+deliveryWebhookPath, app.deliveryWebhook)
 	mux.HandleFunc("GET /devices/enroll", app.deviceEnroll)
 	mux.HandleFunc("POST /devices/enroll", app.deviceEnrollSubmit)
+	mux.HandleFunc("GET /devices/{id}/remove", app.confirmRemoveDevice)
+	mux.HandleFunc("POST /devices/{id}/remove", app.removeDevice)
 	mux.HandleFunc("GET /health", app.health)
 	mux.HandleFunc("GET /assets/style.css", app.styles)
 	mux.HandleFunc("GET /assets/local-time.js", app.localTimeScript)
@@ -185,18 +187,27 @@ type pageData struct {
 	Version       string
 }
 
+// protecteeWithDevices wraps a ProtecteeEntry with their active Devices for display
+// in "People you protect".
+type protecteeWithDevices struct {
+	partnership.ProtecteeEntry
+	Devices []enforcement.Device
+}
+
 // dashboardData is the signed-in User's own protection state alongside the
 // Protectees they protect. The two areas stay separate so a Reciprocal
 // Partnership reads correctly in both (S3-45).
 type dashboardData struct {
-	CSRFToken string
-	User      githubauth.User
-	Version   string
-	View      partnership.ProtecteeView
+	CSRFToken         string
+	User              githubauth.User
+	Version           string
+	View              partnership.ProtecteeView
+	Devices           []enforcement.Device
+	EnrollmentAllowed bool
 	// Received is every live invitation addressed to this User's verified
 	// email, so an invitee who lost the email can still answer it.
 	Received   []partnership.ReceivedInvitation
-	Protecting []partnership.ProtecteeEntry
+	Protecting []protecteeWithDevices
 	// Ended is the read-only receipts this User keeps for Partnerships they
 	// no longer hold. They carry no Roster and no later Activity.
 	Ended []partnership.EndedPartnership
@@ -208,6 +219,7 @@ type dashboardData struct {
 	// state it failed to change. It is always a partnership.IsRefusal message,
 	// which is safe for this viewer to read.
 	Refusal string
+	Message string
 }
 
 // invitePageData carries the Add a Partner form, including a rejected
@@ -220,14 +232,20 @@ type invitePageData struct {
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
-	a.renderDashboard(w, r, http.StatusOK, "")
+	var message string
+	if removed := r.URL.Query().Get("removed"); removed != "" && len(removed) <= 64 {
+		message = fmt.Sprintf("Device %q was removed.", removed)
+	} else if msg := r.URL.Query().Get("message"); msg != "" && len(msg) <= 128 {
+		message = msg
+	}
+	a.renderDashboard(w, r, http.StatusOK, "", message)
 }
 
 // renderDashboard builds the signed-in User's whole dashboard. A control that
 // was refused renders the same page with its reason, so the Protectee reads
 // the refusal beside the unchanged state it applies to rather than on a screen
 // of its own.
-func (a *App) renderDashboard(w http.ResponseWriter, r *http.Request, status int, refusal string) {
+func (a *App) renderDashboard(w http.ResponseWriter, r *http.Request, status int, refusal string, message ...string) {
 	user, ok := a.currentUser(w, r)
 	if !ok {
 		return
@@ -242,7 +260,7 @@ func (a *App) renderDashboard(w http.ResponseWriter, r *http.Request, status int
 		a.internalError(w, r, err)
 		return
 	}
-	protecting, err := a.partnerships.ProtectingView(r.Context(), user.ID)
+	protectingRaw, err := a.partnerships.ProtectingView(r.Context(), user.ID)
 	if err != nil {
 		a.internalError(w, r, err)
 		return
@@ -257,10 +275,44 @@ func (a *App) renderDashboard(w http.ResponseWriter, r *http.Request, status int
 		a.internalError(w, r, err)
 		return
 	}
+
+	ownDevices, err := a.enforcement.DevicesForProtectee(r.Context(), user.ID)
+	if err != nil {
+		a.internalError(w, r, err)
+		return
+	}
+
+	protecting := make([]protecteeWithDevices, 0, len(protectingRaw))
+	for _, p := range protectingRaw {
+		pDevices, err := a.enforcement.DevicesForProtectee(r.Context(), p.ProtecteeID)
+		if err != nil {
+			a.internalError(w, r, err)
+			return
+		}
+		protecting = append(protecting, protecteeWithDevices{
+			ProtecteeEntry: p,
+			Devices:        pDevices,
+		})
+	}
+
+	var msg string
+	if len(message) > 0 {
+		msg = message[0]
+	}
+
 	a.render(w, r, status, "dashboard", dashboardData{
-		CSRFToken: csrf, User: user, Version: a.version, View: view,
-		Received: received, Protecting: protecting, Ended: ended,
-		Now: a.now().UTC(), Refusal: refusal,
+		CSRFToken:         csrf,
+		User:              user,
+		Version:           a.version,
+		View:              view,
+		Devices:           ownDevices,
+		EnrollmentAllowed: a.isEnrollmentAllowed(user.Email),
+		Received:          received,
+		Protecting:        protecting,
+		Ended:             ended,
+		Now:               a.now().UTC(),
+		Refusal:           refusal,
+		Message:           msg,
 	})
 }
 

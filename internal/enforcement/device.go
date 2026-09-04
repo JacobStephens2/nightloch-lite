@@ -332,37 +332,97 @@ func scanLiveDevice(row *sql.Row) (Device, error) {
 	return device, nil
 }
 
-// RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
-// and withdraws its WireGuard peer.
-//
-// The actor must be authorized by the configured DeviceAuthorizer (either the Protectee
-// owning the Device or an active Partner protecting that Protectee).
-func (s *Service) RemoveDeviceByID(ctx context.Context, actorID, deviceID int64) (RemovedDevice, error) {
-	if actorID <= 0 || deviceID <= 0 {
-		return RemovedDevice{}, ErrUnauthorizedRemoval
+// LiveDeviceByID returns an active Device by ID, or ErrUnknownDevice if not found or already removed.
+func (s *Service) LiveDeviceByID(ctx context.Context, deviceID int64) (Device, error) {
+	if deviceID <= 0 {
+		return Device{}, fmt.Errorf("%w: id %d", ErrUnknownDevice, deviceID)
 	}
-	if s.authorizer == nil {
-		return RemovedDevice{}, ErrUnauthorizedRemoval
-	}
-
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices
 		 WHERE id = ? AND removed_at IS NULL`,
 		deviceID)
 	device, err := scanLiveDevice(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return RemovedDevice{}, fmt.Errorf("%w: id %d", ErrUnknownDevice, deviceID)
+		return Device{}, fmt.Errorf("%w: id %d", ErrUnknownDevice, deviceID)
 	}
 	if err != nil {
-		return RemovedDevice{}, fmt.Errorf("read Device: %w", err)
+		return Device{}, fmt.Errorf("read Device: %w", err)
+	}
+	return device, nil
+}
+
+// AuthorizeRemoval verifies whether actorID is authorized to remove deviceID.
+// If authorized, it returns the Device. If unauthorized, it returns ErrUnauthorizedRemoval.
+// If the Device does not exist or has already been removed, it returns ErrUnknownDevice.
+func (s *Service) AuthorizeRemoval(ctx context.Context, actorID, deviceID int64) (Device, error) {
+	if actorID <= 0 || deviceID <= 0 {
+		return Device{}, ErrUnauthorizedRemoval
+	}
+	if s.authorizer == nil {
+		return Device{}, ErrUnauthorizedRemoval
+	}
+
+	device, err := s.LiveDeviceByID(ctx, deviceID)
+	if err != nil {
+		return Device{}, err
 	}
 
 	allowed, err := s.authorizer.CanRemoveDevice(ctx, actorID, device.ProtecteeID)
 	if err != nil {
-		return RemovedDevice{}, fmt.Errorf("check removal authorization: %w", err)
+		return Device{}, fmt.Errorf("check removal authorization: %w", err)
 	}
 	if !allowed {
-		return RemovedDevice{}, ErrUnauthorizedRemoval
+		return Device{}, ErrUnauthorizedRemoval
+	}
+	return device, nil
+}
+
+// DevicesForProtectee lists all live Devices belonging to protecteeID, ordered
+// chronologically.
+func (s *Service) DevicesForProtectee(ctx context.Context, protecteeID int64) ([]Device, error) {
+	if protecteeID <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, protectee_id, name, public_key, address, created_at FROM devices
+		 WHERE protectee_id = ? AND removed_at IS NULL
+		 ORDER BY created_at ASC, id ASC`,
+		protecteeID)
+	if err != nil {
+		return nil, fmt.Errorf("read Protectee Devices: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []Device
+	for rows.Next() {
+		var device Device
+		var address string
+		var createdAt int64
+		if err := rows.Scan(&device.ID, &device.ProtecteeID, &device.Name, &device.PublicKey, &address, &createdAt); err != nil {
+			return nil, fmt.Errorf("read Protectee Devices: %w", err)
+		}
+		device.Address, err = netip.ParseAddr(address)
+		if err != nil {
+			return nil, fmt.Errorf("read Device address %q: %w", address, err)
+		}
+		device.CreatedAt = time.Unix(createdAt, 0).UTC()
+		devices = append(devices, device)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read Protectee Devices: %w", err)
+	}
+	return devices, nil
+}
+
+// RemoveDeviceByID ends a Device record by ID, removes its AdGuard Home client,
+// and withdraws its WireGuard peer.
+//
+// The actor must be authorized by the configured DeviceAuthorizer (either the Protectee
+// owning the Device or an active Partner protecting that Protectee).
+func (s *Service) RemoveDeviceByID(ctx context.Context, actorID, deviceID int64) (RemovedDevice, error) {
+	device, err := s.AuthorizeRemoval(ctx, actorID, deviceID)
+	if err != nil {
+		return RemovedDevice{}, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
