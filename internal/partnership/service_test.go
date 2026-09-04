@@ -219,6 +219,38 @@ func TestCanLoosenDeniesPartneredProtecteeAndPermitsActivePartner(t *testing.T) 
 	}
 }
 
+func TestCanRemoveDevicePermitsProtecteeAndActivePartner(t *testing.T) {
+	t.Parallel()
+	service, db := newTestService(t)
+	protectee := createUser(t, db, "protectee@example.com")
+	partner := createUser(t, db, "partner@example.com")
+	stranger := createUser(t, db, "stranger@example.com")
+	if _, err := db.Exec(`INSERT INTO partnerships(protectee_id, partner_id, edge_type, log_sharing, accepted_at)
+		VALUES (?, ?, 'peer', 0, ?)`, protectee, partner, testClock.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name  string
+		actor int64
+		want  bool
+	}{
+		{"protectee self-removal", protectee, true},
+		{"active Partner", partner, true},
+		{"unrelated User", stranger, false},
+		{"unknown actor", 99999, false},
+		{"invalid ID", 0, false},
+	} {
+		got, err := service.CanRemoveDevice(ctx, testCase.actor, protectee)
+		if err != nil {
+			t.Fatalf("%s: %v", testCase.name, err)
+		}
+		if got != testCase.want {
+			t.Fatalf("%s: CanRemoveDevice = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
 func TestDispatchDueSendsCanonicalInvitationAndResumesAfterRestart(t *testing.T) {
 	t.Parallel()
 	service, db := newTestService(t)

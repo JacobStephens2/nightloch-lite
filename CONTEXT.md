@@ -105,7 +105,7 @@ The Operator act of creating a Device from the command line: allocate its tunnel
 _Avoid_: Provision, issue, generate a peer, enroll (when the Operator is the actor)
 
 **Remove** (a Device):
-The Operator act of ending a Device record and withdrawing its tunnel peer. The Device’s configuration stops working; its tunnel address goes into Quarantine rather than back into the pool.
+The act of ending a Device record and withdrawing its tunnel peer, performed by a Protectee, a Partner, or the Operator. The Device’s configuration stops working; its tunnel address goes into Quarantine rather than back into the pool.
 _Avoid_: Revoke, delete a peer, deactivate, unenroll
 
 **Quarantine** (of a tunnel address):
@@ -133,7 +133,7 @@ Who a User whose Nightloch User has been deleted is in every retained product vi
 _Avoid_: Anonymous user, removed user, former user, redacted
 
 **Activity category**:
-The fixed vocabulary Activity is filtered by — **Invitations**, **Partnerships**, **Cooling-off**, and **Delivery** — assigned per stable action rather than per sentence, so wording can change without changing what a filter means.
+The fixed vocabulary Activity is filtered by — **Invitations**, **Partnerships**, **Cooling-off**, **Delivery**, and **Devices** — assigned per stable action rather than per sentence, so wording can change without changing what a filter means.
 _Avoid_: Type, tag, event class, log level
 
 **Host posture**:
