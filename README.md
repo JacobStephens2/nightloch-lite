@@ -1,5 +1,7 @@
 # Nightloch Lite
 
+*Sep 13 2026: Archiving in favor of Tech Lockdown, techlockdown.com*
+
 Partner-locked, scheduled DNS blocking — self-hosted WireGuard + AdGuard Home, Go control plane.
 
 ## Docs
