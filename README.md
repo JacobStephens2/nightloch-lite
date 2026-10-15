@@ -42,3 +42,7 @@ tofu init && tofu plan   # apply only when you intend to create the droplet
 - **Host:** Dedicated DigitalOcean droplet (`nyc3`, 2 GB)  
 - **IaC:** OpenTofu (DO + Cloudflare DNS)  
 - **Deploy:** GitHub Actions → binary on droplet  
+
+## License
+
+[MIT](./LICENSE)

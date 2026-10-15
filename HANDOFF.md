@@ -1,7 +1,7 @@
 # Session handoff — Nightloch Lite
 
 **Date:** 2026-08-23  
-**Repo:** https://github.com/JacobStephens2/nightloch-lite (private)  
+**Repo:** https://github.com/JacobStephens2/nightloch-lite (public)  
 **Local path:** `/Users/jacob/GitHub/JacobStephens2/nightloch-lite`  
 **Related (do not confuse):** `/Users/jacob/GitHub/JacobStephens2/nightloch` is the **old** bloated product — greenfield is **nightloch-lite** only.
 

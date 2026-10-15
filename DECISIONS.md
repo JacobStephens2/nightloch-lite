@@ -208,7 +208,7 @@ Supersede conflicting interview rows below when implementing. Full rationale in 
 | 17 | Database | **SQLite** (no LISTEN/NOTIFY required) |
 | 43 | Deploy shape (updated for dedicated box) | Native Go binary + systemd + reverse proxy; AGH on localhost; WG on host `wg0` |
 | 46–47 | CI/CD | **GitHub Actions** build `linux/amd64`; **SSH/rsync deploy** on push to `main` |
-| 48 | Repo | Private **`JacobStephens2/nightloch-lite`** |
+| 48 | Repo | Public **`JacobStephens2/nightloch-lite`** (MIT; private until 2026-10-15) |
 | 51 | Placement | **Dedicated droplet** — all of lite + WG + AGH (**not** stephens.page) |
 | 52–54 | Cloud | **DigitalOcean** (US company preference over Hetzner); **`nyc3`**; **`s-1vcpu-2gb`** (~$12/mo) |
 | 55 | TLS proxy | **Caddy** (auto HTTPS) |

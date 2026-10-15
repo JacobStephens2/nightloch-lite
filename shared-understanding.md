@@ -41,7 +41,7 @@ DNS-level domain blocking on a schedule (and always-on adult baseline), with asy
 | Captcha | **Cloudflare Turnstile** |
 | IaC | **OpenTofu** (DO + Cloudflare) |
 | CI/CD | **GitHub Actions** → health-gated binary deploy |
-| Repo | Private `JacobStephens2/nightloch-lite` |
+| Repo | Public `JacobStephens2/nightloch-lite` (MIT) |
 | Backups | **DO daily backups** + **forced-command pull** of encrypted SQLite to stephens.page |
 
 ### Architecture sketch
